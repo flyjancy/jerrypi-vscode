@@ -1,0 +1,71 @@
+name: CI
+
+# 与本地验收 A1–A7 完全同一套命令。
+# 刻意不缓存 node_modules / pi-runtime / dist / *.vsix：任何生成物都必须在
+# 干净工作区里重新产出，这样同步脚本和打包链路的问题才会暴露，而不是被
+# 上一次的残留掩盖（docs/S0-plan.md D11）。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build & package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          # 只复用 npm 的下载缓存；node_modules 始终由 `npm ci` 重建。
+          cache: npm
+
+      - name: Install (clean)
+        run: npm ci
+
+      - name: Typecheck (A4)
+        run: npm run typecheck
+
+      - name: Sync pi runtime + 7 checks (A2)
+        run: npm run sync
+
+      - name: Self-test, 1 positive + 3 negative (A3)
+        run: npm run self-test
+
+      - name: Clean build + package (A5b, A6)
+        run: |
+          rm -rf dist pi-runtime *.vsix
+          npm run package
+
+      - name: Size gate (A6b)
+        run: node scripts/check-vsix.mjs "$(ls ./*.vsix)"
+
+      - name: Verify unpacked vsix (A7)
+        run: |
+          VSIX="$(ls ./*.vsix)"
+          rm -rf /tmp/jerrypi-unpacked && mkdir -p /tmp/jerrypi-unpacked
+          unzip -q "$VSIX" -d /tmp/jerrypi-unpacked
+
+          if find /tmp/jerrypi-unpacked -name '*.node' -print -quit | grep -q .; then
+            echo "FAIL: native addon found inside the vsix"; exit 1
+          fi
+          if [ -e /tmp/jerrypi-unpacked/extension/pi-runtime/src ]; then
+            echo "FAIL: pi-runtime/src must not be shipped"; exit 1
+          fi
+          test -f /tmp/jerrypi-unpacked/extension/test-fixtures/ext-smoke/index.ts
+
+          # 从解包产物复跑隔离校验（不触碰仓库的 node_modules）
+          node scripts/verify-isolated-runtime.mjs \
+            --pi-runtime /tmp/jerrypi-unpacked/extension/pi-runtime
