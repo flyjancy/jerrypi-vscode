@@ -1,0 +1,27 @@
+# jerrypi .vscodeignore
+#
+# 注意：vsce 用的是 minimatch（不是 gitignore 语义），因此：
+#   - 不要写前导 "/"，否则 "src/extension.ts" 匹配不上 "/src/**"；
+#   - 模式对完整相对路径匹配（无 matchBase），"node_modules/**" 只命中根目录那个。
+#
+# 生成物 pi-runtime/、dist/、*.vsix 由 `npm run compile` 产出、绝不入库，
+# 但其中 pi-runtime/、dist/、test-fixtures/ 必须进入 .vsix。
+
+# --- 仅开发期使用，不进包 ---
+.github/**
+.vscode/**
+src/**
+scripts/**
+docs/**
+esbuild.mjs
+tsconfig.json
+PLAN.md
+.gitignore
+*.vsix
+**/*.map
+node_modules/**
+
+# --- 覆写：运行时与验收夹具必须进包 ---
+!pi-runtime/**
+!pi-runtime/node_modules/**
+!test-fixtures/**

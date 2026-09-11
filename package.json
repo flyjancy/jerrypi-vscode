@@ -1,0 +1,60 @@
+{
+  "name": "jerrypi",
+  "displayName": "jerrypi",
+  "description": "Drive the Pi coding agent from a VS Code sidebar chat panel — no local Node.js required",
+  "version": "0.1.0",
+  "publisher": "flyjancy",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "vscode": "^1.123.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "pi",
+    "coding-agent",
+    "ai",
+    "chat",
+    "agent"
+  ],
+  "main": "./dist/extension.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/flyjancy/jerrypi-vscode.git"
+  },
+  "homepage": "https://github.com/flyjancy/jerrypi-vscode#readme",
+  "bugs": {
+    "url": "https://github.com/flyjancy/jerrypi-vscode/issues"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "jerrypi.focusChat",
+        "title": "Focus Chat",
+        "category": "Pi"
+      }
+    ]
+  },
+  "scripts": {
+    "sync": "node scripts/sync-pi-runtime.mjs",
+    "self-test": "node scripts/self-test.mjs",
+    "build": "node esbuild.mjs",
+    "typecheck": "tsc --noEmit",
+    "compile": "npm run sync && npm run build",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --pre-release --follow-symlinks --no-dependencies",
+    "check-vsix": "node scripts/check-vsix.mjs"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@types/node": "24.13.4",
+    "@types/vscode": "1.120.0",
+    "@vscode/vsce": "3.9.2",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}
