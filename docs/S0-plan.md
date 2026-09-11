@@ -91,6 +91,9 @@ scripts/verify-isolated-runtime.mjs  # 隔离环境中执行 ②⑦（独立 CLI
 scripts/self-test.mjs                # 最小自检：正/负用例（见 §4.4）
 scripts/check-vsix.mjs               # .vsix 体积门禁：0 < size < 30 MB（见 §4.5）
 .vscodeignore                        # 打包排除/包含规则
+.vscode/launch.json                  # F5 调试配置（B1 用）
+.vscode/tasks.json                   # preLaunchTask：npm run compile
+.github/workflows/ci.yml             # CI（见 §7）
 src/extension.ts                     # 空 activate()，注册 Pi: Focus Chat
 test-fixtures/ext-smoke/index.ts     # 最小 pi TS 扩展，供校验 ⑦
 ```
@@ -491,3 +494,6 @@ SHA-256：`0d9d5efbdf554e88de8b908a0d512c5ac98f600f15ad14de10501c17032af8e2`
 6. **未启用任何 npm install script**：npm 12 默认拦截了 `esbuild` / `@vscode/vsce-sign` /
    `keytar` 等 6 个包的 install script，实测 `tsc` / `esbuild` / `vsce` 均正常工作，
    故不需要 `npm install-scripts approve`。
+7. **补了 `.vscode/launch.json` + `tasks.json`**：计划 §2 的文件清单没列它们，但没有 F5 调试配置，
+   B1 的「按 F5」会先弹出选择调试环境的对话框。现在 `preLaunchTask: compile` 会先跑
+   `npm run compile`（即 `sync && build`），保证 F5 前 `dist/` 与 `pi-runtime/` 已就绪。
