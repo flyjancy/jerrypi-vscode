@@ -1,6 +1,6 @@
 # S0 实施计划：脚手架与发布链路
 
-> 状态：**已吸收 Codex(gpt-6-astra) 四轮评审**（2026-09-11）。第四轮结论：**无新增阻断项，可进入实施**。
+> 状态：**S0 已实施并验收通过**（2026-09-11）：A1–A7 全过、CI 全绿、B1 人工验收通过。第四轮评审结论为「无新增阻断项，可进入实施」。
 > 依据：[`PLAN.md`](PLAN.md) 第 6 节 S0、5.4 打包规则。本文件是 S0 的落地细化。
 
 ## 0. 评审吸收记录
@@ -399,11 +399,11 @@ node scripts/verify-isolated-runtime.mjs \
 
 **需要用户操作：**
 
-| # | 项 | 原因 |
+| # | 项 | 状态 |
 | --- | --- | --- |
-| B1 | VS Code 里 F5：命令面板见 `Pi: Focus Chat`；执行后**只**出现 information（成功）或 error（缺 `pi-runtime`）；回报观察结果 | 需要 GUI；第三轮 7 的手工验收记录 |
-| B2 | Marketplace 发布 0.1.0 预发布 | 需要 Azure DevOps PAT 与已创建的 publisher `flyjancy` |
-| B3 | 受限 Windows 机上安装并回报 | 仅用户可访问；覆盖 A1–A7 未覆盖的平台差异 |
+| B1 | VS Code 里 F5：命令面板见 `Pi: Focus Chat`；执行后**只**出现 information（成功）或 error（缺 `pi-runtime`）；回报观察结果 | ✅ **已完成**（2026-09-11，用户实测；故障路径步骤 6 未测，属可选） |
+| B2 | Marketplace 发布 0.1.0 预发布 | ⛔ **已取消**：用户决定 0.1.0 不发布，首发改为 S1 通过后的 0.1.1 |
+| B3 | 受限 Windows 机上安装并回报 | ⏳ 待办；S0 阶段不阻塞，由 S1/S10 覆盖 |
 
 ## 7. 提交计划与 CI（Conventional Commits）
 
@@ -429,7 +429,7 @@ node scripts/verify-isolated-runtime.mjs \
 | D2 | webview 入口 | **留到 S2** | 避免死文件 |
 | D3 | `activate()` 校验 | 非阻断 warning + **命令触发时**校验并报错 | 第一轮 5 |
 | D4 | CI | **本步一并加** | 与 A2/A3/A5/A6 同源 |
-| D5 | 首次发布 | **只本地验证** `.vsix`，首发跟 S1 的 0.1.1 | 省一个版本号 |
+| D5 | 首次发布 | **只本地验证** `.vsix`；**0.1.0 不发布**（2026-09-11 确认），首发跟 S1 的 0.1.1 | 省一个版本号，且 S0 空壳无可验证的 agent 能力 |
 | D6 | `private: true` | **加** | vsce 3.9.2 实测通过 |
 | D7 | `test-fixtures` 进包 | **进包** | A7 需从打包产物复跑；`PLAN.md` 5.4 要求 |
 | D8 | `@types/vscode` | **1.120.0**（`engines ^1.123.0` 不变） | vsce 拒绝 types > engines，且无 1.123.x |
@@ -465,6 +465,8 @@ pi 版本升级是一次**显式、可审计**的改动，步骤固定：
 | A6 | 打包 | ✅ `jerrypi-0.1.0.vsix`：335 files，未压缩 16,586,592 字节 |
 | A6b | 体积门禁 | ✅ 5,955,237 字节（5.68 MB，占 30 MB 门禁 18.9%） |
 | A7 | 解包复跑 | ✅ 无 `.node`、关键文件齐、PreRelease 标记在；从解包目录跑 `verify-isolated-runtime.mjs` → `CHECK 2 PASS` + `CHECK 7 PASS` + `VERIFY OK`（exit 0） |
+| CI | GitHub Actions（Ubuntu） | ✅ 全绿（22–27s），含 A7 解包复跑 |
+| B1 | VS Code F5 人工验收（2026-09-11） | ✅ 命令面板可见 `Pi: Focus Chat`；执行后弹出 `jerrypi: pi-runtime 0.85.1 就绪（聊天 UI 将在 S2 实现）`；Output 面板 `jerrypi` 频道显示 `[jerrypi] pi-runtime 0.85.1 已就绪。`；`.vscode/launch.json` 的 `preLaunchTask` 自动跑通了 `compile` |
 
 SHA-256：`0d9d5efbdf554e88de8b908a0d512c5ac98f600f15ad14de10501c17032af8e2`
 （该值与包内文件内容绑定，上述 SHA 对应本次落地时的 README/源码状态）
