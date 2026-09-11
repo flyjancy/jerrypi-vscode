@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+pi-runtime/
+*.vsix
+*.tsbuildinfo
+.vscode-test/
+coverage/
+.DS_Store
+.env
+
+# Local full plan (includes review notes); the committed copy is docs/PLAN.md
+/PLAN.md
