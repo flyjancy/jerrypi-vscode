@@ -84,10 +84,21 @@
 git clone https://github.com/flyjancy/jerrypi-vscode.git
 cd jerrypi-vscode
 npm install
-npm run package    # 生成 .vsix
+npm run package     # 生成 .vsix（会自动先跑 sync + build）
 ```
 
-> 构建脚本随计划的 S0 落地（`scripts/sync-pi-runtime.mjs` 负责把 pi 运行时复制进 `pi-runtime/`，`esbuild.mjs` 打包扩展自身）。
+常用脚本：
+
+| 命令 | 作用 |
+| --- | --- |
+| `npm run sync` | 把 pi 运行时复制进 `pi-runtime/`，并跑 7 条打包校验（含隔离 import、隔离加载扩展） |
+| `npm run self-test` | 1 个正用例 + 3 个负用例（缺依赖必须非零退出、sync 必须幂等） |
+| `npm run typecheck` / `npm run build` | 类型检查 / esbuild 打包扩展自身 |
+| `npm run package` | 构建 + 打包 `.vsix`；vsce 打包前会自动执行 `vscode:prepublish`（唯一构建入口） |
+| `npm run check-vsix -- jerrypi-0.1.0.vsix` | `.vsix` 体积门禁（< 30 MB） |
+| `npm run vscode:prepublish` | 等同于 `sync && build` |
+
+> `.vsix` 里还包含 `test-fixtures/ext-smoke/index.ts`：它是**打包验收用的最小 pi 扩展**（不是给用户使用的功能），目的是让「从解包产物复跑校验」成为可能。细节见 [`docs/S0-plan.md`](docs/S0-plan.md)。
 
 ### 依赖
 
@@ -202,10 +213,21 @@ Use **`Pi: Open Settings File`** to edit pi's `settings.json` for default model,
 git clone https://github.com/flyjancy/jerrypi-vscode.git
 cd jerrypi-vscode
 npm install
-npm run package    # produces a .vsix
+npm run package     # produces a .vsix (runs sync + build first)
 ```
 
-> Build scripts land with step S0 of the plan: `scripts/sync-pi-runtime.mjs` copies the pi runtime into `pi-runtime/`, and `esbuild.mjs` bundles the extension itself.
+Common scripts:
+
+| Command | Purpose |
+| --- | --- |
+| `npm run sync` | Copies the pi runtime into `pi-runtime/` and runs the 7 packaging checks (including isolated import and isolated extension loading) |
+| `npm run self-test` | 1 positive + 3 negative cases (missing dependency must exit non-zero, sync must be idempotent) |
+| `npm run typecheck` / `npm run build` | Type checking / bundles the extension itself with esbuild |
+| `npm run package` | Build + package the `.vsix`; vsce runs `vscode:prepublish` first (the single build entry point) |
+| `npm run check-vsix -- jerrypi-0.1.0.vsix` | `.vsix` size gate (< 30 MB) |
+| `npm run vscode:prepublish` | Equivalent to `sync && build` |
+
+> The `.vsix` also ships `test-fixtures/ext-smoke/index.ts`: a **minimal pi extension used for packaging acceptance** (not a user-facing feature), so that verification can be re-run against the unpacked artifact. See [`docs/S0-plan.md`](docs/S0-plan.md).
 
 ### Dependencies
 

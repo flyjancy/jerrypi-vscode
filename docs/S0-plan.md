@@ -195,6 +195,9 @@ node scripts/verify-isolated-runtime.mjs --pi-runtime <dir> [--fixture <index.ts
   `runtime.services.resourceLoader.getExtensions().errors` 为空，且
   `extensionRunner.getRegisteredCommands()` 含 `smoke`。
   `agentDir` 为空是关键：用户目录里的扩展错误不会混入，⑦ 的失败只可能来自打包内容。
+- 检查 ② 除了 bundle 本身，还要求「必须复制」的依赖能在隔离目录里真实加载：目前会额外
+  `import` `node_modules/@earendil-works/chord/dist/context/index.js`（jiti 由 ⑦ 覆盖，
+  photon 由 ④ 的 wasm 文件断言覆盖）。这样 chord 相关的复制清单一旦漏东西，② 就会失败。
 
 ### 4.3 幂等性、失败传播与清理（第一轮 2、第二轮 7、第三轮 1、2）
 
@@ -264,15 +267,21 @@ node scripts/check-vsix.mjs <path-to-vsix>
 3. 复制到 `pi-runtime/`：`dist/bundle/`、`package.json`、`dist/modes/interactive/theme/`、
    `dist/core/export-html/`、`docs/`、`examples/`、`README.md`。
 4. 用 `createRequire(join(piDir, "package.json"))` 解析并整包复制到 `pi-runtime/node_modules/`：
-   `@earendil-works/chord`（去 `map`/`src`）、`jiti`、`@silvia-odwyer/photon-node`（含 wasm）。
+   `@earendil-works/chord`（去 `src/`、`.map`、**以及其自带的 `node_modules/`**）、`jiti`、
+   `@silvia-odwyer/photon-node`（含 wasm）。
    **一律 `fs.cpSync(src, dest, { recursive: true, dereference: true })`**。
+   关于 chord 的 `node_modules/`：本地 npm 因版本冲突把它嵌套安装（`esbuild@0.28.1` + 平台二进制，
+   约 11 MB），但它只被 `chord/dist/node/bundle.js`（bundler 入口）引用，而 pi 的 bundle
+   **只引用 `@earendil-works/chord/context`**，所以剥掉；一旦 pi 升级后引用其它子路径，
+   校验 ① 会硬失败（见第 5 步的 `ALLOWED_CHORD_SUBPATHS`）。
 5. 校验 ①（导出 `scanBareImports` 供 self-test 复用）：
    正则（无空白）`from"X"`、`import"X"`、`import("X")`，以及"函数名含 `require` 的调用"
    `ident("X")`；`X` 形状 `^[A-Za-z@][A-Za-z0-9._@/-]*$`；`X` 必须 `isBuiltin(X)` 或命中三档白名单
    （**必须复制**：`@earendil-works/chord/context`、`jiti`、`@silvia-odwyer/photon-node`；
    **允许缺失**：`bufferutil`、`utf-8-validate`、`supports-color`、`@mariozechner/clipboard`；
    **仅字符串**：`@aws-sdk/signature-v4-crt`）。扫到未知标识符即失败。
-   定位见 §1.2。
+   另加一道**子路径门禁**：`@earendil-works/chord*` 只允许 `/context`，其余（如 `/bundler`）
+   直接失败并提示更新复制清单 —— 这是「chord 不复制 node_modules」的安全网。定位见 §1.2。
 6. 校验 ③④⑤（第三轮 3 强化结构断言）：
    - ③ 整树无 `.node` 文件；
    - ④ 关键路径**存在 + 类型正确 + 可读 + 非空**：
@@ -437,3 +446,48 @@ pi 版本升级是一次**显式、可审计**的改动，步骤固定：
 4. `npm run self-test`。
 5. `npm run package` + A5b/A6/A6b/A7 全部复跑，记录新体积。
 6. 独立提交，如 `chore: upgrade bundled pi runtime to X.Y.Z`（不与功能改动混提）。
+
+## 10. 实施记录（已落地）
+
+### 10.1 验收结果
+
+| # | 项 | 结果 |
+| --- | --- | --- |
+| A1 | `npm install` | ✅ 396 packages，0 vulnerabilities |
+| A2 | `npm run sync` | ✅ 7/7 通过（① 51 files/71 specifiers/8 external；③④⑤ 全过；⑥ `.version=0.85.1`；② 与 ⑦ 隔离通过） |
+| A3 | `npm run self-test` | ✅ 4/4（含“删 jiti → CHECK 7 FAIL、exit 1”与幂等负用例） |
+| A4 | `npm run typecheck` | ✅ 无错误 |
+| A5 | `npm run build` | ✅ `dist/extension.js` 1.92 KB（+ map） |
+| A5b | 干净构建 | ✅ `rm -rf dist pi-runtime && npm run package` 成功（证明 vsce 会自动跑 `vscode:prepublish`） |
+| A6 | 打包 | ✅ `jerrypi-0.1.0.vsix`：335 files，未压缩 16,586,592 字节 |
+| A6b | 体积门禁 | ✅ 5,955,237 字节（5.68 MB，占 30 MB 门禁 18.9%） |
+| A7 | 解包复跑 | ✅ 无 `.node`、关键文件齐、PreRelease 标记在；从解包目录跑 `verify-isolated-runtime.mjs` → `CHECK 2 PASS` + `CHECK 7 PASS` + `VERIFY OK`（exit 0） |
+
+SHA-256：`0d9d5efbdf554e88de8b908a0d512c5ac98f600f15ad14de10501c17032af8e2`
+（该值与包内文件内容绑定，上述 SHA 对应本次落地时的 README/源码状态）
+
+`pi-runtime/` 实际体积 17 MB（dist 8.3 MB + node_modules 4.3 MB + docs 2.7 MB + examples 1.3 MB）。
+
+### 10.2 落地时发现的偏差（已修正）
+
+1. **`.vscodeignore` 是 minimatch 语义，不是 gitignore**（实现时踩坑）：vsce 用
+   `minimatch(path, pattern, { dot: true })` **全路径匹配**，前导 `/` 会让模式彻底失效——
+   第一版 `/src/**` 把 `src/`、`scripts/`、`docs/`、`tsconfig.json` 全部打进了包。
+   现已改为无前导斜杠；由于无 `matchBase`，`node_modules/**` 只命中根目录那个，
+   因此 `pi-runtime/node_modules/**` 天然不受影响，`!pi-runtime/**` 只用于把 `.map` 重新纳入。
+2. **包目录解析要三级降级**：pi 的 `exports` 不导出 `./package.json`（`ERR_PACKAGE_PATH_NOT_EXPORTED`），
+   chord 连 `"."` 都不导出。最终策略：`import.meta.resolve(主入口)` 向上找 `package.json`
+   → `createRequire(pi 的 package.json).resolve("<name>/package.json")` → 直接拼 `node_modules`。
+3. **chord 的嵌套 `node_modules/` 不复制**：本地 npm 因 `esbuild` 版本冲突（chord 钉 0.28.1，
+   根为 0.28.2）把 `esbuild` + `@esbuild` 平台二进制（约 11 MB）嵌套安装进 chord。但只有
+   `chord/dist/node/bundle.js`（bundler 入口）引用它，而 pi 的 bundle 只引用
+   `@earendil-works/chord/context`。剥掉后 `pi-runtime/` 从 28 MB 降为 17 MB，
+   并新增 `ALLOWED_CHORD_SUBPATHS` 门禁（pi 若改用其它子路径，sync 立即失败）。
+4. **校验 ② 扩容**：除 bundle 外，额外在隔离目录里 `import` `chord/dist/context/index.js`，
+   把「复制清单漏依赖」的证据从只靠 ⑦ 前移到 ②（jiti 由 ⑦ 覆盖，photon 由 ④ 的 wasm 断言覆盖）。
+5. **命令的 `title` / `category`**：计划写的是 `title: "Pi: Focus Chat"` + `category: "Pi"`，
+   VS Code 会渲染成 `Pi: Pi: Focus Chat`。改为 `title: "Focus Chat"` + `category: "Pi"`，
+   命令面板仍显示 `Pi: Focus Chat`（B1 的预期不变）。
+6. **未启用任何 npm install script**：npm 12 默认拦截了 `esbuild` / `@vscode/vsce-sign` /
+   `keytar` 等 6 个包的 install script，实测 `tsc` / `esbuild` / `vsce` 均正常工作，
+   故不需要 `npm install-scripts approve`。
