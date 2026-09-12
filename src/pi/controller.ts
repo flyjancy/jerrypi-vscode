@@ -340,6 +340,11 @@ export class SessionHostController {
     }
 
     const model = session.model;
+    // 快照会把 busy 一并带给前端（`state.busy`），也就是说这一刻前后端是同步的。
+    // 因此**必须忘掉"上次发过的 busy 值"**：否则在"面板重开 → 前端按快照显示忙 →
+    // 服务端的 lastBusy 仍是上一次的值 → 之后真正的 busy:false 被当成重复而丢掉"，
+    // 面板就会一直卡在"生成中…"直到下一次状态变化。
+    this.lastBusy = undefined;
     return {
       items,
       truncated,
