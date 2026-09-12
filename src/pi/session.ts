@@ -36,7 +36,7 @@ export interface SessionHostOptions {
   uiContext: ExtensionUIContext;
   mode: RuntimeMode;
   sink: EventSink;
-  /** 显式指定的模型（自测用；不传则交给 pi 自己解析）。 */
+  /** 自测用：把 pi 自己挑的模型改掉时的目标模型（一般不需要）。 */
   model?: unknown;
   additionalExtensionPaths?: string[];
   writeProbe?: WriteProbe;

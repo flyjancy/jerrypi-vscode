@@ -672,3 +672,35 @@ T4 FAIL E_MODEL_NOT_COOPERATING
    其余归为 `E_PROVIDER_ERROR`，不再一律 `E_MODEL_NOT_COOPERATING`。
 
 → 修正后重新打包为 **`0.1.2`** 并重新发布。
+
+### 11.8 模型选择的最终设计（0.1.2 定稿）
+
+11.7 的"钳住模型"在实测后改成了**两段式**，因为它踩到 pi 的一个内部规则：
+
+- **pi 内部有一张 `defaultModelPerProvider` 表**（bundle 里可见，但未导出）：`findInitialModel` 的
+  优先级 5 不是"可用列表的第一个"，而是"**该 provider 在这张表里的默认模型**"。
+  实测同一台机器上：可用列表顺序是 `deepseek-v4-flash → flash-vision-exp → pro`，
+  而 pi 自己选的是 **`deepseek-v4-pro`**。所以直接用"列表第一个"反而会拿到更弱的 `flash`。
+- 但 `findInitialModel` 没有打进 bundle 的导出（只有未打包的 `dist/index.js` 有），拿不到。
+
+最终实现（`selftest.ts` 的 `pickModel()` + `alignModel()`）：
+
+1. `pickModel()`：用**凭据感知**的 `ModelRuntime.getAvailable()`，按
+   `deepseek > anthropic > google > openrouter > openai` 选出**首选 provider**；
+2. **先让 pi 自己解析模型**（建会话时不指定 model）；
+3. `alignModel()` 再对齐：
+   - pi 选中的 provider **就是**首选 → **沿用 pi 的选择**（从而拿到它内部的 provider 默认，如 `deepseek-v4-pro`）；
+   - 否则 → `session.setModel(preferred, { persist: false })` 改成首选 provider 的模型
+     （因为它内部那张表取不到，只能退到可用列表里的第一个）。
+
+本地用两个场景验证过：
+
+| 场景 | 输出 |
+| --- | --- |
+| 只配 deepseek（key 无效） | `模型：deepseek/deepseek-v4-pro（沿用 pi 的选择：provider 与首选一致）` → T4 正确报 `E_NO_CREDENTIALS` + 401 原文 |
+| **deepseek + openai 都配（复现受限机）** | `模型：pi 选的是 openai/gpt-5.5 → 已改为 deepseek/deepseek-v4-flash（首选 provider deepseek）` |
+
+第二行**证实了受限机上的诊断**：该机确实存在一个被 pi 判定为可用的 OpenAI 凭据
+（最可能是 `Pi: Set API Key` 时误选了 `openai`），因此 pi 每次都挑 `openai/gpt-5.5`。
+而且这个凭据会留在 SecretStorage 里，**即使重设 deepseek，pi 仍会看到 openai 可用** ——
+所以"纠正 provider"这一步是必需的，不是可选的优化。
