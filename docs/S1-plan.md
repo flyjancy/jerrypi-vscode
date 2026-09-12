@@ -568,3 +568,36 @@ GATE BLOCKED T3,T6
    现在除了 `prompt` 失败时按消息归类，模型相关项开头还会用 `requireUsableModel()` 直接报
    `E_NO_CREDENTIALS`，避免它被读成"pi 跑不起来"。
 7. **T9 的前置失败用 `E_PRECONDITION`**（不可重试），否则会白白重试一次。
+
+### 11.4 B 系列结果：macOS 上 GATE PASS（2026-09-12）
+
+从**已安装的 `.vsix`**（不是 F5）跑 `Pi: Run Self-Test`，**11/11 PASS，`GATE PASS`**：
+
+```
+flyjancy.jerrypi 0.1.0 selftest-v1 darwin node=24.18.1
+T1 PASS   node=24.18.1 electron=42.8.1 vscode=1.134.0
+T2 PASS   12 个文件 + 2 个目录全部合格；pi 0.85.1
+T3 PASS   命令=[smoke, smoke-custom, tokens, balance, cost, stats, footer]；onError=命中；write←sdk
+T4 PASS   收到 message_update 且 assistantMessageEvent.type === text_delta
+T5a PASS  shell=/bin/bash；输出含 cwd
+T5b PASS  abortBash 后 3ms 返回，cancelled=true
+T5c PASS  toolCallId=call_00_zdNu…；标记后 2009ms 结束
+T6 PASS   内容正确；patch 313 字符；wrappedWrite 捕获 toolCallId=call_00_3mus…
+T7 PASS   会话文件已落盘；重开后条目 5，消息 2
+T8 PASS   worker 往返 1000x1000（原 3000x3000）；resizeImage 1000x1000
+T9 PASS   newSession 产生新文件；switchSession 恢复 2 条消息；agent_start 可达
+GATE PASS（共 11 项：11 PASS / 0 FAIL / 0 SKIP）
+```
+
+同时被验证的几件事：
+
+1. **VS Code 1.134.0 = Node 24.18.1**（≥ 24.15），与 `engines.vscode ^1.123.0` 的假设一致；
+2. **与用户真实 pi 扩展共存**：T3 的命令列表里出现了用户 `~/.pi/agent` 下的扩展
+   （`tokens / balance / cost / stats / footer`），说明自测跑在真实环境而非净化沙箱里；
+   T3 的断言只要求"fixture 相关扩展无错误"，用户扩展自身的错误本来就不参与判定（按设计）；
+3. **T5c 一次通过**：模型主动发起了 bash 调用（不经 `executeBash`），
+   看到启动标记后 2 秒中止，`agent_end` 到达——A3 的模型驱动路径也成立；
+4. **T6 的 patch 与 toolCallId 都拿到**：`wrappedWrite` 的行为证据成立，
+   "按调用构造 operations"这个 S7 前提在闸门里被真实验证过。
+
+**剩余**：B3（受限 Windows 机）——需要先发布 0.1.1 预发布版。
