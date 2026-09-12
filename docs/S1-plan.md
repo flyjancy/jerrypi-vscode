@@ -601,3 +601,16 @@ GATE PASS（共 11 项：11 PASS / 0 FAIL / 0 SKIP）
    "按调用构造 operations"这个 S7 前提在闸门里被真实验证过。
 
 **剩余**：B3（受限 Windows 机）——需要先发布 0.1.1 预发布版。
+
+### 11.5 首次发布（2026-09-12）
+
+- **方式**：Marketplace 网页手动上传（**未使用 PAT / Azure DevOps**，因此也不需要信用卡验证）。
+- **版本**：`0.1.0`（`0.1.0` 从未发布过，且手里正好有一份已在 Mac 上跑通 11/11 的产物）。
+- **同一文件校验**：从 Marketplace 下载回来的 `.vsix` 与本地产物 **SHA-256 完全一致**
+  `baa84e42f1718b3a8ade5aef7262eeccb92c0d9b3176f7c2029e947d4a46efe2`（5,969,170 字节），
+  包内 `extension/dist/extension.js` 也逐字节一致。
+- **⚠️ 它是预发布版**：API 里 `Microsoft.VisualStudio.Code.PreRelease = "true"`。
+  网页上传**保留**了 `.vsix` manifest 里的预发布标记 —— 即"网页上传不认这个标记"的猜测是错的。
+  这与 PLAN 5.4 的"开发期走预发布通道"一致，但受限机安装时必须选
+  **Install Pre-Release Version**（或 `code --install-extension flyjancy.jerrypi --pre-release`）。
+- item 页面：https://marketplace.visualstudio.com/items?itemName=flyjancy.jerrypi
