@@ -208,6 +208,8 @@ async function checkUrlPolicy(urlPolicy) {
 function checkWebviewElementIds() {
   console.log("[protocol-check] webview 元素 id 交叉检查");
   const main = fs.readFileSync(path.join(REPO_ROOT, "src/webview/main.ts"), "utf8");
+  // 断言"代码里不再出现某个字符串"时要去掉注释：注释里往往正在解释"以前是这么写的"。
+  const mainCode = main.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
   const html = fs.readFileSync(path.join(REPO_ROOT, "src/host/webviewHtml.ts"), "utf8");
   const referenced = [...main.matchAll(/getElementById\("([^"]+)"\)/g)].map((match) => match[1]);
   const declared = new Set([...html.matchAll(/id="([^"]+)"/g)].map((match) => match[1]));
@@ -228,9 +230,9 @@ function checkWebviewElementIds() {
     /flex:\s*0 0 auto/.test(buttonRule) && /white-space:\s*nowrap/.test(buttonRule), buttonRule.trim());
   // D10 修订：发送即清空，不再依赖"回显时比对文本"。
   check("提示语不再谎称会打断（steer 只在本段结束后注入）",
-    !/打断当前回复/.test(main) && /这段写完后注入/.test(main));
+    !/打断当前回复/.test(mainCode) && /这段写完后注入/.test(mainCode));
   check("发送后立即清空输入框（不再比对 sentText）",
-    /input\.value = ""/.test(main) && !/sentText/.test(main));
+    /input\.value = ""/.test(mainCode) && !/sentText/.test(mainCode));
   // 协议版本只能有一处来源：两边硬编码成两个数字是最容易漏的漂移。
   const chatView = fs.readFileSync(path.join(REPO_ROOT, "src/host/chatView.ts"), "utf8");
   check("chatView 不硬编码协议版本", !/protocol:\s*\d/.test(chatView));
