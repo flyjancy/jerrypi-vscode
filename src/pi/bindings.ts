@@ -1,4 +1,8 @@
 // 把 pi 会话接到宿主（S1 只写 Output；S2 起在这里转发协议消息）。
+//
+// ⚠️ 本文件**不得**运行时 import vscode：`src/pi/session.ts` 值导入 `bindSession`，
+// 一旦这里有 vscode，整个 src/pi 层就无法在纯 Node 里跑（S1 留下的快速迭代通道）。
+// 需要 VS Code 的东西放 `src/host/`。
 import type {
   AgentSession,
   AgentSessionEvent,
