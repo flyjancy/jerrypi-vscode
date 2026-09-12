@@ -119,7 +119,7 @@ entry_appended, turn_end, agent_end, agent_settled
 - `state.pendingToolCalls` 是 `Set<string>`，**只有 toolCallId**，没有参数也没有输出
   （`pi-agent-core/dist/agent.js:392-403`；实测 prompt 结束后 size = 0）。
   重放时的参数靠我们的 `toolCalls` 索引（从 assistant 消息的 toolCall 块重建）——
-  M9 已验证"运行中那一行能重放出来"。
+  S2-M9 已验证"运行中那一行能重放出来"。
 - **partial 输出 pi 不保存**（不在消息里、不在 state 里）→ 面板中途重开时，
   **已经流出来的那些字必须由我们自己缓存**，否则会倒退。这是 C1/N1 家族的第四处。
 
@@ -152,14 +152,17 @@ entry_appended, turn_end, agent_end, agent_settled
 4. **宿主**：处理 `openFile`（只放行控制器铸造过的 `file://` URL）。
 5. **UI**：工具卡片（标题行 + 可展开正文）、bash 折叠显示最后 5 行、耗时、截断脚注、
    **就地更新**（不整体重写 DOM）、**粘底滚动**。
-6. **检查**：新增纯函数与渲染断言；`check:controller` 补真实场景（流式、重开、失败、截断）。
+6. **可打开路径**：由 `serialize.ts` 在每次序列化时铸造（重放也会重新铸造，所以历史卡片照样能点），
+   控制器登记成白名单，host 只做精确比对后 `Uri.file` 打开。
+7. **检查**：新增纯函数与渲染断言；`check:controller` 补真实场景（流式、重开、失败、截断、
+   帧竞态、快照体积与耗时）。
 
 ### 1.2 不做（留给后续步骤，明确边界）
 
 | 不做的事 | 归属 | 为什么现在不做 |
 | --- | --- | --- |
 | `edit` 的 diff / `write` 的前后对比渲染 | **S7** | PLAN 把 diff 审阅单列一步；S3 只给"结果正文"这一层 |
-| 图片内容显示（read 到图片时把 base64 画出来） | 未排期 | 一张图 base64 可达数 MB，会顶爆重放预算（§0.4 的同类问题）。S3 只显示 `[图片 image/png]` 文本提示，与 pi 在无图片能力终端下的降级一致 |
+| 图片内容显示（read 到图片时把 base64 画出来） | 未排期 | 一张图 base64 可达数 MB，会顶爆重放预算（§0.4 的同类问题）。S3 只显示 `[图片 image/png]` 文本提示，与 pi 在无图片能力终端下的降级一致。**README 的已知限制要照这个说法写**（只写"图片不显示"会被当成 bug） |
 | 工具审批 / 确认 | **S8** | 独立一步（README 已写明 `approvalMode` 当前无效） |
 | 卡片内搜索、复制按钮、导出 | — | pi 的 TUI 没有这些；按"follow pi"原则不自创 |
 | 路径识别的启发式 | — | 只认**参数里的 `path`** 与 `details.fullOutputPath`；**不**从 bash 命令文本里正则猜路径（猜错比猜不到更糟） |
@@ -389,9 +392,19 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 - `npm run self-test`（用例 6 现在跑三份断言：protocol / render / **tool-text**）
 - 新增断言点（示例，实施时按实际数量写进文档）：
   - toolText：ANSI 序列（CSI/OSC）、`\r`、**按字节裁剪且不切坏代理对**、多字节字符的预算、图片降级、空内容；
-  - protocol：tool item 新字段的默认值、`itemChars` 计入正文、实时/重放两条路径的等价性；
+  - protocol：tool item 新字段的默认值、`itemBytes` 计入正文、
+    实时/重放两条路径的**等价性**（比较时**剔除**实时独占字段 `startedAt/endedAt/pending`，
+    其余字段逐字节相同）；
   - render：折叠/展开两态、`<script>` 在工具正文里被转义、路径链接的 HTML 属性、
     `（无输出）`、截断脚注。
+
+另外 `check:controller`（需要凭据与网络，不进 CI）要**打印量测数字**，因为有两处"先量再优化"
+的判断依赖它们：
+
+| 量什么 | 为什么 |
+| --- | --- |
+| 一个 5 秒流式命令的 `item` 消息数与总字节数 | R4：超过 100KB/s 就回来做前缀增量 |
+| 一次 `snapshot()` 的 JSON 字节数与序列化耗时 | D4：4MB 预算是不是太大 |
 
 ### 6.2 macOS（F5，人工）—— M 系列
 
@@ -402,11 +415,13 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 | M3 | **在 M2 的流式中途**执行 `Developer: Reload Webviews` | 重开后卡片**仍有已流出的输出**，且**继续增长**到最后一行（partial 缓存在起作用） |
 | M4 | 发 `bash: exit 3` | 行首是红色 ✗，正文含 `Command exited with code 3`，**没有**我们自己编的解释 |
 | M5 | 发 `head -c 120000 /dev/zero \| tr '\0' 'x'` | 正文尾部有 `[Showing last 50.0KB …]` 与可点的完整输出路径；点它能打开那个临时文件 |
-| M6 | 让它**一次**同时调两个工具（如 `echo AAA` + `read 一个文件`） | 两条卡片各自独立、顺序与调用一致，不合并成一行 |
+| M6 | 让它**一次**同时调两个工具（如 `echo AAA` + `read 一个文件`） | 两条卡片各自独立、顺序与调用一致，不合并成一行。（**依赖模型行为**：它没并发调用时重试即可，不算 FAIL —— 探针 F 已证明这种调用会发生） |
 | M7 | **把 bash 卡片展开**，然后等它继续输出 | 展开态**不被重置**（就地更新），且新增内容可见 |
 | M8 | 流式期间**往上滚动**看历史 | 视图**不被拽回底部**；点发送后自动回到底部 |
 | M9 | 发 `echo '<img src=x onerror=alert(1)>'` | 面板里是**文字**，不弹窗（结果正文是不受信输入） |
 | M10 | 让 agent `edit` 一个小文件 | 卡片标题是可点路径；正文是结果文本（**没有 diff** —— 那是 S7） |
+| M11 | **重开面板（`Developer: Reload Webviews`）后点历史卡片里的路径** | 仍能在编辑器里打开（白名单由重放重新铸造 —— 这是评审抓到的洞） |
+| M12 | 让 agent 输出超过 50KB（如 `seq 1 4000`）并展开卡片 | 正文能看到尾部与 pi 的截断脚注 `[Showing … Full output: …]`；**顶部内容被顶掉是预期的**（§0.2 第 4 条） |
 
 ### 6.3 受限 Windows 机（人工，从 Marketplace 更新后）—— W 系列
 
@@ -417,6 +432,7 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 | W2 | M3 + M7（重开 + 展开态） | 同 Mac —— 这两条是 S3 最容易在两台机器上表现不同的地方 |
 | W3 | M5（截断 + 打开完整输出） | Windows 的临时目录路径形态不同（`C:\Users\…\AppData\Local\Temp\…`），要确认可点路径在 Windows 上也能打开 |
 | W4 | M4 + M9 | 失败态与 XSS 回归 |
+| W5 | M11（重开后点历史路径） | Windows 的路径形态（`C:\…`）与 Mac 不同，白名单比对必须仍然精确命中 |
 
 ### 6.4 判据
 
@@ -489,9 +505,32 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 - **探针 E**：`read` 一个 60 行文件 → 530 字符正文，`details = undefined`。
 - **探针 F**：一条 assistant 消息里两个工具调用 → `tool_execution_start` 顺序 `bash → read`，
   `toolResult` 顺序一致。
+- **探针 G（流式 + 超过 50KB，约 160KB 输出）**：
+  `update#1` 占位（`text=null`）；`update#2` 82 字符（首行"行 1"）；
+  `update#3` 48,971 字符（首行**"行 2888"** —— 开头已被丢弃）；
+  最终正文 49,113 字符，尾部 `… 4000 of 4000 (50.0KB limit). Full output: /var/…/pi-bash-6452….log]`，
+  `details.truncation.truncatedBy = "bytes"`、`totalBytes = 182893`；
+  **最终正文以最后一次快照为前缀**（即"最终 = 最后一次快照 + 脚注"）。
+  → 这条探针直接把 R1 的"单调增长"断言否掉了。
 
 ---
 
 ## 11. 评审记录
 
-（待用户/评审窗回填）
+### 第 1 轮（Claude Opus 5，只读；**11 条，10 接受 / 1 不受理**）
+
+评审结论：**第 1/3/4 条会改协议形状，必须在动代码前定掉**；第 5 条要先补探针。逐条处置：
+
+| # | 评审意见 | 处置 |
+| --- | --- | --- |
+| 1 | D3 的 50KB 上限会裁掉 pi 的截断脚注，M5 必挂 | **接受**。上限提到 64KB（D3），明确 `clipToolText` 保头；§0.4 补了"pi 的最终文本可超 50KB"这条约束 |
+| 2 | `startedAt` 记在 `tool_execution_update` 里 → read/write/edit 永远没有耗时；`endedAt` 没写在哪赋值 | **接受**。改成 `tool_execution_start` / `tool_execution_end`（D6 + §4.4） |
+| 3 | `openablePaths`/时间戳与约束 #1「单点序列化」冲突，合并点没定义 → 等价性断言写不出来 | **接受**。约束 #1 里写死了三方分工表：序列化器产出内容与路径（带 `ctx.cwd`），控制器只装饰实时独占字段，断言显式剔除后者 |
+| 4 | 白名单是内存态 → 面板重开后历史卡片的路径全点不开；FIFO 淘汰会让老链接静默失效 | **接受**。铸造点移到 `serialize.ts`（每次序列化都铸造），`snapshot()` 重建集合；新增 M11/W5 作为回归点 |
+| 5 | R1 的"单调增长"断言可能不成立，探针没覆盖"流式 + 超 50KB" | **接受，并已补跑探针 G**：证实快照在 50KB 处**换头**（`update#2` 82 字符从"行 1"起 → `update#3` 48,971 字符从"行 2888"起）。R1 断言改为"正文 === 最后一次快照" |
+| 6 | 200ms 合并窗口与最终态之间有竞态：待发帧会覆盖最终正文 | **接受**。`tool_execution_end` 必须 flush 并作废过期帧（带序号丢弃），`check:controller` 加断言 |
+| 7 | `Uri.parse` 对含 `#`/`?` 的路径会截断 | **接受**。协议改传**绝对路径**而不是 `file://` URL，host 用 `Uri.file`；白名单做精确字符串比对 |
+| 8 | D4 的 4MB 要量（重放也是一次 JSON 解析） | **接受**。`check:controller` 里量快照字节数与耗时（§6.1 的量测表） |
+| 9 | D9 的 README 措辞不能只写"图片不显示" | **接受**。写成"显示 `[图片 image/png]`，与 pi 在无图片能力终端下的行为一致"（§1.2） |
+| 10 | 命名不一致（`TOOL_TEXT_MAX_CHARS` / `MAX_REPLAY_CHARS` 残留）、M9 撞号、M6 依赖模型行为 | **接受**。三处都已改（`S2-M9`、M6 加注） |
+| 11 | §2 文件清单只列 `docs/PLAN.md`，但根目录 `PLAN.md` 还在（内容不同），建议顺手删掉 | **不受理**。这是 S0 就定下的设计：根目录那份是**本地完整版，已被 `.gitignore` 排除**（`git check-ignore` 确认、`git ls-files` 里没有任何 PLAN.md），仓库读者只看得到 `docs/PLAN.md`，两份状态不会对读者分叉。评审看的是工作目录而不是仓库内容 —— 这条在 S2 期间也提过一次，记在这里避免第三次。 |
