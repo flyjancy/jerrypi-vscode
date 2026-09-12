@@ -742,3 +742,68 @@ const PREFERRED_MODEL_IDS = { deepseek: ["deepseek-v4-flash"] };
 
 产物 `jerrypi-0.1.3.vsix`：5,971,218 字节，
 SHA-256 `c021f820f720657bfc5f6bb0f2ff82b5abbdd9bd9c9f1ccd426230d57fe47168`。
+
+---
+
+## 12. S1 闸门结论：GATE PASS（两端均通过）
+
+### 12.1 受限 Windows 机实测（2026-09-12，0.1.3 预发布版，从 Marketplace 更新）
+
+环境：VS Code **1.137.0**，Node **24.18.1**，Electron 42.10.0，win32，无 Node.js/npm，
+Git for Windows 位于 `C:\Program Files\Git\bin\bash.exe`。
+
+```
+flyjancy.jerrypi 0.1.3 selftest-v1 win32 node=24.18.1
+T1 PASS  node=24.18.1 electron=42.10.0 vscode=1.137.0；已配置 provider=[deepseek, openai]
+T2 PASS  12 个文件 + 2 个目录全部合格；pi 0.85.1
+T3 PASS  命令=[smoke, smoke-custom]；onError=命中；write←sdk
+T4 PASS  delta=[text_delta]；model=deepseek/deepseek-v4-flash
+T5a PASS shell=C:\Program Files\Git\bin\bash.exe；pwd=/tmp/jerrypi-selftest-tJHznZ/cwd
+T5b PASS abortBash 后 90ms 返回，cancelled=true
+T5c PASS toolCallId=…；标记后 2067ms 结束
+T6 PASS  内容正确；patch 287 字符；wrappedWrite 捕获 toolCallId=…
+T7 PASS  重开后条目 4，消息 2
+T8 PASS  worker 往返 1000x1000（原 3000x3000）；resizeImage 1000x1000
+T9 PASS  newSession 新文件；switchSession 恢复 2 条消息；agent_start 可达
+GATE PASS（共 11 项：11 PASS / 0 FAIL / 0 SKIP）
+```
+
+**版本号核对**：首行 `0.1.3` 与 Marketplace 上架的版本一致。
+
+### 12.2 「同一文件」核对（PLAN 5.4）
+
+从 Gallery API 下载线上 0.1.3 与本地打包产物比对：
+
+| | 大小 | SHA-256 |
+| --- | --- | --- |
+| 本地 | 5,971,218 | `c021f820f720657bfc5f6bb0f2ff82b5abbdd9bd9c9f1ccd426230d57fe47168` |
+| 线上 | 5,971,218 | `c021f820f720657bfc5f6bb0f2ff82b5abbdd9bd9c9f1ccd426230d57fe47168` |
+
+`==> 同一文件`。受限机跑的确实是作者本地验证过的那份字节。
+
+### 12.3 这一轮实测定下来的事实
+
+1. **R6（`spawn` 被策略禁止）不成立**：T5a/T5b/T5c 全 PASS，Git Bash 可用，
+   `abortBash` 90ms 返回。**A3 成立，不需要降级为只读 agent。**
+2. **A6 网络前提成立**：T4 拿到真实 `text_delta`。
+3. **11.9 里担心的 `flash` 工具调用能力不成立**：T6 用 `deepseek-v4-flash`
+   连续完成 write → read → edit，`wrappedWrite` 捕获到 toolCallId，patch 287 字符。
+   → **`PREFERRED_MODEL_IDS` 锁 `deepseek-v4-flash` 可以长期保留。**
+4. **11.8 的诊断被证实**：输出里 `已配置的 provider: deepseek, openai` ——
+   那台机器上确实有一个被 pi 判定为可用的 **OpenAI 凭据**（`~/.pi/agent` 是全新的，
+   所以只可能来自 `Pi: Set API Key` 时误选了 `openai`），
+   因此 pi 每次都解析出 `openai/gpt-5.5`。
+   `alignModel()` 命中并改成 `deepseek/deepseek-v4-flash` —— **这条修正是 S1 通过的必要条件**。
+5. **Windows 路径 + MSYS 路径映射**：`executeBash` 的 `pwd` 返回 `/tmp/...`（MSYS 映射），
+   0.1.0 的 `E_SHELL_OUTPUT` 是**误报**，0.1.1 起的「cwd 尾部命中」判定正确。
+6. **扩展宿主 + 用户真实扩展共存**：T3 的 `onError` 路径被真实触发且会话未损坏。
+
+### 12.4 遗留问题（不阻塞 S1，已记录待后续阶段）
+
+| 问题 | 影响 | 计划 |
+| --- | --- | --- |
+| 误设的 `openai` 凭据留在 SecretStorage 里，pi 仍认为它可用 | 每次都要靠 `alignModel()` 纠正 | S6 的 `Pi: Clear Stored API Keys` |
+| 发布通道是预发布 | 安装要勾选、更新要保开关 | S10 转正式发布 |
+| `0.1.2` 已上线但内容是中间版逻辑 | 无影响（已被 0.1.3 覆盖） | 无需处理 |
+
+**S1 关闭。按 PLAN 第 6 节，进入 S2（协议与基础聊天）。**
