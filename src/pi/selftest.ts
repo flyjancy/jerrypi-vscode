@@ -14,7 +14,7 @@
 //   - 不污染用户环境：全部临时目录在 os.tmpdir() 下，最后统一清理；
 //   - 每项独立超时；每项结束立刻写一行 Output（最坏情况约 16 分钟，中途静默无法定位）；
 //   - 模型相关项（T4/T6/T7/T9）各重试 1 次，并把 E_MODEL_* 与能力错误分开记录。
-import { accessSync, constants, cpSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, appendFileSync } from "node:fs";
+import { accessSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -95,6 +95,34 @@ function fail(code: string, message: string): never {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** 诊断用：当前会话解析出的模型（Windows 与 Mac 上的差异往往就在这里）。 */
+function describeModel(session: { model?: unknown }): string {
+  const model = session.model as { id?: string; provider?: string; name?: string } | undefined;
+  if (model === undefined || model === null) return "(none)";
+  return `${model.provider ?? "?"}/${model.id ?? model.name ?? "?"}`;
+}
+
+/** 诊断用：最后一条 assistant 消息的文本（截断）。 */
+function lastAssistantText(session: { messages: unknown[] }): string {
+  const messages = session.messages as Array<{ role?: string; content?: unknown }>;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant") continue;
+    const content = message.content;
+    if (typeof content === "string") return content.slice(0, 240);
+    if (Array.isArray(content)) {
+      const text = content
+        .filter((block) => (block as { type?: string })?.type === "text")
+        .map((block) => String((block as { text?: string }).text ?? ""))
+        .join(" ")
+        .trim();
+      return text.length > 0 ? text.slice(0, 240) : "(assistant 消息没有文本内容)";
+    }
+    return "(assistant 消息结构未知)";
+  }
+  return "(没有 assistant 消息)";
 }
 
 function retryable(code: string): boolean {
@@ -288,14 +316,16 @@ class SelfTestRun {
         async () => {
           const session = this.requireHost(hostR).session;
           requireUsableModel(session);
-          const sawTextDelta = { value: false };
+          // 接受任意 *_delta：text_delta / thinking_delta / toolcall_delta。
+          // T4 要证的是"真 provider 流式可用"，而不是"模型话多"——
+          // 只认 text_delta 会在只输出思考的模型上误报。
+          const deltas = new Set<string>();
           const unsubscribe = session.subscribe((event) => {
-            if (
-              event.type === "message_update" &&
-              (event as { assistantMessageEvent?: { type?: string } }).assistantMessageEvent?.type ===
-                "text_delta"
-            ) {
-              sawTextDelta.value = true;
+            if (event.type !== "message_update") return;
+            const type = (event as { assistantMessageEvent?: { type?: string } }).assistantMessageEvent
+              ?.type;
+            if (typeof type === "string" && type.endsWith("_delta")) {
+              deltas.add(type);
             }
           });
           try {
@@ -303,10 +333,14 @@ class SelfTestRun {
           } finally {
             unsubscribe();
           }
-          if (!sawTextDelta.value) {
-            fail("E_MODEL_NOT_COOPERATING", "prompt 结束但没有收到 message_update/text_delta");
+          if (deltas.size === 0) {
+            fail(
+              "E_MODEL_NOT_COOPERATING",
+              `prompt 结束但没有任何 *_delta 事件；model=${describeModel(session)}；` +
+                `最后一条 assistant 文本：${lastAssistantText(session)}`,
+            );
           }
-          return "收到 message_update 且 assistantMessageEvent.type === text_delta";
+          return `delta=[${[...deltas].sort().join(", ")}]；model=${describeModel(session)}`;
         },
         { retries: 1 },
       );
@@ -545,10 +579,15 @@ class SelfTestRun {
     }
 
     const cwd = session.sessionManager.getCwd();
-    if (!result.output.includes(cwd)) {
-      fail("E_SHELL_OUTPUT", `输出未包含 cwd ${cwd}：${result.output.slice(0, 200)}`);
+    // Git Bash（MSYS）会把 `C:\Users\...\Temp` 映射成 `/tmp`，所以不能直接比全路径。
+    // 取 cwd 的最后两段做比对，两种写法都命中。
+    const normalized = result.output.replace(/\\/g, "/");
+    const tail = cwd.split(/[\\/]/).filter((part) => part.length > 0).slice(-2).join("/");
+    if (!normalized.includes(tail)) {
+      fail("E_SHELL_OUTPUT", `输出未包含 cwd 尾部 ${tail}：${result.output.slice(0, 200)}`);
     }
-    return `shell=${shell}；输出含 cwd`;
+    const pwdLine = result.output.trim().split("\n").at(-1) ?? "";
+    return `shell=${shell}；pwd=${pwdLine.trim()}（cwd 尾部 ${tail} 命中）`;
   }
 
   // -------------------------------------------------------------------------
@@ -623,7 +662,10 @@ class SelfTestRun {
     }
 
     if (toolCallId === undefined) {
-      throw new SelfTestSkip("E_NO_TOOLCALL", "60 秒内模型没有发起 bash 调用");
+      throw new SelfTestSkip(
+        "E_NO_TOOLCALL",
+        `60 秒内模型没有发起 bash 调用；model=${describeModel(session)}；最后一条 assistant 文本：${lastAssistantText(session)}`,
+      );
     }
     if (markerAt === undefined) {
       fail("E_NO_SPAWN", "模型发起了 bash 调用，但没有收到启动标记");
@@ -652,19 +694,31 @@ class SelfTestRun {
     const target = join(cwd, "selftest-note.txt");
     const before = events.length;
 
+    // 分成三步单独下指令：一条长指令让模型一次做完三件事，失败率明显更高，
+    // 而且失败时分不清是"模型不配合"还是"工具坏了"。
     await promptOrFail(
       session,
-      [
-        `Create the file ${target} using the write tool, with exactly this content: jerrypi-selftest`,
-        `Then read ${target} back with the read tool.`,
-        `Then use the edit tool on ${target} to replace jerrypi-selftest with jerrypi-selftest-edited.`,
-        "Do not use bash for any of these steps.",
-      ].join(" "),
+      `Use the write tool to create the file ${target} with exactly this content: jerrypi-selftest. Do not use bash.`,
+    );
+    if (!existsSync(target)) {
+      fail(
+        "E_MODEL_NOT_COOPERATING",
+        `write 之后文件不存在；model=${describeModel(session)}；最后一条 assistant 文本：${lastAssistantText(session)}`,
+      );
+    }
+
+    await promptOrFail(session, `Use the read tool to read ${target}. Do not use bash.`);
+    await promptOrFail(
+      session,
+      `Use the edit tool on ${target} to replace jerrypi-selftest with jerrypi-selftest-edited. Do not use bash.`,
     );
 
     const content = readFileSync(target, "utf8").trim();
     if (content !== "jerrypi-selftest-edited") {
-      fail("E_MODEL_NOT_COOPERATING", `文件内容是 ${JSON.stringify(content)}`);
+      fail(
+        "E_MODEL_NOT_COOPERATING",
+        `文件内容是 ${JSON.stringify(content)}；model=${describeModel(session)}；最后一条 assistant 文本：${lastAssistantText(session)}`,
+      );
     }
 
     const patch = events
@@ -691,7 +745,7 @@ class SelfTestRun {
       fail("E_TOOL_OVERRIDE", `记录路径 ${recordedPath} != ${target}`);
     }
 
-    return `内容正确；patch ${String(patch).length} 字符；wrappedWrite 捕获 toolCallId=${recordedId}`;
+    return `内容正确；patch ${String(patch).length} 字符；wrappedWrite 捕获 toolCallId=${recordedId}；model=${describeModel(session)}`;
   }
 
   // -------------------------------------------------------------------------

@@ -614,3 +614,26 @@ GATE PASS（共 11 项：11 PASS / 0 FAIL / 0 SKIP）
   这与 PLAN 5.4 的"开发期走预发布通道"一致，但受限机安装时必须选
   **Install Pre-Release Version**（或 `code --install-extension flyjancy.jerrypi --pre-release`）。
 - item 页面：https://marketplace.visualstudio.com/items?itemName=flyjancy.jerrypi
+
+### 11.6 受限 Windows 机首跑（2026-09-12，VS Code 1.129.0）
+
+环境：**VS Code 1.129.0、Node 24.18.0、机器上确认没有 Node.js / npm**（`where node`、`where npm` 均无输出）。
+结果为 **7 PASS / 3 FAIL / 1 SKIP → GATE BLOCKED T4,T5a,T6**。逐条归因后：**3 个 FAIL 里 2 个是自测脚本的缺陷，T5a 实质上是通过的。**
+
+| 项 | 现象 | 归因 | 处置 |
+| --- | --- | --- | --- |
+| **T5a** | `E_SHELL_OUTPUT`：`pwd` 返回 `/tmp/jerrypi-selftest-…/cwd`，而我们传的 cwd 是 `C:\Users\…\Temp\jerrypi-selftest-…\cwd` | **脚本缺陷**。Git Bash(MSYS) 把 Windows 临时目录映射成了 `/tmp`；bash 本身跑通了（输出 `hi` + pwd） | 改为比对 cwd 的**最后两段**，并在 PASS 里记录实际 `pwd` |
+| **T4** | `E_MODEL_NOT_COOPERATING`（重试一次仍失败） | **脚本缺陷**。`message_update` 携带的 `assistantMessageEvent` 有 `text_delta`/`thinking_delta`/`toolcall_delta` 三种，我只认了 `text_delta` | 改为接受任意 `*_delta`，并报告具体类型 + `model=` + 最后一条 assistant 文本 |
+| **T6** | `E_UNEXPECTED ENOENT`（文件没被创建） | **一半脚本缺陷**：一条长指令（write→read→edit）对模型要求过高；且文件不存在时报了原始 ENOENT 而非可读错误 | 拆成**三条独立 prompt**；文件不存在时归为 `E_MODEL_NOT_COOPERATING` 并附模型与 assistant 文本 |
+| T5c | `SKIP E_NO_TOOLCALL` | 模型 60 秒内没主动发起 bash 调用 | 加进 SKIP 详情（model + assistant 文本）便于归因；它本来就是 advisory |
+
+**关键结论（对项目是好消息）**：
+
+1. **R6 不成立** —— Windows 上 `executeBash` 正常（T5a 实际跑通）、`abortBash` 66ms 中止（T5b PASS）；
+2. **T1 在接近声明下限处成立** —— VS Code **1.129.0** 报 **Node 24.18.0** ≥ 我们的断言 24.15（`engines ^1.123.0`）；
+3. Windows 上 **无用户 pi 扩展**（`~/.pi/agent` 是全新的，T3 命令列表只有 `[smoke, smoke-custom]`），
+   而 Mac 上是 `[smoke, smoke-custom, tokens, balance, cost, stats, footer]` —— 两次都通过，
+   说明 T3 在"干净环境"和"有用户扩展"两种情况下都成立；
+4. 其余全过：T2（Windows 路径下的资源断言）、T3（jiti 在 Windows 上加载 TS 扩展）、T7、T8（worker + WASM）、T9。
+
+→ 修正后重新打包为 **`0.1.1`** 并重新发布，用于受限机复跑。
