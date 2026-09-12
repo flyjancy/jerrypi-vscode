@@ -479,7 +479,7 @@ export class SessionHostController {
   private onToolExecutionStart(event: { toolCallId: string; toolName: string; args: unknown }): void {
     const toolCallId = event.toolCallId;
     const summary = summarizeArgs(event.args);
-    this.toolCalls.set(toolCallId, { name: event.toolName, argsText: summary });
+    this.toolCalls.set(toolCallId, { name: event.toolName, argsText: summary, args: event.args });
     const item: ChatItem = {
       kind: "tool",
       id: `tool-${toolCallId}`,

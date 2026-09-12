@@ -16,7 +16,7 @@
 //   3. `busy` 的判定：**空闲以 `agent_settled` 为准**，不能以第一个 `agent_end`
 //      （`agent_end` 之后可能还有 followUp 队列或自动重试）。
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** 转写里的一条可渲染项。 */
 export type ChatItem =
@@ -41,6 +41,39 @@ export type ChatItem =
       isError: boolean;
       /** true 表示这次调用还在执行中（重放时为 pendingToolCalls 里的项）。 */
       pending?: boolean;
+      /**
+       * 结果正文（已净化、可能已按 `TOOL_TEXT_MAX_BYTES` 裁剪）。
+       *
+       * **语义是"整体替换"**，不是增量：bash 每次 `tool_execution_update` 给的是
+       * **累积快照**（实测 update#2 = 2 行、#3 = 6 行…），把它当增量拼接会得到
+       * `line-1line-1line-2…`。而且超过 50KB 后快照会**换头**（保留最后 50KB），
+       * 所以也不能假定"内容只增不减"（见 docs/S3-plan.md §0.2）。
+       */
+      text?: string;
+      /** true 表示正文被**我们自己的上限**裁过（区别于 pi 自己的截断）。 */
+      textTruncated?: boolean;
+      /**
+       * pi 自己的截断摘要。**只取标量**：pi 的 `details.truncation` 里还有一个
+       * `content` 字段（又装了一份 50KB 文本），整体透传会让协议体积翻倍。
+       */
+      truncation?: {
+        truncatedBy: "lines" | "bytes";
+        totalLines: number;
+        outputLines: number;
+        maxBytes?: number;
+      };
+      /** bash 截断时完整输出的临时文件路径（也是可点路径之一）。 */
+      fullOutputPath?: string;
+      /**
+       * 本条卡片里**可点击打开**的绝对路径。
+       *
+       * 由序列化器铸造、控制器登记成白名单；host 收到 `openFile` 时**只做精确字符串比对**。
+       * 传路径而不是 `file://` URL：`Uri.parse("/tmp/a#b.log")` 会把 `#` 当 fragment。
+       */
+      openablePaths?: string[];
+      /** 开始/结束时间（ms epoch）。**只在实时路径有**：重放时不编造。 */
+      startedAt?: number;
+      endedAt?: number;
     }
   | { kind: "notice"; id: string; level: "info" | "warn" | "error"; text: string };
 
@@ -51,7 +84,9 @@ export type ClientMessage =
   | { type: "prompt"; text: string; behavior: "auto" | "steer" | "followUp" }
   | { type: "abort" }
   | { type: "clearQueue" }
-  | { type: "openExternal"; href: string };
+  | { type: "openExternal"; href: string }
+  /** 打开工具卡片里的文件路径。host 会用控制器的白名单做精确比对。 */
+  | { type: "openFile"; path: string };
 
 /** 扩展 → webview */
 export type ServerMessage =
@@ -89,7 +124,29 @@ export type ServerMessage =
 
 /** 重放时的总量上限（防止一个长会话把 webview 灌爆）。 */
 export const MAX_REPLAY_ITEMS = 500;
-export const MAX_REPLAY_CHARS = 1_000_000;
+/**
+ * 重放正文的总量上限，**按 UTF-8 字节**。
+ *
+ * 名字从 `MAX_REPLAY_CHARS` 改成 `MAX_REPLAY_BYTES` 是 S3 的事：旧名字说"字符"、
+ * 旧实现按 `String.length` 算，而 bash 单条结果可达 51KB —— 在中文会话里
+ * 按字符算会把预算低估三倍（50K 个汉字是 150KB）。
+ */
+export const MAX_REPLAY_BYTES = 4 * 1024 * 1024;
 
 /** 工具行参数摘要的长度上限。 */
 export const SUMMARY_MAX = 200;
+
+/**
+ * 单条工具结果正文的上限（UTF-8 字节）。
+ *
+ * 必须**大于** pi 自己的上限：pi 把正文裁到 50KB 之后**还会追加一行脚注**
+ * （实测最长 51,343 字符），取 50KB 会把那行脚注裁掉。64KB 留足余量，
+ * 内置工具的结果永远不会被我们二次裁剪；只有"返回超大文本的扩展工具"会触发。
+ */
+export const TOOL_TEXT_MAX_BYTES = 64 * 1024;
+
+/** bash 卡片折叠时显示的行数（照 pi 的 `BASH_PREVIEW_LINES`）。 */
+export const TOOL_PREVIEW_LINES = 5;
+
+/** 工具行流式 upsert 的合并窗口（ms）。 */
+export const TOOL_FRAME_MS = 200;

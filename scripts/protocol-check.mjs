@@ -135,10 +135,16 @@ async function checkSerialize(serialize, protocol) {
   check("超出条数上限时置 truncated", batch.truncated === true);
   check("超出条数上限时保留最新的", batch.items[batch.items.length - 1].text === `m${many.length - 1}`);
 
-  // 批量：字符上限
-  const huge = [{ role: "user", content: [{ type: "text", text: "y".repeat(protocol.MAX_REPLAY_CHARS + 10) }] }];
+  // 批量：**字节**上限（名字从 CHARS 改成 BYTES 是 S3 的事，见 protocol.ts 的注释）
+  const huge = [
+    { role: "user", content: [{ type: "text", text: "y".repeat(protocol.MAX_REPLAY_BYTES + 10) }] },
+  ];
   const hugeBatch = serialize.serializeMessages(huge);
-  check("超出字符上限时置 truncated 并丢弃该条", hugeBatch.truncated === true && hugeBatch.items.length === 0);
+  check("超出字节上限时置 truncated 并丢弃该条", hugeBatch.truncated === true && hugeBatch.items.length === 0);
+
+  // 中文字符串：按字节算 → 同样长度的中文比 ASCII 更早触顶
+  const cjkBytes = serialize.itemBytes({ kind: "user", id: "x", text: "汉".repeat(1000) });
+  check("itemBytes 按 UTF-8 字节算（1000 个汉字 = 3000 字节）", cjkBytes === 3000, `got ${cjkBytes}`);
 
   // id 唯一性：一条 assistant 的 toolCall 与后面的 toolResult 不能撞 id
   const mixed = [
@@ -148,6 +154,141 @@ async function checkSerialize(serialize, protocol) {
   const mixedItems = serialize.serializeMessages(mixed).items;
   const ids = mixedItems.map((item) => item.id);
   check("同一批转写里 id 不重复", new Set(ids).size === ids.length, ids.join(", "));
+}
+
+/**
+ * S3：工具卡片的结果正文、元信息与可点路径。
+ *
+ * 这一组的每一格都是"实时与重放必须给出同一份数据"的具体化 ——
+ * 而"同一份数据"正是 S2 花了一整轮评审才立起来的规矩。
+ */
+async function checkToolCard(serialize, protocol, toolText) {
+  console.log("[protocol-check] 工具卡片（S3）");
+
+  const ctx = { cwd: "/work/project" };
+  const assistant = {
+    role: "assistant",
+    content: [
+      { type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo hi" } },
+      { type: "toolCall", id: "t2", name: "read", arguments: { path: "src/a.ts" } },
+      { type: "toolCall", id: "t3", name: "bash", arguments: { command: "big" } },
+      { type: "toolCall", id: "t4", name: "read", arguments: { path: "/abs/b.png" } },
+    ],
+    stopReason: "toolUse",
+  };
+  const messages = [
+    assistant,
+    // ① 普通正文
+    {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "bash",
+      content: [{ type: "text", text: "\u001b[32mhi\u001b[0m\n" }],
+      isError: false,
+    },
+    // ② 空正文
+    { role: "toolResult", toolCallId: "t2", toolName: "read", content: [], isError: false },
+    // ③ pi 的截断：details 里既有标量也有一份 50KB 的 content
+    {
+      role: "toolResult",
+      toolCallId: "t3",
+      toolName: "bash",
+      content: [{ type: "text", text: "x".repeat(200) + "\n[Showing last 50.0KB …]" }],
+      details: {
+        truncation: {
+          truncated: true,
+          truncatedBy: "bytes",
+          totalLines: 1,
+          totalBytes: 120000,
+          outputLines: 1,
+          outputBytes: 51200,
+          maxBytes: 51200,
+          content: "y".repeat(50000),
+        },
+        fullOutputPath: "/tmp/pi-bash-123.log",
+      },
+      isError: false,
+    },
+    // ④ 图片结果（我们只显示提示）
+    {
+      role: "toolResult",
+      toolCallId: "t4",
+      toolName: "read",
+      content: [{ type: "image", mimeType: "image/png", data: "AAAA" }],
+      isError: false,
+    },
+  ];
+
+  const items = serialize.serializeMessages(messages, ctx).items;
+  const tool = (id) => items.find((item) => item.id === `tool-${id}`);
+
+  const t1 = tool("t1");
+  check("① 正文里的 ANSI 被剥掉", t1.text === "hi\n", JSON.stringify(t1.text));
+  check("① 没有正文裁剪标记", t1.textTruncated === undefined);
+  check("① 参数摘要保留", typeof t1.summary === "string" && t1.summary.includes("echo hi"), t1.summary);
+  check("① 没有可点路径（bash 命令里的路径不猜）", t1.openablePaths === undefined, JSON.stringify(t1.openablePaths));
+
+  const t2 = tool("t2");
+  check("② 空正文不写 text 字段", t2.text === undefined, JSON.stringify(t2.text));
+
+  const t3 = tool("t3");
+  check("③ pi 的截断摘要被保留（truncatedBy）", t3.truncation?.truncatedBy === "bytes");
+  check("③ 截断摘要里的 totalBytes 被保留", t3.truncation?.totalBytes === undefined);
+  check("③ 完整输出路径被保留", t3.fullOutputPath === "/tmp/pi-bash-123.log");
+  check(
+    "③ 截断摘要**不含** pi 的 truncation.content（否则协议体积翻倍）",
+    JSON.stringify(t3.truncation).length < 500,
+    `length=${JSON.stringify(t3.truncation).length}`,
+  );
+  check("③ 完整输出路径进可点路径", (t3.openablePaths ?? []).includes("/tmp/pi-bash-123.log"));
+
+  const t4 = tool("t4");
+  check("④ 图片结果只给提示文本", t4.text === "[Image: image/png]", JSON.stringify(t4.text));
+
+  // 路径铸造：相对路径按 cwd 解析、绝对路径原样、去重
+  const tRead = serialize.serializeMessages(
+    [
+      assistant,
+      { role: "toolResult", toolCallId: "t2", toolName: "read", content: [], isError: false },
+    ],
+    ctx,
+  ).items.find((item) => item.id === "tool-t2");
+  check("② 相对路径按会话 cwd 解析成绝对路径", tRead.openablePaths?.[0] === "/work/project/src/a.ts", JSON.stringify(tRead.openablePaths));
+
+  const tAbs = serialize.serializeMessages(
+    [assistant, { role: "toolResult", toolCallId: "t4", toolName: "read", content: [], isError: false }],
+    ctx,
+  ).items.find((item) => item.id === "tool-t4");
+  check("④ 绝对路径原样保留", tAbs.openablePaths?.[0] === "/abs/b.png", JSON.stringify(tAbs.openablePaths));
+
+  check(
+    "没有 cwd 时相对路径不被凭空改写",
+    serialize.openablePathsOfToolCall({ path: "rel/x" }, "")[0] === "rel/x",
+  );
+
+  // 我们自己的上限（只有扩展工具能触发）：正文被裁 + 标记
+  const hugeText = "z".repeat(protocol.TOOL_TEXT_MAX_BYTES + 5000);
+  const hugeItem = serialize.serializeMessages(
+    [
+      { role: "assistant", content: [{ type: "toolCall", id: "t9", name: "ext", arguments: {} }], stopReason: "toolUse" },
+      { role: "toolResult", toolCallId: "t9", toolName: "ext", content: [{ type: "text", text: hugeText }], isError: false },
+    ],
+    ctx,
+  ).items.find((item) => item.id === "tool-t9");
+  check("超出我们的上限时被裁", (hugeItem.text ?? "").length < hugeText.length);
+  check("超出我们的上限时置 textTruncated", hugeItem.textTruncated === true);
+  check("裁剪说明写进正文", (hugeItem.text ?? "").includes("已省略"), (hugeItem.text ?? "").slice(-40));
+
+  // 实时 vs 重放：同一批数据的两次序列化必须逐字节相同
+  const again = serialize.serializeMessages(messages, ctx).items;
+  check(
+    "同一批数据重复序列化的结果完全一致",
+    JSON.stringify(items) === JSON.stringify(again),
+  );
+
+  // 未登记路径 / 非字符串 path 都不铸造
+  check("非字符串 path 不铸造", serialize.openablePathsOfToolCall({ path: 42 }, "/w").length === 0);
+  check("空 path 不铸造", serialize.openablePathsOfToolCall({ path: "   " }, "/w").length === 0);
 }
 
 async function checkUrlPolicy(urlPolicy) {
@@ -257,7 +398,9 @@ function main() {
       const serialize = await loadModule("src/pi/serialize.ts", tempDir);
       const urlPolicy = await loadModule("src/shared/urlPolicy.ts", tempDir);
       const protocol = await loadModule("src/shared/protocol.ts", tempDir);
+      const toolText = await loadModule("src/shared/toolText.ts", tempDir);
       await checkSerialize(serialize, protocol);
+      await checkToolCard(serialize, protocol, toolText);
       await checkUrlPolicy(urlPolicy);
       checkWebviewElementIds();
     })

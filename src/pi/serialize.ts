@@ -8,12 +8,30 @@
 // 可以同时有文本、思考与工具调用，但工具调用在 UI 上另有 `kind:"tool"` 的行，
 // 所以这里只取文本与思考，不重复展示。
 
+import { isAbsolute, resolve as resolvePath } from "node:path";
 import {
-  MAX_REPLAY_CHARS,
+  MAX_REPLAY_BYTES,
   MAX_REPLAY_ITEMS,
   SUMMARY_MAX,
+  TOOL_TEXT_MAX_BYTES,
   type ChatItem,
 } from "../shared/protocol";
+import { clipToolText, toolTextFromContent, utf8Length } from "../shared/toolText";
+
+/**
+ * 序列化的上下文。
+ *
+ * 存在的理由：工具卡片要显示**可点击的文件路径**，而相对路径只有配上会话 cwd
+ * 才能解析成绝对路径。把它作为参数传进来（而不是让序列化器去问控制器），
+ * 是为了让**实时与重放两条路径都走同一套铸造逻辑** —— 否则重放开出来的历史卡片，
+ * 路径点不了（docs/S3-plan.md 评审第 1 轮第 4 条）。
+ */
+export interface SerializeContext {
+  cwd: string;
+}
+
+/** 没有 cwd 时的兜底（不会用到，但让类型不必可空）。 */
+const NO_CWD: SerializeContext = { cwd: "" };
 
 /** pi 消息的最小结构（只取我们真正读的字段，避免依赖完整类型）。 */
 interface AnyMessage {
@@ -25,6 +43,8 @@ interface AnyMessage {
   toolCallId?: string;
   toolName?: string;
   isError?: boolean;
+  /** toolResult 的 details（各工具不同：bash 有 truncation/fullOutputPath，edit 有 diff/patch）。 */
+  details?: unknown;
   // custom / summaries
   customType?: string;
   summary?: string;
@@ -46,8 +66,13 @@ interface ContentBlock {
   mimeType?: string;
 }
 
-/** 工具调用的登记表：toolCallId → 名字与参数摘要。 */
-export type ToolCallIndex = Map<string, { name: string; argsText: string }>;
+/**
+ * 工具调用的登记表：toolCallId → 名字、参数摘要**与原始参数**。
+ *
+ * 为什么要存原始 `args`：工具卡片的可点击路径要从参数里的 `path` 铸造，
+ * 而重放路径上我们只有这条索引（`state.pendingToolCalls` 只给 id）。
+ */
+export type ToolCallIndex = Map<string, { name: string; argsText: string; args: unknown }>;
 
 export function createToolCallIndex(): ToolCallIndex {
   return new Map();
@@ -100,6 +125,7 @@ export function indexToolCalls(message: AnyMessage, index: ToolCallIndex): void 
     index.set(id, {
       name: block.name ?? "tool",
       argsText: summarizeArgs(block.arguments),
+      args: block.arguments,
     });
   }
 }
@@ -116,6 +142,7 @@ export function serializeMessage(
   raw: unknown,
   index: number,
   toolCalls: ToolCallIndex,
+  context: SerializeContext = NO_CWD,
 ): ChatItem | undefined {
   const message = raw as AnyMessage;
   const role = message.role;
@@ -145,6 +172,7 @@ export function serializeMessage(
   if (role === "toolResult") {
     const id = message.toolCallId ?? "";
     const known = id === "" ? undefined : toolCalls.get(id);
+    const openablePaths = openablePathsOfResult(message, known?.args, context);
     return {
       kind: "tool",
       // id 由 toolCallId 构造，**实时与重放构造方式相同**（不依赖下标）：
@@ -155,6 +183,10 @@ export function serializeMessage(
       toolName: message.toolName ?? known?.name ?? "tool",
       summary: known?.argsText ?? "",
       isError: message.isError === true,
+      ...toolBodyOf(message),
+      ...toolMetaOf(message.details),
+      // 空数组不写字段：没有可点路径是常态，写一个 `[]` 只会让两端各写一遍空判断。
+      ...(openablePaths.length > 0 ? { openablePaths } : {}),
     };
   }
 
@@ -204,43 +236,141 @@ export interface SerializeResult {
  * 为什么按条数+字符数双上限：单条上限（工具摘要）管不住"会话很长"这件事，
  * 而重放是整包过去的。
  */
-export function serializeMessages(messages: readonly unknown[]): SerializeResult {
+export function serializeMessages(
+  messages: readonly unknown[],
+  context: SerializeContext = NO_CWD,
+): SerializeResult {
   const toolCalls = createToolCallIndex();
   const all: ChatItem[] = [];
   for (let i = 0; i < messages.length; i += 1) {
     const message = messages[i] as AnyMessage;
     // 工具调用要先登记，后面的 toolResult 才能取到参数摘要。
     if (message?.role === "assistant") indexToolCalls(message, toolCalls);
-    const item = serializeMessage(message, i, toolCalls);
+    const item = serializeMessage(message, i, toolCalls, context);
     if (item !== undefined) all.push(item);
   }
 
   const kept: ChatItem[] = [];
-  let chars = 0;
+  let bytes = 0;
   let truncated = false;
   for (let i = all.length - 1; i >= 0; i -= 1) {
     const item = all[i];
-    const size = itemChars(item);
-    if (kept.length >= MAX_REPLAY_ITEMS || chars + size > MAX_REPLAY_CHARS) {
+    const size = itemBytes(item);
+    if (kept.length >= MAX_REPLAY_ITEMS || bytes + size > MAX_REPLAY_BYTES) {
       truncated = true;
       break;
     }
     kept.push(item);
-    chars += size;
+    bytes += size;
   }
   kept.reverse();
   return { items: kept, truncated };
 }
 
-function itemChars(item: ChatItem): number {
+/**
+ * 一条 item 占多少**字节**。
+ *
+ * 按 UTF-8 字节而不是 `String.length`：工具正文现在动辄几十 KB，
+ * 而中文会话里"字符数"与"字节数"差三倍（S3-plan D3/D4）。
+ */
+export function itemBytes(item: ChatItem): number {
   switch (item.kind) {
     case "user":
-      return item.text.length;
+      return utf8Length(item.text);
     case "assistant":
-      return item.text.length + item.thinking.length + (item.errorMessage?.length ?? 0);
+      return utf8Length(item.text) + utf8Length(item.thinking) + utf8Length(item.errorMessage ?? "");
     case "tool":
-      return item.summary.length + item.toolName.length;
+      return (
+        utf8Length(item.summary) +
+        utf8Length(item.toolName) +
+        utf8Length(item.text ?? "") +
+        utf8Length(item.fullOutputPath ?? "") +
+        (item.openablePaths?.reduce((sum, path) => sum + utf8Length(path), 0) ?? 0)
+      );
     case "notice":
-      return item.text.length;
+      return utf8Length(item.text);
   }
+}
+
+// ------------------------------------------------------------------ 工具卡片
+
+/** toolResult 的正文部分。 */
+function toolBodyOf(message: AnyMessage): { text?: string; textTruncated?: boolean } {
+  const body = toolTextFromContent(message.content);
+  // 空正文**不写字段**：卡片折叠时本来就不显示正文，写个空串只会让"有没有正文"这个判断
+  // 在两端各写一遍（而且 `(no output)` 这种占位是 pi 自己加在文本里的，我们照显示）。
+  if (body === "") return {};
+  const clipped = clipToolText(body, TOOL_TEXT_MAX_BYTES);
+  return clipped.clipped
+    ? { text: clipped.text, textTruncated: true }
+    : { text: clipped.text };
+}
+
+/** toolResult 的 details → 展示用的标量（**绝不带** pi 的 `truncation.content`）。 */
+function toolMetaOf(details: unknown): {
+  truncation?: { truncatedBy: "lines" | "bytes"; totalLines: number; outputLines: number; maxBytes?: number };
+  fullOutputPath?: string;
+} {
+  if (details === null || typeof details !== "object") return {};
+  const raw = details as { truncation?: unknown; fullOutputPath?: unknown };
+  const out: {
+    truncation?: { truncatedBy: "lines" | "bytes"; totalLines: number; outputLines: number; maxBytes?: number };
+    fullOutputPath?: string;
+  } = {};
+  const truncation = raw.truncation as
+    | { truncated?: unknown; truncatedBy?: unknown; totalLines?: unknown; outputLines?: unknown; maxBytes?: unknown }
+    | undefined;
+  if (truncation !== undefined && truncation !== null && truncation.truncated === true) {
+    out.truncation = {
+      truncatedBy: truncation.truncatedBy === "lines" ? "lines" : "bytes",
+      totalLines: typeof truncation.totalLines === "number" ? truncation.totalLines : 0,
+      outputLines: typeof truncation.outputLines === "number" ? truncation.outputLines : 0,
+      ...(typeof truncation.maxBytes === "number" ? { maxBytes: truncation.maxBytes } : {}),
+    };
+  }
+  if (typeof raw.fullOutputPath === "string" && raw.fullOutputPath !== "") {
+    out.fullOutputPath = raw.fullOutputPath;
+  }
+  return out;
+}
+
+/**
+ * 从工具参数里取可点击的文件路径。
+ *
+ * 只认 `path` 与 `file_path`（read 两种写法都用过）—— **不从命令文本里正则猜路径**：
+ * 猜错比猜不到更糟（S3-plan D7）。
+ */
+export function openablePathsOfArgs(args: unknown, context: SerializeContext): string[] {
+  if (args === null || typeof args !== "object") return [];
+  const raw = (args as { path?: unknown; file_path?: unknown }).file_path ?? (args as { path?: unknown }).path;
+  if (typeof raw !== "string" || raw.trim() === "") return [];
+  return [absolutePathOf(raw, context.cwd)];
+}
+
+/** `tool_execution_start` 用的入口（它手上只有 args）。 */
+export function openablePathsOfToolCall(args: unknown, cwd: string): string[] {
+  return openablePathsOfArgs(args, { cwd });
+}
+
+/** toolResult 的入口：参数里的路径 + 完整输出文件。 */
+function openablePathsOfResult(
+  _message: AnyMessage,
+  args: unknown,
+  context: SerializeContext,
+): string[] {
+  const paths = openablePathsOfArgs(args, context);
+  const details = (_message.details ?? undefined) as { fullOutputPath?: unknown } | undefined;
+  if (details !== null && details !== undefined && typeof details.fullOutputPath === "string") {
+    if (details.fullOutputPath !== "") paths.push(details.fullOutputPath);
+  }
+  // 去重：同一个路径出现两次时点哪个都一样，重复只会让白名单变大。
+  return [...new Set(paths)];
+}
+
+/** 相对路径按会话 cwd 解析；已经是绝对路径就原样返回。 */
+function absolutePathOf(value: string, cwd: string): string {
+  const trimmed = value.trim();
+  if (isAbsolute(trimmed)) return trimmed;
+  if (cwd === "") return trimmed;
+  return resolvePath(cwd, trimmed);
 }
