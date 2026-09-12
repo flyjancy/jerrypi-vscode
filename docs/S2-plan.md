@@ -895,6 +895,8 @@ VERDICT: **NON_BLOCKING**。评审者对本轮的判断是"剩下的是收尾级
 
 | M8 | 链接与图片 | ✅ PASS | 让模型读 `/tmp/jerrypi-m8.md` 并原样复述：远程图片 `![](https://…)` **只显示 alt 文字 `x`**（无图片框、无裂图图标）；`[a](https://example.com)` 呈**蓝色可点**，点击后由**系统浏览器**打开。顺带验证了工具行（`✓ read {"path":"/tmp/jerrypi-m8.md"}`）渲染正常 |
 
+| M9 | 工具行（执行中占位 + 中途重开） | ✅ PASS | 发 `sleep 20`：1–2 秒内出现 `… bash … 运行中…`；**在 20 秒中途运行 `Developer: Reload Webviews`（Output 里 `[webview] ready` 正好落在 `[agent] start` 与 `[tool] bash end` 之间）→ 那一行仍在**；跑完后**就地变成 `✓ bash`，始终只有一行**；再重开一次仍是**一行最终形态**。→ **C1 家族第三处（`pendingToolCalls` 重放）确认生效** |
+
 ### 11.7 待人工验收（剩余步骤）
 
 自动化覆盖不到的是**真实 webview**：CSP 是否真的放行样式、`retainContextWhenHidden` 在视图上是否生效、
