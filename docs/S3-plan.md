@@ -47,6 +47,11 @@ entry_appended, turn_end, agent_end, agent_settled
 3. **`details` 在小输出时是 `undefined`，命令失败时是 `{}`**（探针 A/D/E）。
    → 不能写 `details.truncation`，要先判 `details` 存在。
 
+4. **快照会"换头"：超过 50KB 后保留的是最后 50KB，先前流出的开头会消失**（探针 G）。
+   实测 160KB 输出：`update#2` = 82 字符（从"行 1"起）、`update#3` = 48,971 字符（从**"行 2888"**起）。
+   → 断言**不能**写"正文单调增长"，只能写"正文 === 最后一次快照"；
+   UI 上展开态看到顶部内容被顶掉是**预期行为**（pi 的 TUI 同样如此，它用 `... (N earlier lines)` 提示）。
+
 ### 0.3 只有 bash 会流式（`onUpdate(` 的真实调用次数）
 
 | 工具 | `onUpdate(` 调用 |
@@ -71,6 +76,11 @@ entry_appended, turn_end, agent_end, agent_settled
 > ⚠️ **由此得出一条协议约束：`details` 不能整体透传。**
 > `truncation.content` 里**又装了一份 51KB 的文本**，和 `content[0].text` 重复。
 > 我们只取 `truncated / truncatedBy / totalLines / outputLines / maxBytes` 这些标量。
+
+> ⚠️ **第二个约束：pi 的最终文本可能超过 50KB。** 它在 50KB 正文之后**还要追加一行脚注**
+> （`[Showing lines 2888-4000 of 4000 (50.0KB limit). Full output: …]`）。
+> 实测单行 120KB 的极端情况：正文 51,343 字符 > 我们原先定的 51,200 上限 → 会被我们自己再裁一次，
+> **正好裁掉 M5 要验的那行脚注**。所以上限取 64KB（见 D3）。
 
 ### 0.5 pi 自己的展示方式（S3 要对齐的"设计"，`core/tools/renderers/*.js`）
 
@@ -182,6 +192,16 @@ entry_appended, turn_end, agent_end, agent_settled
 
 1. **单点序列化**：一条 pi 消息 → 一个 `ChatItem` 只经过 `serialize.ts`。
    实时路径（事件流）与重放路径（消息数组）不得各写一份。
+   **两条路径的分工必须写死**（否则"逐字节相同"的断言写不出来）：
+
+   | 字段 | 谁产出 | 重放时 |
+   | --- | --- | --- |
+   | `toolName / summary / text / truncation / isError` | `serialize.ts` | ✅ 有 |
+   | `openablePaths` | `serialize.ts`（读 `ctx.cwd`） | ✅ 有（每次重放重新铸造） |
+   | `startedAt / endedAt / pending` | `controller.ts` 装饰 | ❌ 没有（内存态） |
+
+   → `serializeMessage(raw, index, toolCalls, ctx)` / `serializeMessages(messages, ctx)`，
+   `ctx = { cwd }`；等价性断言比较时**显式剔除**实时独占字段（§6.1）。
 2. **id 权威在控制器**：工具行 id 恒为 `tool-<toolCallId>`；实时与重放构造方式相同。
 3. **只有 `render.ts` 生成 HTML**；其余地方一律 `textContent`。
    结果正文是**不可信输入**（模型可控），必须走 `renderPlain`。
@@ -213,22 +233,25 @@ entry_appended, turn_end, agent_end, agent_settled
   textTruncated?: boolean;      // 是否被**我们的上限**裁过（区分 pi 自己的截断）
   truncation?: { truncatedBy: "lines" | "bytes"; totalLines: number; outputLines: number };
   fullOutputPath?: string;      // bash 截断时的完整输出文件（也是可点路径）
-  openablePaths?: string[];     // 本条卡片里可点击打开的 **file:// URL**
+  openablePaths?: string[];     // 本条卡片里可点击打开的**绝对路径**（fsPath，不是 URL）
   startedAt?: number;           // ms epoch；重启后消失（重放时没有就不显示耗时）
   endedAt?: number;
 }
 
 // 客户端消息
-| { type: "openFile"; url: string }
+| { type: "openFile"; path: string }   // 绝对路径；host 侧做**精确字符串**白名单比对
 
-export const TOOL_TEXT_MAX_BYTES = 50 * 1024;  // = pi 的 DEFAULT_MAX_BYTES，按 UTF-8 字节
+export const TOOL_TEXT_MAX_BYTES = 64 * 1024;  // 见 D3：要**大于** pi 自己的 50KB+脚注
 // 注意：S2 的 MAX_REPLAY_CHARS 一并改名为 MAX_REPLAY_BYTES，语义从"字符"改成"UTF-8 字节"
 // （名字与语义必须一致——混用会让重放预算在中文会话里差 3 倍）
 export const TOOL_PREVIEW_LINES = 5;        // = pi 的 BASH_PREVIEW_LINES
 export const TOOL_FRAME_MS = 200;           // 工具 upsert 合并窗口
 ```
 
-`openablePaths` 只出现在 item 里——**它由控制器铸造，也是唯一的白名单来源**（见 §4.4）。
+`openablePaths` 只出现在 item 里，**由 `serialize.ts` 铸造**（见 §4.3），也是唯一的白名单来源。
+**传路径而不是 `file://` URL**：`vscode.Uri.parse("/tmp/a#b.log")` 会把 `#` 当 fragment，
+打开的是另一个文件或直接失败；用 `vscode.Uri.file(path)` 没有这个歧义
+（Windows 的 `C:\…` 形态也因此不必转义）。
 
 ### 4.2 `src/shared/toolText.ts`（新，纯函数，CI 可测）
 
@@ -237,8 +260,9 @@ stripAnsi(text): string          // ESI/CSI/OSC 序列 → 去掉；照 pi 的 u
 sanitizeControl(text): string    // 控制字符（保留 \n \t）与 \r → 处理
 imageNote(mimeType, w?, h?): string   // "[图片 image/png]"（pi 的 imageFallback 等价物）
 toolTextFromContent(content): string  // text 块拼接 + 图片块降级 + 净化
-clipToolText(text, maxBytes): { text, clipped }  // 按 **UTF-8 字节**裁剪，末尾加 "…（已截断）"
-                                               // 用 TextEncoder 量长度；裁剪点回退到字符边界
+clipToolText(text, maxBytes): { text, clipped }  // 按 **UTF-8 字节**裁剪：保**头** + 末尾加
+                                               // "…（已省略 N 字节）"；用 TextEncoder 量长度，
+                                               // 裁剪点回退到字符/代理对边界
 ```
 
 守卫：`clipToolText` 必须按**字节**量（`TextEncoder`），但裁剪点要回退到**字符/代理对边界**
@@ -250,8 +274,9 @@ clipToolText(text, maxBytes): { text, clipped }  // 按 **UTF-8 字节**裁剪�
 
 ```ts
 const body = toolTextFromContent(message.content);
-const clipped = clipToolText(body, TOOL_TEXT_MAX_CHARS);
+const clipped = clipToolText(body, TOOL_TEXT_MAX_BYTES);
 const meta = toolMetaOf(message.details);   // 只取标量，**不带** truncation.content
+const openablePaths = openablePathsOf(message, ctx);  // 参数 path + details.fullOutputPath，按 ctx.cwd 解析成绝对路径
 ```
 
 `itemChars` 改名 `itemBytes`，并把 `text` 的 **UTF-8 字节数**算进去
@@ -261,14 +286,24 @@ const meta = toolMetaOf(message.details);   // 只取标量，**不带** truncat
 
 三件事：
 
-1. **流式 upsert**
+1. **流式 upsert + 时间戳**
    ```ts
-   case "tool_execution_update": this.onToolExecutionUpdate(event)
+   case "tool_execution_start":  this.onToolStart(event)   // startedAt = now()
+   case "tool_execution_update": this.onToolUpdate(event)  // 正文 upsert（合并发送）
+   case "tool_execution_end":    this.onToolEnd(event)     // endedAt = now()；flush 并丢弃过期帧
    ```
-   - 记 `startedAt`（首次见到时）、把 `partialResult` 的正文净化后用**同一个 id** upsert；
+   - **`startedAt`/`endedAt` 只在这两个事件里记**（§0.3：其它工具根本不发 update）；
+   - `onToolUpdate` 只在 `partialResult.content[0]?.text` 存在时才更新正文
+     （占位更新只用来建行，见 §0.2 第 1 条）；
    - upsert 走 **200ms 合并**（`TOOL_FRAME_MS`）：同一工具在窗口内的多次更新只发最后一次
      （pi 自己已经节流到 100ms，这里只是不让"每 100ms 一份 50KB"直接打到 webview）；
+   - **`tool_execution_end` 必须 flush 并作废该工具所有待发帧**：否则一帧旧快照会落在最终 item
+     **之后**，用不带脚注的旧正文把最终正文覆盖回去。帧带自增序号，落地时比序号丢弃过期帧
+     （`check:controller` 里有断言）。
    - **不做前缀增量**（见 §9 风险 R4：先量再优化）。
+
+   注意：正文的**语义是整体替换**，不是追加（§0.2 第 2 条），而且超过 50KB 后快照会"换头"
+   （§0.2 第 4 条）—— 我们的 upsert 只是把这个快照原样转达，不要试图做差量或"合并历史"。
 
 2. **partial 缓存 + 重放合并**
    - `private readonly partials = new Map<string, { text: string; truncation?; fullOutputPath? }>()`；
@@ -278,22 +313,27 @@ const meta = toolMetaOf(message.details);   // 只取标量，**不带** truncat
      （最终态由消息构建），随后删除；会话替换 / `newSession` 时整体清空。
 
 3. **可打开路径白名单**
-   - `private readonly openable = new Set<string>()`（值 = `file://` URL 字符串）；
-   - 铸造点只有两处：(a) 工具参数里有 `path` 时按**会话 cwd** 解析成绝对路径
-     （`resolvePath(raw, cwd)`，与 pi 的 `linkPath` 同规则）；(b) `details.fullOutputPath`；
-   - `isOpenableFile(url: string): boolean` 只查这个集合（外加 `file:` 前缀与绝对路径校验）；
-   - 容量上限（如 2000 条）与 FIFO 淘汰，避免长会话无界增长。
+   - `private openable = new Set<string>()`（值 = **绝对路径**，不是 URL）；
+   - 铸造点在 `serialize.ts`（§4.3）：工具参数里的 `path` 与 `details.fullOutputPath`，
+     相对路径按**会话 cwd** 解析（`path.resolve`，与 pi 的 `linkPath` 同规则）；
+   - 控制器在**每次发 item / 每次 `snapshot()` 时**把这些路径登记进来；
+     `snapshot()` **重建**集合（不是累加）——因为重放出来的卡片才是 webview 上真实存在的卡片；
+   - `isOpenableFile(path: string): boolean` 只做精确字符串比对（外加绝对路径校验）。
+     → **重放出来的历史卡片照样能点开**（这是评审抓到的洞：白名单只从事件里铸造的话，
+     面板重开之后历史卡片全点不开），也不需要 FIFO 淘汰（上限由重放的条数上限决定）。
 
 ### 4.5 `src/host/chatView.ts`（增量）
 
 ```ts
 case "openFile": {
-  if (!controller.isOpenableFile(message.url)) { output.appendLine("拒绝打开未登记的文件：…"); return; }
-  await vscode.window.showTextDocument(vscode.Uri.parse(message.url), { preview: true });
+  if (!controller.isOpenableFile(message.path)) { output.appendLine("拒绝打开未登记的文件：…"); return; }
+  await vscode.window.showTextDocument(vscode.Uri.file(message.path), { preview: true });
   return;
 }
 ```
-文件不存在时 `showTextDocument` 会抛错 → 捕获后给一条 `showWarningMessage`（不要静默失败）。
+- 用 `Uri.file` 而不是 `Uri.parse`：后者会把路径里的 `#` 当 fragment、`?` 当 query（§4.1）。
+- 文件不存在时 `showTextDocument` 抛错 → 捕获后 `showWarningMessage`（不静默失败）。
+- 二次校验是刻意的：白名单在控制器里，host 只做"它确实登记过"这一条判断，**不自己解析路径**。
 
 ### 4.6 `src/webview/render.ts`（增量，仍是纯函数）
 
@@ -332,6 +372,7 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 | 已完成的工具行 | `session.messages` 的 `toolResult` | 正文、截断、路径与实时**逐字节相同** |
 | **正在执行的工具行** | `state.pendingToolCalls`（id）+ 我们的 `partials`（正文） | 已有输出**不丢**，且随后继续增长 |
 | 卡片的展开/折叠 | **不进协议**，webview 自己维护；重开后面板重置为默认折叠 | 不承诺跨重开保持（VS Code 侧的 `retainContextWhenHidden` 场景下本来就不重建） |
+| 可点路径 | 每次序列化重新铸造（§4.4 第 3 条） | **重开之后历史卡片的路径仍可点** |
 | 时间戳 | 内存里有就显示，没有就不显示 | **不编造**（重启后不显示耗时） |
 
 `MAX_REPLAY_CHARS` 从 1MB **提到 4MB 并改名 `MAX_REPLAY_BYTES`**（理由：bash 单条结果可达 51KB，
@@ -402,10 +443,10 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 | --- | --- | --- | --- |
 | D1 | 折叠默认态 | read/write/edit **折叠**；bash 折叠但显示**最后 5 行** | 照 pi（`BASH_PREVIEW_LINES=5`） |
 | D2 | 展开内容上限 | 全量（受 D3 的单条上限约束） | 展开就是"我要看全部" |
-| D3 | 单条正文上限 | `TOOL_TEXT_MAX_BYTES = 50 * 1024`（= pi 的 `DEFAULT_MAX_BYTES`，**按 UTF-8 字节**） | pi 已经把结果裁到 50KB，S3 不再二次裁剪；超过只可能是扩展工具，那时给"已截断"标记。**必须按字节而不是字符**：50K 个汉字是 150KB |
-| D4 | 重放预算 | `MAX_REPLAY_CHARS` 1MB → **4MB** | bash 单条可达 51KB，1MB 装不下长会话 |
+| D3 | 单条正文上限 | `TOOL_TEXT_MAX_BYTES = 64 * 1024`（**按 UTF-8 字节**，只可能被扩展工具触发） | 必须**大于** pi 自己的上限：pi 裁到 50KB 正文后**还会追加一行脚注**，实测可达 51,343 字符；取 50KB 会把那行脚注裁掉。64KB 留足余量，内置工具的结果永远不会被我们二次裁剪。**必须按字节而不是字符**：50K 个汉字是 150KB。`clipToolText` 触发时**保留头部**（内置工具的头部信息量最大；bash 的"保尾"是 pi 在工具内部做的，不是我们的职责） |
+| D4 | 重放预算 | `MAX_REPLAY_BYTES` 1MB → **4MB** | bash 单条可达 51KB，1MB 装不下长会话。4MB 是**一次 postMessage 的 JSON**、webview 启动时同步解析 → 在 `check:controller` 里顺便量它的实际字节数与耗时（与 R4 同一个口径，别只量流式不量重放） |
 | D5 | 流式传输 | **整体 upsert + 200ms 合并**（不做前缀增量） | 先保证"实时与重放同一份数据"；体积问题先量再优化（§9 R4） |
-| D6 | 耗时显示 | 有 `startedAt` 才显示；进行中每秒 tick | 不编造数据；重启后重放没有时间戳就不显示 |
+| D6 | 耗时显示与记录点 | `startedAt` 记在 **`tool_execution_start`**、`endedAt` 记在 **`tool_execution_end`**；进行中每秒 tick | 记在 `tool_execution_update` 里是错的：read/write/edit 的 `onUpdate` 调用次数是 **0**（§0.3），那样只有 bash 有耗时。没有时间戳（重放/重启）就不显示 —— 不编造数据 |
 | D7 | 可点路径来源 | 只认参数 `path` 与 `details.fullOutputPath` | 不从命令文本猜路径（猜错比猜不到更糟） |
 | D8 | 路径打开方式 | `showTextDocument(uri, {preview: true})` | VS Code 里"从链接打开文件"的惯例；不强制占新标签 |
 | D9 | 图片内容 | **不显示**，只给 `[图片 image/png]` 文本 | base64 会顶爆重放预算；与 pi 在无图片能力终端下的降级一致 |
@@ -419,7 +460,7 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 
 | # | 风险 | 缓解 |
 | --- | --- | --- |
-| R1 | **把快照当增量**拼接（§0.2 第 2 条） | 协议里 tool 正文是"整体替换"语义；controller-check 断言文本**单调增长且等于最后一次快照** |
+| R1 | **把快照当增量**拼接（§0.2 第 2 条） | 协议里 tool 正文是"整体替换"语义；controller-check 断言"**正文 === 最后一次快照**"。⚠️ **不能**断言"单调增长"：超过 50KB 后快照会换头（探针 G，§0.2 第 4 条） |
 | R2 | **第一次更新的 `content: []`** 被当成"空输出"覆盖掉已有正文 | `onToolExecutionUpdate` 只在 `content[0]?.text` 存在时才更新正文（占位更新只用来建行） |
 | R3 | 就地更新写错 → 展开态在流式期间被重置 | M7 作为回归点；`toolViews` 只改 head/body 的 innerHTML |
 | R4 | 50KB/次 × 5 次/秒的 postMessage 体积 | 先量：`check:controller` 里统计一个 5 秒命令的消息数/字节数并打印；若持续 >100KB/s 再引入"前缀增量 + 最终整体 upsert" |
