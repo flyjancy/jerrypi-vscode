@@ -771,3 +771,78 @@ VERDICT: **NON_BLOCKING**。评审者对本轮的判断是"剩下的是收尾级
 ⚠️ **本轮之后的全部改动（即上表 7 条）未经第四轮复核。** 但按评审者的判断与作者的一致意见：
 **到此收敛，进入 §8 决策点确认与实施。** 剩余未知量（CSP 是否真的放行样式、`retainContextWhenHidden`
 在视图上是否真的生效、Electron 版本差异）**只能靠 F5 与受限机实测发现**，继续静态评审的收益已很低。
+
+---
+
+## 11. 实施记录
+
+### 11.1 落地清单（7 个提交）
+
+| # | 提交 | 内容 |
+| --- | --- | --- |
+| 1 | `refactor: extract the gate model choice into a shared module` | `src/pi/model-choice.ts`；`selftest.ts` 改为调用它。**行为不变**（见 11.2） |
+| 2 | `feat: add the shared chat protocol, message serialization and url policy` | `src/shared/protocol.ts`、`src/shared/urlPolicy.ts`、`src/pi/serialize.ts`、`scripts/protocol-check.mjs` |
+| 3 | `feat: add the panel session controller with replay, framing and abort handling` | `src/pi/controller.ts`、`src/host/uiContext.ts`、`scripts/controller-check.mjs` |
+| 4 | `feat: add markdown rendering with pi's sanitizer configuration` | `src/webview/render.ts`、`scripts/render-xss-check.mjs`、CI 加两步 |
+| 5 | `feat: add the chat webview view with replay, CSP and the panel UI` | `src/host/chatView.ts`、`src/host/webviewHtml.ts`、`src/host/workspace.ts`、`src/webview/main.ts`、`src/webview/style.css`、`media/jerrypi.svg`、`esbuild.mjs`、`package.json`、`check-vsix.mjs` |
+| 6 | `refactor: single source for the protocol version` | 协议版本只留一处 |
+| 7 | `chore: keep tsconfig variants out of the vsix` | `.vscodeignore` 的 `tsconfig*.json` |
+
+**与计划的偏差（3 处，都有理由）**
+
+1. **`createVSCodeUIContext` 放在 `src/host/uiContext.ts`，不是 `src/pi/bindings.ts`**（计划 §2/PLAN 5.3 的写法）。
+   原因：`bindings.ts` 被 `src/pi/session.ts` **值导入**，在里面 import `vscode` 会让整个 `src/pi` 层
+   无法在纯 Node 里加载 —— S1 留下的快速迭代通道（本地 harness）会当场失效。
+   已加脚本化约束：`src/pi/**` 只允许 `import type * as vscode`。
+2. **`webviewHtml.ts` 不 import vscode**：改成接收三个字符串，于是它成为纯函数，
+   `scripts/render-xss-check.mjs` 能在 Node 里逐条断言 CSP 指令（这正是 B3 那类错误的防线）。
+3. **新增 `src/host/workspace.ts`**（cwd 推导）与 **`scripts/controller-check.mjs`**（端到端检查）。
+
+### 11.2 重构等价性（`model-choice.ts` 的提取）
+
+用 S1 的两个场景复核，输出**逐字节不变**：
+
+| 场景 | 重构前 | 重构后 |
+| --- | --- | --- |
+| 只配 deepseek | `deepseek/deepseek-v4-pro → 已改为 deepseek/deepseek-v4-flash（指定模型，不用 pi 的默认）` | 同 |
+| deepseek + openai | `openai/gpt-5.5 → 已改为 deepseek/deepseek-v4-flash（指定模型，不用 pi 的默认）` | 同 |
+
+### 11.3 落地时发现并修掉的真问题（都是"看起来正常"的类型）
+
+| # | 问题 | 怎么发现的 | 修法 |
+| --- | --- | --- | --- |
+| 1 | **中止时排队文本静默丢失**：`abort()` 里先 `session.abort()` 再 `clearQueue()`，而 pi 在中止过程中会把队列一并清掉，之后 `clearQueue()` 只返回两个空数组 | `scripts/controller-check.mjs` 断言"退回文本含两条"，实测为空；随后用单独脚本打印时序确认 | **顺序反过来**：先 `clearQueue()` 取走文本并退回输入框，再 `abort()`。语义上也更对：先停止接收新工作，再停止当前回合 |
+| 2 | 发送按钮的禁用条件写成恒假表达式（`busy && x ? false : false`） | 自查 | 按 D10 改为 `sentText !== undefined`（发出到回显之间禁用） |
+| 3 | `tsconfig.webview.json` 漏进 `.vsix` | 解包后 `ls` 扩展根目录 | `.vscodeignore` 改 `tsconfig*.json` |
+| 4 | 图片白名单只判 scheme，`data:text/html` 会被当图片放行 | `protocol-check` 的断言 | 收紧为 `data:image/` 前缀 |
+| 5 | URL 里含空白时各解析器可能各解各的 | 自写的"伪装"用例 | `isExternalUrlAllowed` 增加"不得含空白" |
+
+### 11.4 自动化验收结果（本地，全部通过）
+
+| 检查 | 结果 | 说明 |
+| --- | --- | --- |
+| `npm run typecheck` | OK | 两个 project：宿主（无 DOM）与 webview（有 DOM） |
+| `npm run self-test` | **6/6** | case 6 会真正去跑下面两个脚本 |
+| `npm run check:protocol` | **54 checks** | serialize 的 id 规则、urlPolicy、webview 元素 id 交叉检查、协议版本单源 |
+| `npm run check:render` | **41 checks** | 12 条攻击载荷 + 图片两例 + **CSP 逐条断言** + 渲染/外开判定一致 |
+| `npm run check:controller` | **21/21** | **真实模型**端到端；覆盖 C1/N1/N2/N4/D9 全部回归点（需要凭据与网络，不进 CI） |
+| `npm run package` + `check-vsix` | 5.72 MB / 19.1% | 8 个必需文件全部在包内 |
+| 解包后隔离校验 | `VERIFY OK` | CHECK 2 / CHECK 7 均通过 |
+
+`check:controller` 覆盖的回归点（每条都对应一次评审发现的问题）：
+
+- assistant 在 upsert 之后**只剩一个节点**（N1：收尾端 id 必须复用）；
+- 流式中取快照，其 id 与实时 delta 的 id **一致**，且快照之后**仍有 delta 到达**（C1）；
+- 工具行 `pending → settled` **同一个 id**，最终视图里每次调用只占一行（N4）；
+- 工具执行中的快照**带 pending 工具行**（C1 家族第三处）；
+- 中止后被清掉的排队文本**退回输入框**（D9）；
+- 扩展命令后 busy **被解除**（N2：扩展命令不启动 agent run，没有 `agent_settled`）；
+- `newSession()` 后历史清空。
+
+### 11.5 待人工验收（本机 F5 与受限 Windows 机）
+
+自动化覆盖不到的是**真实 webview**：CSP 是否真的放行样式、`retainContextWhenHidden` 在视图上是否生效、
+受限机的 Chromium 版本差异。这些只能靠 §6.2 的 M0–M10 与 §6.3 的 W0–W3。
+
+产物：`jerrypi-0.1.4.vsix`，5,998,041 字节，
+SHA-256 `90a419e761caa57af49c8fdd0af393217127049f32c102265f39280a8d21a7d6`。

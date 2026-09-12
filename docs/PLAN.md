@@ -145,7 +145,7 @@ jerrypi-vscode/
 2. `AgentSession.subscribe()` 收到事件 → `PiSession` 序列化为 `ServerMessage` → Webview 增量渲染。
 3. 转发的事件子集：`agent_start/end`、**`agent_settled`**、`turn_start/end`、`message_start/update/end`（含 text_delta、thinking_delta、toolcall）、`tool_execution_start/update/end`、`bash_execution_update`、`queue_update`、`session_info_changed`、`thinking_level_changed`、`compaction_start/end`、`auto_retry_*`。
 4. Webview 断开重连（面板折叠再展开）时，`chatView` 用 `AgentSession` 的消息历史重放一次全量状态。
-5. **发送语义**（`ClientMessage` 区分 `prompt` / `steer` / `followUp` 三种动作）：空闲时 Enter = `prompt`；流式期间 Enter = `steer`（打断当前回复、注入新指令，输入框提示"将打断当前回复"），另有"排队"按钮 = `followUp`（等本轮结束后再发）；流式期间绝不调 `prompt`。排队中的消息用 `queue_update` 的 `steering`/`followUp` 数组渲染成待处理条，可编辑、可移除。
+5. **发送语义**（`ClientMessage` 区分 `prompt` / `steer` / `followUp` 三种动作）：空闲时 Enter = `prompt`；流式期间 Enter = `steer`（打断当前回复、注入新指令，输入框提示"将打断当前回复"），另有"排队"按钮 = `followUp`（等本轮结束后再发）；流式期间绝不调 `prompt`。排队中的消息用 `queue_update` 的 `steering`/`followUp` 数组渲染成待处理条。**只能整体清空**（pi 只提供 `clearQueue()`，没有按条移除/编辑的 API；伪实现会让投递顺序与用户所见不一致），清空前先把文本退回输入框。
 6. **空闲判定以 `agent_settled` 为准**（或 `session.isStreaming`），不以第一个 `agent_end` 为准：`agent_end` 后若还有 followUp 队列或 `auto_retry_*`，输入态仍保持"生成中"。
 
 ### 5.3 关键设计决定
