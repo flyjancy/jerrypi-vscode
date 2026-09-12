@@ -218,6 +218,13 @@ function checkWebviewElementIds() {
   check("工具名声明了不可收缩", /flex:\s*0 0 auto/.test(toolNameRule), toolNameRule.trim());
   const toolLineRule = css.match(/\.tool-line\s*\{[^}]*\}/)?.[0] ?? "";
   check("工具行允许换行", /flex-wrap:\s*wrap/.test(toolLineRule));
+  // 同一类错误的第二处：按钮被 hint 挤成竖排字。
+  const buttonRule = css.match(/\.button\s*\{[^}]*\}/)?.[0] ?? "";
+  check("按钮不可收缩且不换行",
+    /flex:\s*0 0 auto/.test(buttonRule) && /white-space:\s*nowrap/.test(buttonRule), buttonRule.trim());
+  // D10 修订：发送即清空，不再依赖"回显时比对文本"。
+  check("发送后立即清空输入框（不再比对 sentText）",
+    /input\.value = ""/.test(main) && !/sentText/.test(main));
   // 协议版本只能有一处来源：两边硬编码成两个数字是最容易漏的漂移。
   const chatView = fs.readFileSync(path.join(REPO_ROOT, "src/host/chatView.ts"), "utf8");
   check("chatView 不硬编码协议版本", !/protocol:\s*\d/.test(chatView));

@@ -251,13 +251,18 @@ body {
   justify-content: flex-end;
 }
 
+/* 提示语可以换行、可以收缩；按钮**不可以**——它们一旦被挤窄就会变成竖排字
+   （实测：侧栏里 "排队"/"中止"/"发送" 都变成了一列单字）。 */
 .hint {
-  margin-right: auto;
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 0.8em;
   color: var(--vscode-descriptionForeground);
 }
 
 .button {
+  flex: 0 0 auto;
+  white-space: nowrap;
   border: none;
   border-radius: 3px;
   padding: 3px 10px;

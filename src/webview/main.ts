@@ -43,7 +43,14 @@ const live = new Map<string, LiveRegion>();
 const order: string[] = [];
 let busy = false;
 let model = "";
-let sentText: string | undefined;
+/**
+ * 已发出、还没被确认的那条文本。
+ *
+ * 为什么要它：发送后**立即清空输入框**（见 D10 的修订）。清空带来一个新问题——
+ * 如果这条根本没被接受（没模型、没凭据…），用户的话就凭空消失了，所以留一份，
+ * 收到 `composerError` 时放回去。
+ */
+let pendingText: string | undefined;
 
 // ------------------------------------------------------------------ DOM 工具
 
@@ -155,9 +162,9 @@ function renderStatus(): void {
   statusBar.textContent = parts.join(" · ");
   abortButton.hidden = !busy;
   queueButton.hidden = !busy;
-  // D10：消息发出后到回显之前，禁用发送按钮（避免连点造成重复发送），
-  // 但**不禁用输入框**——用户可以在等待期间继续打字。
-  sendButton.disabled = sentText !== undefined;
+  // 发出一份、还没确认的期间禁用发送按钮（避免连点重复发送），但**不禁用输入框**：
+  // 流式期间用户还要能打字发 steer。
+  sendButton.disabled = pendingText !== undefined;
   hint.textContent = busy ? "Enter 将打断当前回复；点「排队」等本轮结束再发" : "";
   scrollToBottom();
 }
@@ -166,12 +173,15 @@ function scrollToBottom(): void {
   transcript.scrollTop = transcript.scrollHeight;
 }
 
-/** D10：发送时不清空输入框；等这条 user 消息回显时，若内容没被改动过才清空。 */
-function onUserItem(text: string): void {
-  if (sentText !== undefined && text === sentText) {
-    if (input.value === sentText) input.value = "";
-    sentText = undefined;
-  }
+/**
+ * user 消息回显了 → 这条发送已经落地，不用再留恢复用的副本。
+ *
+ * D10 原先的设计是"等回显才清空输入框"，实测被推翻：流式期间发的 steer/followUp
+ * 会在队列里躺很久（甚至几分钟），输入框里一直留着那句文本，用户会以为没发出去、
+ * 想再按一次回车。改成"发送即清空"，反馈由队列条与回显给出。
+ */
+function onUserItem(_text: string): void {
+  pendingText = undefined;
 }
 
 // ------------------------------------------------------------------ 消息
@@ -189,7 +199,7 @@ function applyState(message: Extract<ServerMessage, { type: "state" }>): void {
   for (const item of message.items) renderItem(item);
   renderQueue(message.queue);
   renderStatus();
-  if (busy !== true) sentText = undefined;
+
 }
 
 window.addEventListener("message", (event: MessageEvent<ServerMessage>) => {
@@ -215,6 +225,12 @@ window.addEventListener("message", (event: MessageEvent<ServerMessage>) => {
     case "composerError":
       errorBox.textContent = message.text;
       errorBox.hidden = false;
+      // 这条根本没被接受（没模型/没凭据…）：把文本放回输入框，别让它凭空消失。
+      if (pendingText !== undefined) {
+        if (input.value === "") input.value = pendingText;
+        pendingText = undefined;
+      }
+      renderStatus();
       return;
     case "restoreComposer":
       // 中止时被退回的排队文本：追加到输入框（不覆盖用户已经打了一半的内容）。
@@ -229,11 +245,12 @@ window.addEventListener("message", (event: MessageEvent<ServerMessage>) => {
 // ------------------------------------------------------------------ 交互
 
 function send(behavior: "auto" | "steer" | "followUp"): void {
-  if (sentText !== undefined) return; // 上一条还没回显，别重复发
+  if (pendingText !== undefined) return; // 上一条还没确认，别重复发
   const text = input.value.trim();
   if (text === "") return;
   errorBox.hidden = true;
-  sentText = text;
+  pendingText = text;
+  input.value = ""; // 立即清空：反馈交给队列条与回显
   vscode.postMessage({ type: "prompt", text, behavior });
 }
 
