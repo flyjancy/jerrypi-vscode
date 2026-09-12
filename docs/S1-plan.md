@@ -1,6 +1,6 @@
 # S1 实施计划：可行性闸门
 
-> 状态：**已吸收 Claude Opus 5 两轮评审**（2026-09-12），待实施。
+> 状态：**已吸收 Claude Opus 5 三轮评审**（2026-09-12），待实施。
 > 依据 [`PLAN.md`](PLAN.md) 第 6 节 S1、5.3、5.4；已落地事实见 [`S0-plan.md`](S0-plan.md) §10。
 >
 > S1 不建 UI。它只回答一个问题：**pi 能不能在 VS Code 扩展宿主里、从 `pi-runtime/` 里真正跑起来，
@@ -54,6 +54,18 @@
 | 10 | 小 | 三条命令的设计整节丢了 | §4.11：补回命令行为表，并补"设完 key 要注入**已缓存实例**" |
 | 11 | 小 | 自测总时长最坏约 16 分钟且中途无输出 | §4.6：**每项结束立即追加一行到 Output**，便于定位卡点 |
 
+### 0.3 第三轮评审吸收（Claude Opus 5）
+
+| # | 级别 | 意见 | 处置 |
+| --- | --- | --- | --- |
+| 1 | **重要** | `wrappedWrite` 的形状验不到它被加进来的那个风险 | §4.9：改为**自己包一层 `execute`，在每次调用内构造捕获 `toolCallId` 的 `operations`**。已核实内置 write 的 `execute(_toolCallId, …)` **丢弃 toolCallId**，且 `operations` 在构造时固定 |
+| 2 | 小 | `REQUIRED_PI_EXPORTS` 漏了代码实际用到的 `SettingsManager` 与 `getAgentDir` | §4.1：已补（清单自己写着"只列真正用到的名字"） |
+| 3 | 小 | `projectTrustContext` 那条反驳只对一半 | §4.3：改为"S1 不接；接法是在 `resolveProjectTrust` 回调**内部**闭包传给 pi 内部的 `resolveProjectTrusted(...)`" |
+| 4 | 更正 | 它上轮说"`customTools` 放工厂外会把文件写到错目录"是**错的** | §4.9：删掉该理由。已核实路径解析是 `resolveToCwd(path, ctx?.cwd || cwd)`，而 `customTools` 经 `wrapRegisteredTools` 拿到当前会话 `ctx.cwd`。**仍保留"在工厂内按传入 cwd 构造"**（更一致、更保守），但不再编造原因 |
+| 5 | 非阻断 | `projectTrusted: false` 与 pi CLI 行为刻意分歧，需让用户知道 | §1.1 新增第 7 项：写进 README 已知限制 |
+
+第三轮同时确认了两件我们担心过的事：**`projectTrusted: false` 不影响 T3**（`additionalExtensionPaths` 走 CLI/temporary 分支，无条件合入，不受信任门控）；**覆盖 `operations` 不会丢掉文件互斥队列**（`withFileMutationQueue` 在 `createWriteToolDefinition` 的 execute 内部，不在默认 operations 里）。
+
 ## 1. 范围
 
 ### 1.1 做
@@ -62,8 +74,9 @@
 2. `ModelRuntime` 工厂（含 key 重新注入）与最小会话装配（`runtime.ts` / `session.ts`）；
 3. 把 pi 会话事件接到 VS Code（`bindings.ts`）；
 4. 三条命令：`Pi: Run Self-Test` / `Pi: Set API Key`（最小版）/ `Pi: Open Settings File`；
-5. 一个最小 `wrappedWrite` 自定义工具，验证"同名覆盖内置 write"的机制与行为；
-6. 自测 T1–T9，输出固定格式并给出 `GATE PASS|BLOCKED`。
+5. 一个最小 `wrappedWrite` 自定义工具，验证"同名覆盖内置 write"的机制，**以及按 `toolCallId` 分组快照的机制**（S7 的前提）；
+6. 自测 T1–T9，输出固定格式并给出 `GATE PASS|BLOCKED`；
+7. README 已知限制里记录 S1 固定 `projectTrusted: false` 与 pi CLI 行为的刻意分歧（S6 再收敛）。
 
 ### 1.2 不做（留给后续步骤）
 
@@ -132,7 +145,7 @@ export type PiModule = typeof import("@earendil-works/pi-coding-agent");
 
 // 只列代码真正用到的名字（多列一个就是新的漂移源）
 export const REQUIRED_PI_EXPORTS = [
-  "VERSION", "getPackageDir", "ModelRuntime", "SessionManager",
+  "VERSION", "getPackageDir", "getAgentDir", "ModelRuntime", "SessionManager", "SettingsManager",
   "createAgentSessionServices", "createAgentSessionFromServices", "createAgentSessionRuntime",
   "resizeImage", "createWriteToolDefinition",
 ] as const;
@@ -211,9 +224,10 @@ await rebindSession(runtime.session);        // ← 关键：不调这一行，�
   `customTools` 也必须在工厂内按该 `cwd` 构造（`createWriteToolDefinition(cwd, …)` 在构造时固定 cwd）；
 - **回调要 `await`**：签名是 `(session: AgentSession) => Promise<void>`，
   `bindExtensions` 返回 Promise，不 await 会让会话替换在绑定完成前 resolve；
-- **`projectTrustContext` 在 S1 不传**：`createAgentSessionServices` / `createAgentSessionFromServices`
-  都不接受它；`resourceLoaderReloadOptions.resolveProjectTrust` 也只收 `{ extensionsResult }`（均已核实）。
-  它属于 S6 的信任流程；
+- **`projectTrustContext` 在 S1 不接**：`createAgentSessionServices` / `createAgentSessionFromServices`
+  都不接受它，`resourceLoaderReloadOptions.resolveProjectTrust` 也只收 `{ extensionsResult }`（均已核实）。
+  它属于 S6 的信任流程；**S6 的接法**是在 `resolveProjectTrust` 回调**内部**用闭包把它传给 pi 内部的
+  `resolveProjectTrusted({ cwd, trustStore, extensionsResult, projectTrustContext, ... })`，而不是当成参数往下传。
 - **显式传 `settingsManager`**：不传时 `SettingsManager.create(cwd, agentDir)` 的 `projectTrusted` 默认是
   `true`（已核实 `options.projectTrusted ?? !0`），等于无条件信任工作区里的项目级设置（可改 shellPath、默认工具）。
   S1 传 `false`，最保守。
@@ -334,20 +348,39 @@ plugins: [{
 
 ```ts
 export function createCustomTools(pi: PiModule, cwd: string): ToolDefinition[] {
-  return [pi.createWriteToolDefinition(cwd, {
-    operations: {
-      writeFile: async (absolutePath, content) => { recordMarker(absolutePath); await fs.writeFile(absolutePath, content); },
-      mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => undefined),
+  const base = pi.createWriteToolDefinition(cwd);
+  return [{
+    ...base,                                    // 名字仍是 "write" → 覆盖内置
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      recordCall(toolCallId);                   // 行为证据（含 toolCallId）
+      // 关键：operations 必须在**本次调用内**构造，才能捕获 toolCallId
+      const perCall = pi.createWriteToolDefinition(cwd, {
+        operations: createOperations({ toolCallId }),
+      });
+      return perCall.execute(toolCallId, params, signal, onUpdate, ctx);
     },
-  })];
+  }];
 }
 ```
 
-- 已核实 `createWriteToolDefinition(cwd, options?)` **返回 `ToolDefinition`** → 直接放进 `customTools`，
-  **不需要再套 `defineTool`**；自定义行为经 `options.operations`（`{ writeFile, mkdir }`）注入；
-- **必须在工厂内按传入的 `cwd` 构造**（§4.3）；T9 切会话换 cwd 时，闭包版本会把文件写到错的目录，
-  且症状极难归因；
-- 存在理由（PLAN.md 第 6 节 S1 第 3 条）：**"同名覆盖内置 write"这个机制有风险，要在闸门里验**。
+已核实的三个事实（全部影响这段代码）：
+
+1. `createWriteToolDefinition(cwd, options?)` **返回 `ToolDefinition`** → 不必再套 `defineTool`；
+   自定义行为经 `options.operations`（`{ writeFile, mkdir }`）注入；
+2. 内置 write 的 execute 签名是 `execute(_toolCallId, { path, content }, signal, _onUpdate, ctx)`
+   —— **toolCallId 被丢弃**，`operations` 在构造时固定。所以"按调用构造 operations"只能由我们自己的
+   `execute` 包一层来做，否则 S7 真正有风险的机制（外层 execute 拿到 toolCallId → 为该次调用构造捕获此 ID 的
+   operations）在闸门里根本没被验证，又要拖到 S7 才暴露；
+3. 路径解析是 `resolveToCwd(path, ctx?.cwd || cwd)`，而 `customTools` 会经 `wrapRegisteredTools(allCustomTools, runner)`
+   拿到**当前会话的 `ctx.cwd`**；构造时传的 `cwd` 只是没有 ctx 时的兜底。
+   （上一版这里写"闭包版本会把文件写到错的目录，且症状极难归因"是**错的**，已删——留着会把 S7 的实现者
+   引向错误的模型。仍保留"在工厂内按传入 `cwd` 构造"，因为它更一致，但不再以此为由。）
+
+另：覆盖 `operations` **不会**丢掉文件互斥队列 —— `withFileMutationQueue(absolutePath, …)` 是在
+`createWriteToolDefinition` 的 execute **内部**包住 `ops.mkdir` / `ops.writeFile` 的，不在默认 operations 里。
+所以 S7 可以按"实际写入仍受内置文件队列保护"这个前提设计快照逻辑。
+
+存在理由（PLAN.md 第 6 节 S1 第 3 条）：**"同名覆盖内置 write"这个机制有风险，要在闸门里验**。
 
 ### 4.10 `test-fixtures/ext-smoke/index.ts` 与 `scripts/self-test.mjs`
 
@@ -394,7 +427,7 @@ GATE BLOCKED T3,T6
 | T4 | ✅ | 收到 `message_update` 且 `assistantMessageEvent.type === "text_delta"` | **是** | 60s |
 | T5a/T5b | ✅ | `executeBash` 输出正确；`abortBash` 后 3s 内返回且 `cancelled === true` | 否 | 30s |
 | T5c | ⚠️ advisory | 见 §4.6 | **是** | 90s |
-| T6 | ✅ | 文件内容正确 + `details.patch` 非空 + wrappedWrite 标记文件存在 | **是** | 120s |
+| T6 | ✅ | 文件内容正确 + `details.patch` 非空 + wrappedWrite 标记含本次 `toolCallId` | **是** | 120s |
 | T7 | ✅ | `continueRecent` 后消息数 ≥ 2 且文件存在 | **是** | 60s |
 | T8 | ✅ | 显式 Worker 往返成功 + `resizeImage()` 非 `null` 且尺寸变小 | 否 | 30s |
 | T9 | ✅ | 两次替换 `cancelled === false`、新对象、rebind 正确、`agent_start` 可达 | **是** | 120s |
