@@ -915,7 +915,7 @@ VERDICT: **NON_BLOCKING**。评审者对本轮的判断是"剩下的是收尾级
 | --- | --- | --- | --- |
 | W0 | `Pi: Run Self-Test`（**必须先过**） | ✅ **GATE PASS 11/11** | 0.1.4 / win32 / node=24.18.1 / electron=42.10.0 / vscode=1.137.0；`已配置 provider=[deepseek, openai]`；T5a `shell=C:\Program Files\Git\bin\bash.exe`；T5b `abortBash 后 71ms 返回`；T5c `标记后 2068ms 结束`；T6 `patch 287 字符；wrappedWrite 捕获 toolCallId`；T7/T8/T9 全过。**证明 `model-choice.ts` 的提取没有破坏受限机路径**（`S2-CL-P1` 解除） |
 | W1 | 面板基础（M0+M1+M2） | ✅ PASS | 状态行 `空闲`；**逐字流式**；多轮上下文正确（第三轮复述自己的第一句）；python 代码块正常；Output **无 `[agent] error`**，恰好 3 组 `[agent] start/end` 对应 3 轮提问 |
-| W2 | XSS（M7） | ⏳ | |
+| W2 | XSS（M7） | ✅ PASS | 三条载荷逐条发送：**无任何对话框**；①② 在用户气泡里以**尖括号原文**显示；③ 在气泡里只有 `x`，**白字不是蓝链**（`javascript:` 已降级为纯文本）。额外覆盖了一条 Mac 上没走到的路径：模型把 ① 复述在**行内代码**里（`<img src=x onerror=alert(1)>`）——**行内 code 的转义同样是安全的** |
 | W3 | 排队（M4/M5） | ⏳ | |
 
 **W0 附带确认**：面板的 `[controller]` 行说明 Windows 那台 pi 设置里**没有**默认模型
