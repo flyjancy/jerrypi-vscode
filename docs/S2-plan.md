@@ -878,7 +878,19 @@ VERDICT: **NON_BLOCKING**。评审者对本轮的判断是"剩下的是收尾级
 | 7 | 工具行的工具名被挤成竖排单字母（`bash` → `b`/`a`/`s`/`h`） | `.tool-line` 的 flex 让参数把工具名挤没了；侧栏只有 ~260px 宽，我写 CSS 时没考虑 | 工具名与图标 `flex: 0 0 auto`，参数允许折行；加源码级回归断言（protocol 54 → 56） |
 | 8 | 工具调用那一轮冒出一行橙字"（本次回复没有内容：toolUse）"，紧跟其后的才是工具行与真正回复 | `stopReason === "toolUse"` 的那轮 assistant 消息**本来就只带工具调用、没有正文**，我却按"空回复"补了警告 | 排除 `toolUse`；加行为断言（render 41 → 42） |
 
-### 11.6 待人工验收（剩余步骤）
+### 11.6 验收追加结果（macOS）
+
+| 编号 | 内容 | 结果 | 证据要点 |
+| --- | --- | --- | --- |
+| M3 | 中止 + 队列退回 | ✅ PASS | 点「中止」后两条排队文本都回到输入框、队列条清空、状态行回「空闲」、之后仍能继续对话（D9 顺序修正生效） |
+| M4 | 流式期间发送（steer / followUp） | ✅ PASS | 无 "Agent is already processing"；队列条两条标记正确；输入框按回车即清空 |
+| M5 | 队列非空时 `agent_end` 后仍禁用输入 | ✅ PASS | 队列条非空期间状态行一直是「生成中…」 |
+| — | pi 的 dequeue（"edit all queued messages"） | ✅ PASS | 点「取回编辑」后两条按 `steering` 在前、空行分隔回到输入框（对齐 `interactive-mode.js`） |
+| M6 | 切走再切回 | ✅ PASS | 历史原样；Output **没有**新增 `[webview] ready` → `retainContextWhenHidden` 生效 |
+| M6b | 强制重建后再接上流 | ⏳ 未测到 | 用「右键 Hide」并未销毁页面（Output 仍只有一行 `ready`），所以"重建后能否接上流"这次**没被覆盖**。改用 `Developer: Reload Webviews` 强制重建 |
+| — | 空闲态 | ✅ PASS | 一切跑完后状态行显示「空闲」，未出现卡在"生成中"（防御性修复已提交） |
+
+### 11.7 待人工验收（剩余步骤）
 
 自动化覆盖不到的是**真实 webview**：CSP 是否真的放行样式、`retainContextWhenHidden` 在视图上是否生效、
 受限机的 Chromium 版本差异。这些只能靠 §6.2 的 M0–M10 与 §6.3 的 W0–W3。
