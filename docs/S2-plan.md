@@ -891,6 +891,8 @@ VERDICT: **NON_BLOCKING**。评审者对本轮的判断是"剩下的是收尾级
 | — | 「右键 Hide」是否销毁页面 | 记录 | **不会**：`retainContextWhenHidden` 生效，Output 始终只有一行 `ready`。所以**别再用 Hide 来测重建**，要用 `Developer: Reload Webviews` |
 | — | 空闲态 | ✅ PASS | 一切跑完后状态行显示「空闲」，未出现卡在"生成中"（防御性修复已提交） |
 
+| M7 | **XSS 三条载荷** | ✅ PASS | 三个载荷分别粘进输入框发送：**没有任何 alert/对话框**；`<img src=x onerror=alert(1)>` 与 `<script>alert(1)</script>` **以文字显示**（用户气泡与模型复述的代码块两条渲染路径都是文字）；`[x](javascript:alert(1))` 只显示一个**不可点的 `x`**。→ 渲染层的消毒（HTML 当纯文本 + scheme 白名单）在真实 webview 里确认生效 |
+
 ### 11.7 待人工验收（剩余步骤）
 
 自动化覆盖不到的是**真实 webview**：CSP 是否真的放行样式、`retainContextWhenHidden` 在视图上是否生效、
