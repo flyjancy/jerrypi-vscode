@@ -47,6 +47,9 @@ jobs:
       - name: Unit checks (serialize + url policy)
         run: npm run check:protocol
 
+      - name: Render security regression (XSS corpus)
+        run: npm run check:render
+
       - name: Clean build + package (A5b, A6)
         run: |
           rm -rf dist pi-runtime *.vsix

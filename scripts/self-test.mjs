@@ -23,6 +23,7 @@ const VERIFY_SCRIPT = path.join(SCRIPT_DIR, "verify-isolated-runtime.mjs");
 const FIXTURE_PATH = path.join(REPO_ROOT, "test-fixtures", "ext-smoke", "index.ts");
 const RESOURCES_TS = path.join(REPO_ROOT, "src", "pi", "resources.ts");
 const PROTOCOL_CHECK = path.join(SCRIPT_DIR, "protocol-check.mjs");
+const RENDER_CHECK = path.join(SCRIPT_DIR, "render-xss-check.mjs");
 const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 
 const TOTAL = 6;
@@ -176,15 +177,22 @@ function extractStringArray(source, exportName) {
   return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
 }
 
-function testProtocolChecks() {
-  // S2 的纯函数层（serialize 的 id 规则、urlPolicy 的白名单）单独由脚本检查，
-  // 这里只保证它**真的会被跑**——漂移的检查脚本等于没有检查。
-  const result = spawnSync(process.execPath, [PROTOCOL_CHECK], { cwd: REPO_ROOT, encoding: "utf8" });
-  const output = `${result.stdout}${result.stderr}`.trim();
-  if (result.status !== 0) {
-    fail(6, "protocol checks pass", output.split("\n").slice(-3).join(" | "));
+function testUnitChecks() {
+  // S2 的纯函数层（serialize 的 id 规则、urlPolicy 的白名单、渲染安全）由单独脚本检查，
+  // 这里只保证它们**真的会被跑**——漂移的检查脚本等于没有检查。
+  const summaries = [];
+  for (const [name, script] of [
+    ["protocol", PROTOCOL_CHECK],
+    ["render", RENDER_CHECK],
+  ]) {
+    const result = spawnSync(process.execPath, [script], { cwd: REPO_ROOT, encoding: "utf8" });
+    const output = `${result.stdout}${result.stderr}`.trim();
+    if (result.status !== 0) {
+      fail(6, `${name} checks pass`, output.split("\n").slice(-3).join(" | "));
+    }
+    summaries.push(output.split("\n").slice(-1)[0]);
   }
-  pass(6, "protocol checks pass", output.split("\n").slice(-1)[0]);
+  pass(6, "protocol and render checks pass", summaries.join(" | "));
 }
 
 async function main() {
@@ -194,7 +202,7 @@ async function main() {
   testMissingDependencyFailsVerification();
   testIdempotentSync();
   await testResourceListDrift();
-  testProtocolChecks();
+  testUnitChecks();
   console.log(`SELF-TEST OK (${passed}/${TOTAL})`);
 }
 
