@@ -36,6 +36,21 @@
         "command": "jerrypi.focusChat",
         "title": "Focus Chat",
         "category": "Pi"
+      },
+      {
+        "command": "jerrypi.runSelfTest",
+        "title": "Run Self-Test",
+        "category": "Pi"
+      },
+      {
+        "command": "jerrypi.setApiKey",
+        "title": "Set API Key",
+        "category": "Pi"
+      },
+      {
+        "command": "jerrypi.openSettingsFile",
+        "title": "Open Settings File",
+        "category": "Pi"
       }
     ]
   },
