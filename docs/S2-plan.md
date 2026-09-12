@@ -913,7 +913,7 @@ VERDICT: **NON_BLOCKING**。评审者对本轮的判断是"剩下的是收尾级
 
 | 编号 | 项目 | 结果 | 证据 |
 | --- | --- | --- | --- |
-| W0 | `Pi: Run Self-Test`（**必须先过**） | ✅ **GATE PASS 11/11** | 0.1.4 / win32 / node=24.18.1 / electron=42.10.0 / vscode=1.137.0；`已配置 provider=[deepseek, openai]`；T5a `shell=C:\Program Files\Git\bin\bash.exe`；T5b `abortBash 后 71ms 返回`；T5c `标记后 2068ms 结束`；T6 `patch 287 字符；wrappedWrite 捕获 toolCallId`；T7/T8/T9 全过。**证明 `model-choice.ts` 的提取没有破坏受限机路径**（`S2-CL-P1` 解除） |
+| W0 | `Pi: Run Self-Test`（**必须先过**） | ✅ **GATE PASS**（11 项全 PASS；10 项计入判定，T5c 为 advisory） | 0.1.4 / win32 / node=24.18.1 / electron=42.10.0 / vscode=1.137.0；`已配置 provider=[deepseek, openai]`；T5a `shell=C:\Program Files\Git\bin\bash.exe`；T5b `abortBash 后 71ms 返回`；T5c `标记后 2068ms 结束`；T6 `patch 287 字符；wrappedWrite 捕获 toolCallId`；T7/T8/T9 全过。**证明 `model-choice.ts` 的提取没有破坏受限机路径**（`S2-CL-P1` 解除） |
 | W1 | 面板基础（M0+M1+M2） | ✅ PASS | 状态行 `空闲`；**逐字流式**；多轮上下文正确（第三轮复述自己的第一句）；python 代码块正常；Output **无 `[agent] error`**，恰好 3 组 `[agent] start/end` 对应 3 轮提问 |
 | W2 | XSS（M7） | ✅ PASS | 三条载荷逐条发送：**无任何对话框**；①② 在用户气泡里以**尖括号原文**显示；③ 在气泡里只有 `x`，**白字不是蓝链**（`javascript:` 已降级为纯文本）。额外覆盖了一条 Mac 上没走到的路径：模型把 ① 复述在**行内代码**里（`<img src=x onerror=alert(1)>`）——**行内 code 的转义同样是安全的** |
 | W3 | 排队（M4/M5） | ✅ PASS | 散文流式中发「转向：结尾请加上"完"这个字」（Enter）与「追加：另外标题改为小镇」（按钮）：队列条显示 **`待处理 2 条`**，两条**标签不同**（琥珀色「转向」/ 蓝色「追加」）；第一轮写完时状态行**没有提前变回空闲**；最终两条要求都生效；截图里也确认了 `取回编辑` 按钮、两行提示文案、三个按钮**横排未被挤压**（S2 期间修掉的那三个 flex 挤压回归点，在 Windows 上也稳定） |
@@ -939,7 +939,7 @@ SHA-256 `90a419e761caa57af49c8fdd0af393217127049f32c102265f39280a8d21a7d6`。
 
 **人工验收 16/16 全绿，双平台。**
 
-Mac（11 项，0.1.4 源码树，F5 运行）：
+Mac（12 项：M0–M10 与 M6b，0.1.4 源码树，F5 运行）：
 
 | 项 | 覆盖的计划条目 |
 | --- | --- |
@@ -959,7 +959,7 @@ Mac（11 项，0.1.4 源码树，F5 运行）：
 
 | 项 | 结果 |
 | --- | --- |
-| W0 | `GATE PASS` 11/11 —— 证明 `model-choice.ts` 的提取没有破坏 S1 已验收的受限机路径（`S2-CL-P1`） |
+| W0 | `GATE PASS`（11 项全 PASS，10 项计入判定）—— 证明 `model-choice.ts` 的提取没有破坏 S1 已验收的受限机路径（`S2-CL-P1`） |
 | W1 | 面板基础：流式 / markdown / 多轮上下文 / 无 `[agent] error` |
 | W2 | XSS 三载荷；**额外覆盖了行内代码这条 Mac 上没走到的转义路径** |
 | W3 | 队列：2 条不同标签、状态行不提前解除；三个 flex 挤压回归点在 Windows 上也稳定 |

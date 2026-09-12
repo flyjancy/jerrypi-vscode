@@ -571,7 +571,7 @@ GATE BLOCKED T3,T6
 
 ### 11.4 B 系列结果：macOS 上 GATE PASS（2026-09-12）
 
-从**已安装的 `.vsix`**（不是 F5）跑 `Pi: Run Self-Test`，**11/11 PASS，`GATE PASS`**：
+从**已安装的 `.vsix`**（不是 F5）跑 `Pi: Run Self-Test`，**`GATE PASS`**（11 项全部 PASS；其中 **10 项计入闸门判定**，T5c 是 advisory —— 它的 FAIL/SKIP 不影响 GATE，见 `src/pi/selftest.ts` 的 `REQUIRED_ITEMS`）：
 
 ```
 flyjancy.jerrypi 0.1.0 selftest-v1 darwin node=24.18.1
@@ -605,7 +605,7 @@ GATE PASS（共 11 项：11 PASS / 0 FAIL / 0 SKIP）
 ### 11.5 首次发布（2026-09-12）
 
 - **方式**：Marketplace 网页手动上传（**未使用 PAT / Azure DevOps**，因此也不需要信用卡验证）。
-- **版本**：`0.1.0`（`0.1.0` 从未发布过，且手里正好有一份已在 Mac 上跑通 11/11 的产物）。
+- **版本**：`0.1.0`（`0.1.0` 从未发布过，且手里正好有一份已在 Mac 上跑通闸门的产物）。
 - **同一文件校验**：从 Marketplace 下载回来的 `.vsix` 与本地产物 **SHA-256 完全一致**
   `baa84e42f1718b3a8ade5aef7262eeccb92c0d9b3176f7c2029e947d4a46efe2`（5,969,170 字节），
   包内 `extension/dist/extension.js` 也逐字节一致。

@@ -17,7 +17,7 @@
 
 ## 中文
 
-> 🚧 **状态**：实施计划已定稿（见 [`docs/PLAN.md`](docs/PLAN.md)），代码正在开发中，**尚未发布到 VS Code Marketplace**。本 README 描述的是目标形态。
+> 🚧 **状态**：S0–S2 已实现，并在 macOS 与那台受限 Windows 机上完成共 16 项人工验收（侧边栏聊天面板可用）。目前只发布了**预发布版**；下文标注「计划中」的能力尚未实现。
 
 `jerrypi` 是一个 VS Code 扩展，把 [`@earendil-works/pi-coding-agent`](https://github.com/earendil-works/pi) 的 coding agent 能力装进侧边栏聊天面板。它面向一种受限环境：Windows 机器、**没有安装 Node.js、也不允许运行下载的可执行文件**，只能通过 Marketplace 安装扩展。
 
@@ -67,7 +67,7 @@
 
 | 设置 | 取值 | 说明 |
 | --- | --- | --- |
-| `jerrypi.approvalMode` | `off`（默认）/ `mutating` / `all` | 工具调用是否需要确认 |
+| `jerrypi.approvalMode` | `off`（默认）/ `mutating` / `all` | 工具调用是否需要确认。**尚未生效（S8）**：现在设置它没有任何效果，工具调用一律直接执行 |
 | `jerrypi.proxy` | 代理 URL（可选） | 显式代理；**启用时会替换进程级 `globalThis.fetch`**，详见已知限制 |
 | `jerrypi.agentDir` | 路径（默认留空 = `~/.pi/agent`） | pi 配置目录 |
 
@@ -111,12 +111,14 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 
 **发布一个新版本**（目前的流程是手动上传）：
 
-1. 改 `package.json` 的 `version`，并在 `CHANGELOG.md` **顶部**为这个版本号写一段
-   —— VS Code 扩展详情页的 Changelog 标签页直接读这个文件；
+1. 改 `package.json` 的 `version`（预发布用 0.1.x 递增；第一个正式版从 0.2.0 起。Marketplace 不允许覆盖已发布版本，版本号必须是纯三段数字）；
 2. `npm run typecheck && npm run self-test && npm run check:controller`；
 3. `npm run package`，再 `npm run check-vsix -- jerrypi-<版本>.vsix`；
 4. 到 https://marketplace.visualstudio.com/manage 手动上传，**保持"预发布"勾选**；
-5. 上传完成后从市场下载回来比对字节数与 SHA-256，确认与本地构建一致。
+5. 上传完成后从市场下载回来比对字节数与 SHA-256，确认与本地构建一致；
+6. 给**构建该产物的提交**打一个注解 tag：
+   `git tag -a v<版本> -m "jerrypi <版本>；产物 <大小> 字节，SHA-256 <指纹>"`，再 `git push --tags`。
+   tag 只在第 5 步核对通过后才打 —— 这样每个 tag 都对应一份**确实发布出去**的产物。
 
 装好扩展后，用 `Pi: Run Self-Test` 跑可行性闸门（T1–T9，结果写在 `jerrypi` Output 频道）：它会验证 pi 运行时能否在扩展宿主里真实加载、扩展生命周期、真实模型流式对话、子进程与中止、文件读写编辑、会话持久化与替换、图片 worker 往返。**跑之前先用 `Pi: Set API Key` 配一把 provider key**（默认 DeepSeek），否则 T4/T6/T7/T9 会以 `E_NO_CREDENTIALS` 失败。
 
@@ -147,14 +149,15 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 
 ### 已知限制
 
-- **agent 默认全权限执行**：`bash` 可执行任意命令、读写任意路径，与 pi CLI 行为一致。请在受信任的工作区使用，必要时开启 `jerrypi.approvalMode`。
+- **工具调用没有任何确认环节**：`bash` / `write` / `edit` 一律**直接执行**，面板不会弹确认，`jerrypi.approvalMode` 开关在 S8 之前**写了也没用**。因此 agent 能执行任意命令、读写任意路径，与 pi CLI 的默认行为一致 —— 请在受信任的目录里使用。
+- **没打开工作区时，会话的 cwd 是用户主目录**：`bash` 与文件工具会以 `~`（Windows 上是 `C:\Users\<你>`）为工作目录运行，Output 里会写一行提示。**请先打开一个工作区**再用面板，否则模型的操作范围不受任何目录约束。
 - **无 Node 的机器上不支持 `npm:` 包源**，也不支持带 `package.json` 的 git 包源（二者都需要 `npm`）；本地路径包源可用。
 - **Bedrock SigV4a** 需要额外的 `@aws-sdk/signature-v4-crt` 包，本扩展不带，相关场景会明确报错。
 - **`jerrypi.proxy` 是进程级副作用**：启用时会包装 `globalThis.fetch`，影响同进程内的其他扩展；默认关闭，关闭或停用时恢复。
 - **写入历史提示**：`edit` 的 diff 会随会话持久化；`write` 的前后快照只存在于当前进程内，重启 VS Code 后不再显示。
 - **会话落盘条件**（pi 行为）：只有完成过至少一轮 assistant 回复的会话才会写入磁盘。
 - **项目级设置默认不被信任**：pi CLI 会解析信任并询问用户，而 jerrypi 固定以 `projectTrusted: false` 初始化会话，因此工作区里的 `.pi/settings.json`、`SYSTEM.md` 等项目级资源不会被加载，也**不会有任何提示**。这是刻意的安全默认值（项目级设置能改 `shellPath` 与默认工具），信任流程待 S6 补上；在此之前如需使用项目级配置，请改用全局 `settings.json`。
-- **远程图片不加载**：markdown 里的 `![](https://…)` 会被降级成 alt 文字。放行远程图片等于让模型可控的 URL 变成一条出网信道（一张 1×1 像素就能把内容编码进 query 发出去），因此**只有 `data:image/...` 会被渲染**。
+- **远程图片不加载**：markdown 里的 `![](https://…)` 会被降级成 alt 文字。放行远程图片等于让模型可控的 URL 变成一条出网信道（一张 1×1 像素就能把内容编码进 query 发出去），因此消息里的图片**只允许 `data:image/...`**（CSP 里写的是 `img-src <扩展自身资源> data:`，另外放行扩展自己的图标），任何远程 URL 都不会发起请求。
 - **依赖 `ctx.ui.custom()` 的 pi 扩展在面板里不可用**：那是终端 TUI 专有的全屏自定义渲染入口（需要真实的 TUI 实例），扩展宿主里无法实现。这类命令会**显示一条明确的错误**（而不是静默失败），其余功能不受影响。
 - **窗口重载（`Reload Window`）会开始新会话**：历史保存在 `~/.pi/agent/sessions/` 里没有丢，但 S2 还没有"恢复最近会话"的入口（S5 补）。面板被单独重载（`Developer: Reload Webviews`）则会完整重放当前会话，**包括正在流式接收的那一条**。
 - **队列只能整体取回**：pi 只提供 `clearQueue()`，没有按条移除/编辑的 API，所以「取回编辑」是全部取回。
@@ -177,7 +180,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 
 ## English
 
-> 🚧 **Status**: steps S0–S2 are implemented and accepted on macOS (chat panel); the extension is published only as a pre-release on the VS Code Marketplace. Sections marked "Planned" below are not implemented yet.
+> 🚧 **Status**: steps S0–S2 are implemented, and all 16 manual acceptance checks passed on macOS and on the constrained Windows machine (the sidebar chat panel is usable). Only **pre-release** versions have been published; anything marked "Planned" below is not implemented yet.
 
 `jerrypi` is a VS Code extension that brings the [`@earendil-works/pi-coding-agent`](https://github.com/earendil-works/pi) coding agent into a sidebar chat panel. It targets a constrained environment: a Windows machine with **no Node.js installed and no permission to run downloaded executables**, where extensions can only be installed from the Marketplace.
 
@@ -224,7 +227,7 @@ The extension only adds three VS Code settings; everything else follows pi's own
 
 | Setting | Values | Description |
 | --- | --- | --- |
-| `jerrypi.approvalMode` | `off` (default) / `mutating` / `all` | Whether tool calls require confirmation |
+| `jerrypi.approvalMode` | `off` (default) / `mutating` / `all` | Whether tool calls require confirmation. **Not effective yet (S8)**: setting it does nothing today, tool calls always run immediately |
 | `jerrypi.proxy` | proxy URL (optional) | Explicit proxy; **wraps the process-wide `globalThis.fetch`** when enabled |
 | `jerrypi.agentDir` | path (empty = `~/.pi/agent`) | The pi config directory |
 
@@ -267,12 +270,14 @@ Common scripts:
 
 **Releasing a new version** (currently a manual upload):
 
-1. Bump `version` in `package.json` and add a section for that version at the **top** of
-   `CHANGELOG.md` — VS Code's extension page reads it for the Changelog tab;
+1. Bump `version` in `package.json` (pre-releases increment 0.1.x; the first stable release starts at 0.2.0. The Marketplace never allows overwriting a published version, and the version must be plain three-part numeric);
 2. `npm run typecheck && npm run self-test && npm run check:controller`;
 3. `npm run package`, then `npm run check-vsix -- jerrypi-<version>.vsix`;
 4. Upload manually at https://marketplace.visualstudio.com/manage, **keeping the pre-release box ticked**;
-5. After the upload, download it back from the Marketplace and compare size and SHA-256 with the local build.
+5. After the upload, download it back from the Marketplace and compare size and SHA-256 with the local build;
+6. Tag **the commit that produced that artifact**:
+   `git tag -a v<version> -m "jerrypi <version>; artifact <size> bytes, SHA-256 <digest>"`, then `git push --tags`.
+   Only tag after step 5 checks out, so that every tag corresponds to an artifact that was **actually published**.
 
 Once installed, run the feasibility gate with `Pi: Run Self-Test` (T1–T9, results go to the `jerrypi` output channel): it checks that the pi runtime really loads inside the extension host, extension lifecycle, a real streaming model call, subprocesses and aborts, file read/write/edit, session persistence and replacement, and the image worker round-trip. **Configure a provider key with `Pi: Set API Key` first** (DeepSeek by default), otherwise T4/T6/T7/T9 fail with `E_NO_CREDENTIALS`.
 
@@ -295,14 +300,15 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full notices and lice
 
 ### Known limitations
 
-- **The agent runs with full permissions by default** — `bash` can run arbitrary commands and read/write arbitrary paths, identical to the pi CLI. Use it in trusted workspaces and enable `jerrypi.approvalMode` when needed.
+- **Tool calls have no confirmation step**: `bash` / `write` / `edit` run **immediately** and the panel never asks. `jerrypi.approvalMode` does nothing before S8. The agent can therefore run arbitrary commands and read/write arbitrary paths, matching the pi CLI default — use it in a directory you trust.
+- **With no workspace open, the session cwd is your home directory**: `bash` and the file tools then use `~` (on Windows `C:\Users\<you>`) as the working directory, and the output channel says so. **Open a workspace first**, otherwise nothing constrains where the agent operates.
 - **`npm:` and git package sources are unavailable on machines without Node/npm**; local-path sources work.
 - **Bedrock SigV4a** requires an extra `@aws-sdk/signature-v4-crt` package that is not bundled; affected setups fail with an explicit error.
 - **`jerrypi.proxy` is process-wide**: enabling it wraps `globalThis.fetch` for every extension in the host process. It is off by default and restored on disable/deactivate.
 - **Write history**: `edit` diffs are persisted with the session, but `write` before/after snapshots live only for the current process and disappear after a VS Code restart.
 - **Session persistence** (pi behavior): a session is written to disk only after at least one assistant reply.
 - **Project-level settings are not trusted by default**: the pi CLI resolves trust and asks the user, whereas jerrypi always initialises sessions with `projectTrusted: false`. Project-scoped resources such as `.pi/settings.json` and `SYSTEM.md` are therefore not loaded, and **nothing tells you so**. This is a deliberate safe default (project settings can override `shellPath` and the default tool set); the trust flow lands in S6. Until then, put such configuration in the global `settings.json`.
-- **Remote images are not loaded**: a markdown `![](https://…)` is downgraded to its alt text. Allowing remote images would turn a model-controlled URL into an outbound channel (a 1×1 pixel can encode content in its query string), so **only `data:image/...` is rendered**.
+- **Remote images are not loaded**: a markdown `![](https://…)` is downgraded to its alt text. Allowing remote images would turn a model-controlled URL into an outbound channel (a 1×1 pixel can encode content in its query string), so inside messages **only `data:image/...` is allowed** (the CSP reads `img-src <extension's own resources> data:` and also allows the extension's own icons); no remote URL is ever fetched.
 - **pi extensions that rely on `ctx.ui.custom()` do not work in the panel**: that API renders a full-screen TUI component and needs a real TUI instance, which an extension host cannot provide. Such commands show an **explicit error** (rather than failing silently); everything else about the extension keeps working.
 - **Reloading the window starts a new session**: history is still on disk under `~/.pi/agent/sessions/`, but S2 has no "resume recent session" entry point yet (S5 adds it). Reloading only the webview (`Developer: Reload Webviews`) replays the whole session, **including the message currently streaming**.
 - **The queue can only be emptied as a whole**: pi exposes `clearQueue()` and nothing per-item, so "Edit queued" returns everything.
