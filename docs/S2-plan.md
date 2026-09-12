@@ -909,7 +909,22 @@ VERDICT: **NON_BLOCKING**。评审者对本轮的判断是"剩下的是收尾级
    右键 Hide 因 `retainContextWhenHidden` 不会销毁页面。
 3. **窗口重载（Reload Window）会开始新会话**（历史仍在磁盘上，恢复入口在 S5）。
 
-### 11.8 待人工验收（受限 Windows 机）
+### 11.8 受限 Windows 机验收（0.1.4）
+
+| 编号 | 项目 | 结果 | 证据 |
+| --- | --- | --- | --- |
+| W0 | `Pi: Run Self-Test`（**必须先过**） | ✅ **GATE PASS 11/11** | 0.1.4 / win32 / node=24.18.1 / electron=42.10.0 / vscode=1.137.0；`已配置 provider=[deepseek, openai]`；T5a `shell=C:\Program Files\Git\bin\bash.exe`；T5b `abortBash 后 71ms 返回`；T5c `标记后 2068ms 结束`；T6 `patch 287 字符；wrappedWrite 捕获 toolCallId`；T7/T8/T9 全过。**证明 `model-choice.ts` 的提取没有破坏受限机路径**（`S2-CL-P1` 解除） |
+| W1 | 面板基础（M0+M1+M2） | ⏳ | |
+| W2 | XSS（M7） | ⏳ | |
+| W3 | 排队（M4/M5） | ⏳ | |
+
+**W0 附带确认**：面板的 `[controller]` 行说明 Windows 那台 pi 设置里**没有**默认模型
+（`savedProvider`/`savedModel` 均为 undefined），所以走了兜底分支，与闸门一样落到
+`deepseek/deepseek-v4-flash`（`: 11.8` 之前 S1 那个 `openai/gpt-5.5` 陷阱被正确绕开）。
+用户在那台机器上从未在 pi 里选过模型——等 S4 的面板选择器做好，选一次之后面板就听用户的
+（`alignPanelModel` 会读 `settingsManager` 的默认值）。
+
+### 11.9 后续其余步骤
 
 自动化覆盖不到的是**真实 webview**：CSP 是否真的放行样式、`retainContextWhenHidden` 在视图上是否生效、
 受限机的 Chromium 版本差异。这些只能靠 §6.2 的 M0–M10 与 §6.3 的 W0–W3。
