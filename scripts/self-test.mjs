@@ -24,6 +24,7 @@ const FIXTURE_PATH = path.join(REPO_ROOT, "test-fixtures", "ext-smoke", "index.t
 const RESOURCES_TS = path.join(REPO_ROOT, "src", "pi", "resources.ts");
 const PROTOCOL_CHECK = path.join(SCRIPT_DIR, "protocol-check.mjs");
 const RENDER_CHECK = path.join(SCRIPT_DIR, "render-xss-check.mjs");
+const TOOL_TEXT_CHECK = path.join(SCRIPT_DIR, "tool-text-check.mjs");
 const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 
 const TOTAL = 6;
@@ -184,6 +185,7 @@ function testUnitChecks() {
   for (const [name, script] of [
     ["protocol", PROTOCOL_CHECK],
     ["render", RENDER_CHECK],
+    ["tool-text", TOOL_TEXT_CHECK],
   ]) {
     const result = spawnSync(process.execPath, [script], { cwd: REPO_ROOT, encoding: "utf8" });
     const output = `${result.stdout}${result.stderr}`.trim();
@@ -192,7 +194,7 @@ function testUnitChecks() {
     }
     summaries.push(output.split("\n").slice(-1)[0]);
   }
-  pass(6, "protocol and render checks pass", summaries.join(" | "));
+  pass(6, "protocol, render and tool-text checks pass", summaries.join(" | "));
 }
 
 async function main() {
