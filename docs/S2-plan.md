@@ -897,7 +897,19 @@ VERDICT: **NON_BLOCKING**。评审者对本轮的判断是"剩下的是收尾级
 
 | M9 | 工具行（执行中占位 + 中途重开） | ✅ PASS | 发 `sleep 20`：1–2 秒内出现 `… bash … 运行中…`；**在 20 秒中途运行 `Developer: Reload Webviews`（Output 里 `[webview] ready` 正好落在 `[agent] start` 与 `[tool] bash end` 之间）→ 那一行仍在**；跑完后**就地变成 `✓ bash`，始终只有一行**；再重开一次仍是**一行最终形态**。→ **C1 家族第三处（`pendingToolCalls` 重放）确认生效** |
 
-### 11.7 待人工验收（剩余步骤）
+| M10 | 扩展命令不卡状态行 | ✅ PASS | 发 `/cost`（用户自己 pi 扩展里的真实命令）：Output **没有新增 `[agent] start`**（确认是扩展在本地执行、没有启动 agent run），且状态行**没有被卡在"生成中"**——这正是评审 N2 那条（扩展命令没有 `agent_settled`，必须靠 `prompt()` settle 后与 `isIdle` 对账）。该命令内部调用了 `ctx.ui.custom()`，因此面板显示一条明确的错误（见下） |
+
+### 11.7 从验收里得到的新事实（已写进 README）
+
+1. **依赖 `ctx.ui.custom()` 的 pi 扩展在面板里不可用**：`/cost` 实测报
+   `jerrypi: 面板不支持扩展自定义 UI（这是终端 TUI 专有的渲染入口）`，
+   经 `onError` 显示在面板与 Output。这是**刻意**的（PLAN 5.3：明确 reject，而不是静默 resolve 让调用方以为渲染成功），
+   已写入 README 已知限制。pi 自己的 rpc 模式对同一 API 是静默 no-op —— 我们选择"说出来"。
+2. **`Developer: Reload Webviews` 是唯一能强制重建面板而不重启扩展的办法**；
+   右键 Hide 因 `retainContextWhenHidden` 不会销毁页面。
+3. **窗口重载（Reload Window）会开始新会话**（历史仍在磁盘上，恢复入口在 S5）。
+
+### 11.8 待人工验收（受限 Windows 机）
 
 自动化覆盖不到的是**真实 webview**：CSP 是否真的放行样式、`retainContextWhenHidden` 在视图上是否生效、
 受限机的 Chromium 版本差异。这些只能靠 §6.2 的 M0–M10 与 §6.3 的 W0–W3。
