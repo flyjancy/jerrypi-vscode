@@ -13,7 +13,7 @@
 //      唯一可观测证据（人工判断"DOM 有没有重建"是做不到的），M6/M6b 就靠它判定。
 import * as vscode from "vscode";
 import type { SessionHostController } from "../pi/controller";
-import type { ClientMessage, ServerMessage } from "../shared/protocol";
+import { PROTOCOL_VERSION, type ClientMessage, type ServerMessage } from "../shared/protocol";
 import { isExternalUrlAllowed } from "../shared/urlPolicy";
 import { buildWebviewHtml, createNonce } from "./webviewHtml";
 
@@ -84,13 +84,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case "requestState": {
           // 这一行是 M6/M6b 的判据：视图被重建时才应该多出一行。
           output.appendLine("[webview] ready");
-          if (message.type === "ready" && message.protocol !== PROTOCOL_EXPECTED) {
+          if (message.type === "ready" && message.protocol !== PROTOCOL_VERSION) {
             output.appendLine(
-              `[webview] 协议版本不一致：面板=${message.protocol} 扩展=${PROTOCOL_EXPECTED}（已按当前协议继续）`,
+              `[webview] 协议版本不一致：面板=${message.protocol} 扩展=${PROTOCOL_VERSION}（已按当前协议继续）`,
             );
           }
           await controller.ensure();
-          this.post({ type: "state", protocol: PROTOCOL_EXPECTED, ...controller.snapshot() });
+          this.post({ type: "state", protocol: PROTOCOL_VERSION, ...controller.snapshot() });
           return;
         }
         case "prompt": {
@@ -130,8 +130,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 }
-
-const PROTOCOL_EXPECTED = 1;
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

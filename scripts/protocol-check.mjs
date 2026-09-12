@@ -212,6 +212,9 @@ function checkWebviewElementIds() {
   const referenced = [...main.matchAll(/getElementById\("([^"]+)"\)/g)].map((match) => match[1]);
   const declared = new Set([...html.matchAll(/id="([^"]+)"/g)].map((match) => match[1]));
   check("main.ts 至少引用了一个元素", referenced.length > 0, String(referenced.length));
+  // 协议版本只能有一处来源：两边硬编码成两个数字是最容易漏的漂移。
+  const chatView = fs.readFileSync(path.join(REPO_ROOT, "src/host/chatView.ts"), "utf8");
+  check("chatView 不硬编码协议版本", !/protocol:\s*\d/.test(chatView));
   for (const id of referenced) {
     check(`HTML 里存在 id="${id}"`, declared.has(id), `已声明：${[...declared].join(", ")}`);
   }

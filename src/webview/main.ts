@@ -14,7 +14,7 @@ import {
   renderNotice,
   renderToolLine,
 } from "./render";
-import type { ChatItem, ClientMessage, ServerMessage } from "../shared/protocol";
+import { PROTOCOL_VERSION, type ChatItem, type ClientMessage, type ServerMessage } from "../shared/protocol";
 
 interface VsCodeApi {
   postMessage(message: ClientMessage): void;
@@ -258,4 +258,4 @@ transcript.addEventListener("click", (event: MouseEvent) => {
 });
 
 renderStatus();
-vscode.postMessage({ type: "ready", protocol: 1 });
+vscode.postMessage({ type: "ready", protocol: PROTOCOL_VERSION });
