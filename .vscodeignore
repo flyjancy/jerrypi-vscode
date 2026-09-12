@@ -14,7 +14,7 @@ src/**
 scripts/**
 docs/**
 esbuild.mjs
-tsconfig.json
+tsconfig*.json
 PLAN.md
 .gitignore
 *.vsix
