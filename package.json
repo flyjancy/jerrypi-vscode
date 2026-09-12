@@ -2,7 +2,7 @@
   "name": "jerrypi",
   "displayName": "jerrypi",
   "description": "Drive the Pi coding agent from a VS Code sidebar chat panel — no local Node.js required",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "flyjancy",
   "private": true,
   "license": "MIT",

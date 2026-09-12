@@ -36,6 +36,8 @@ export interface SessionHostOptions {
   uiContext: ExtensionUIContext;
   mode: RuntimeMode;
   sink: EventSink;
+  /** 显式指定的模型（自测用；不传则交给 pi 自己解析）。 */
+  model?: unknown;
   additionalExtensionPaths?: string[];
   writeProbe?: WriteProbe;
   /**
@@ -85,6 +87,9 @@ export async function createSessionHost(options: SessionHostOptions): Promise<Se
       sessionManager,
       sessionStartEvent,
       customTools,
+      // 显式传模型：不传时 pi 会按 settings/默认规则自己挑，
+      // 在"只有某几个 provider 配了 key"的机器上可能挑到一个用不了的模型。
+      ...(options.model !== undefined ? { model: options.model as never } : {}),
     });
 
     return { ...created, services, diagnostics: services.diagnostics };

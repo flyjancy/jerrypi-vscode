@@ -637,3 +637,38 @@ GATE PASS（共 11 项：11 PASS / 0 FAIL / 0 SKIP）
 4. 其余全过：T2（Windows 路径下的资源断言）、T3（jiti 在 Windows 上加载 TS 扩展）、T7、T8（worker + WASM）、T9。
 
 → 修正后重新打包为 **`0.1.1`** 并重新发布，用于受限机复跑。
+
+### 11.7 受限机二跑（0.1.1）与根因定位（2026-09-12）
+
+环境：**VS Code 1.137.0、Node 24.18.1、无 Node.js**。结果 **8 PASS / 2 FAIL / 1 SKIP → GATE BLOCKED T4,T6**。
+
+T5a 已 PASS（`shell=C:\Program Files\Git\bin\bash.exe`，`pwd=/tmp/…` 尾部命中），
+说明 11.6 的 Windows 修正生效，且**该机 Git Bash 装在 Program Files，不是 per-user 那个坑**。
+
+T4/T6 的诊断输出暴露了真正的根因：
+
+```
+T4 FAIL E_MODEL_NOT_COOPERATING
+    prompt 结束但没有任何 *_delta 事件；model=openai/gpt-5.5；
+    最后一条 assistant 文本：(assistant 消息没有文本内容)
+```
+
+**不是模型不配合，而是 pi 在该机上解析到的模型根本用不了**：
+
+- 该机 `~/.pi/agent` 是全新的（T3 命令列表只有 `[smoke, smoke-custom]`），没有 `defaultModel`；
+- 此时 pi 会按内置默认规则挑，结果挑中 `openai/gpt-5.5`；
+- 这个模型对应的凭据不可用 → 每次 prompt 都落一条 **`contentTypes=[]; stopReason=error`** 的 assistant 消息，
+  于是 T4 收不到任何 delta、T6 的文件永远不存在，看起来像"pi 在 Windows 上跑不起来"。
+
+本地用假 key 复现验证了这条链路（`Authentication Fails … 401`），并据此做了三项修正：
+
+1. **钳住模型**：`session.ts` 新增可选 `model` 参数，自测用
+   `ModelRuntime.getAvailable()`（凭据感知）按 `deepseek > anthropic > google > openrouter > openai`
+   的顺序挑第一个可用模型并显式传入；实测带 deepseek key 时选中 `deepseek/deepseek-v4-flash`，
+   不再依赖 pi 的默认规则；
+2. **打印诊断**：T1 报告"已配置的 provider"与"选用模型"，
+   T4/T5c/T6 失败时输出 `contentTypes / stopReason / errorMessage` 原文；
+3. **归类错误码**：provider 的 401/403/quota 类错误归为 `E_NO_CREDENTIALS`，
+   其余归为 `E_PROVIDER_ERROR`，不再一律 `E_MODEL_NOT_COOPERATING`。
+
+→ 修正后重新打包为 **`0.1.2`** 并重新发布。

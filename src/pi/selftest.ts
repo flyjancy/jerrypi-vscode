@@ -25,6 +25,7 @@ import type { EventSink, RuntimeMode } from "./bindings";
 import { readRuntimeVersion, runtimePath, type PiModule } from "./loader";
 import { REQUIRED_RESOURCE_DIRS, REQUIRED_RESOURCE_FILES } from "./resources";
 import type { ApiKeyStore } from "./runtime";
+import { getModelRuntime } from "./runtime";
 import { createSessionHost, type SessionHost } from "./session";
 import { createSelfTestUIContext } from "./selftest-ui";
 
@@ -53,6 +54,46 @@ interface ItemResult {
 const REQUIRED_ITEMS = ["T1", "T2", "T3", "T4", "T5a", "T5b", "T6", "T7", "T8", "T9"] as const;
 
 const MIN_NODE = [24, 15, 0] as const;
+
+/** 自测选模型时的优先级：先把用户最可能配的 deepseek 放前面。 */
+const PREFERRED_PROVIDERS = ["deepseek", "anthropic", "google", "openrouter", "openai"] as const;
+
+/**
+ * 选一个**真正可用**（有凭据）的模型。
+ *
+ * 为什么要显式选：不传 model 时 pi 会按 settings 与内置默认规则自己挑，
+ * 在一台只配了部分 provider 的机器上，它可能挑到一个用不了的模型
+ * （实测：某 Windows 机上它挑了 openai/gpt-5.5，而那里只有别的 provider 的 key），
+ * 于是每次 prompt 都落一条空内容的 assistant 消息，看起来像"pi 跑不起来"，
+ * 实际上是"模型用不了"。
+ */
+async function pickModel(runtime: { getAvailable(): Promise<readonly unknown[]> }): Promise<{
+  model: unknown;
+  detail: string;
+}> {
+  const available = (await runtime.getAvailable()) as Array<{
+    provider?: string;
+    id?: string;
+    name?: string;
+  }>;
+  if (available.length === 0) {
+    return { model: undefined, detail: "(没有任何可用模型：未配置任何 provider 的凭据)" };
+  }
+  for (const provider of PREFERRED_PROVIDERS) {
+    const match = available.find((model) => model.provider === provider);
+    if (match !== undefined) {
+      return {
+        model: match,
+        detail: `${match.provider}/${match.id ?? match.name}（首选 ${provider}；共 ${available.length} 个可用）`,
+      };
+    }
+  }
+  const first = available[0];
+  return {
+    model: first,
+    detail: `${first.provider}/${first.id ?? first.name}（无首选 provider，取第一个；共 ${available.length} 个可用）`,
+  };
+}
 
 /** 各项超时（毫秒）。 */
 const TIMEOUTS: Record<string, number> = {
@@ -104,25 +145,77 @@ function describeModel(session: { model?: unknown }): string {
   return `${model.provider ?? "?"}/${model.id ?? model.name ?? "?"}`;
 }
 
-/** 诊断用：最后一条 assistant 消息的文本（截断）。 */
-function lastAssistantText(session: { messages: unknown[] }): string {
-  const messages = session.messages as Array<{ role?: string; content?: unknown }>;
+/** 诊断用：最后一条 assistant 消息的关键信息（文本 / 停止原因 / 错误原文）。 */
+function describeLastAssistant(session: { messages: unknown[] }): string {
+  const messages = session.messages as Array<Record<string, unknown>>;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role !== "assistant") continue;
+    const parts: string[] = [];
     const content = message.content;
-    if (typeof content === "string") return content.slice(0, 240);
     if (Array.isArray(content)) {
       const text = content
         .filter((block) => (block as { type?: string })?.type === "text")
         .map((block) => String((block as { text?: string }).text ?? ""))
         .join(" ")
         .trim();
-      return text.length > 0 ? text.slice(0, 240) : "(assistant 消息没有文本内容)";
+      if (text.length > 0) parts.push(`text=${JSON.stringify(text.slice(0, 200))}`);
+      const kinds = [...new Set(content.map((block) => String((block as { type?: string })?.type)))];
+      parts.push(`contentTypes=[${kinds.join(",")}]`);
+    } else if (typeof content === "string") {
+      parts.push(`text=${JSON.stringify(content.slice(0, 200))}`);
     }
-    return "(assistant 消息结构未知)";
+    if (typeof message.stopReason === "string") parts.push(`stopReason=${message.stopReason}`);
+    if (typeof message.errorMessage === "string" && message.errorMessage.length > 0) {
+      parts.push(`errorMessage=${message.errorMessage.slice(0, 300)}`);
+    }
+    return parts.join("; ");
   }
   return "(没有 assistant 消息)";
+}
+
+/** 取最后一条 assistant 消息上的 provider 错误原文（如果有）。 */
+function lastAssistantError(session: { messages: unknown[] }): string | undefined {
+  const messages = session.messages as Array<Record<string, unknown>>;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant") continue;
+    return typeof message.errorMessage === "string" && message.errorMessage.length > 0
+      ? message.errorMessage
+      : undefined;
+  }
+  return undefined;
+}
+
+/** 把 provider 的错误文本归到可执行的错误码上（而不是笼统的 E_MODEL_NOT_COOPERATING）。 */
+function providerErrorCode(error: string): string {
+  return /401|403|unauthor|invalid.*api[ _-]?key|authentication|no credentials|not authenticated|insufficient|quota|balance/i.test(
+    error,
+  )
+    ? "E_NO_CREDENTIALS"
+    : "E_PROVIDER_ERROR";
+}
+
+/** 失败时优先报 provider 的错误码，否则报 fallbackCode。 */
+function failModelRelated(session: { messages: unknown[] }, fallbackCode: string, message: string): never {
+  const error = lastAssistantError(session);
+  if (error !== undefined) {
+    fail(providerErrorCode(error), `${message}；${describeLastAssistant(session)}`);
+  }
+  fail(fallbackCode, `${message}；${describeLastAssistant(session)}`);
+}
+function describeConfiguredProviders(runtime: {
+  getProviders(): readonly { id: string }[];
+  getProviderAuthStatus(providerId: string): unknown;
+}): string {
+  const configured = runtime
+    .getProviders()
+    .map((provider) => provider.id)
+    .filter((id) => {
+      const status = runtime.getProviderAuthStatus(id) as { configured?: boolean } | undefined;
+      return status?.configured === true;
+    });
+  return configured.length > 0 ? configured.join(", ") : "(无)";
 }
 
 function retryable(code: string): boolean {
@@ -274,7 +367,16 @@ class SelfTestRun {
       const ui: ExtensionUIContext = createSelfTestUIContext(this.sink);
       const mode: RuntimeMode = "rpc";
 
-      await this.item("T1", () => this.testRuntimeVersions());
+      // 先确定"用哪个模型"，因为 pi 自己的默认规则在一台只配了部分 provider 的
+      // 机器上可能选中一个用不了的模型（见 pickModel 注释）。
+      const modelRuntime = await getModelRuntime(pi, agentDir, this.options.keys);
+      const providerSummary = describeConfiguredProviders(modelRuntime);
+      const chosen = await pickModel(modelRuntime);
+      const modelDetail = chosen.detail;
+      this.sink.appendLine(`[selftest] 已配置的 provider: ${providerSummary}`);
+      this.sink.appendLine(`[selftest] 选用模型: ${modelDetail}`);
+
+      await this.item("T1", () => this.testRuntimeVersions(providerSummary, modelDetail));
       await this.item("T2", () => this.testRuntimeResources());
 
       // ---- R：T3 / T6 / T9 共用 ----
@@ -287,6 +389,7 @@ class SelfTestRun {
         mode,
         sink: this.sink,
         additionalExtensionPaths: [fixtureIndex],
+        model: chosen.model,
         writeProbe: {
           record: (toolCallId: string, absolutePath: string) => {
             appendFileSync(markerWrite, `${toolCallId}\t${absolutePath}\n`);
@@ -334,10 +437,10 @@ class SelfTestRun {
             unsubscribe();
           }
           if (deltas.size === 0) {
-            fail(
+            failModelRelated(
+              session,
               "E_MODEL_NOT_COOPERATING",
-              `prompt 结束但没有任何 *_delta 事件；model=${describeModel(session)}；` +
-                `最后一条 assistant 文本：${lastAssistantText(session)}`,
+              `prompt 结束但没有任何 *_delta 事件；model=${describeModel(session)}`,
             );
           }
           return `delta=[${[...deltas].sort().join(", ")}]；model=${describeModel(session)}`;
@@ -434,7 +537,7 @@ class SelfTestRun {
   // -------------------------------------------------------------------------
   // T1：运行时版本
   // -------------------------------------------------------------------------
-  private async testRuntimeVersions(): Promise<string> {
+  private async testRuntimeVersions(providerSummary: string, modelDetail: string): Promise<string> {
     const node = process.versions.node;
     const segments = node.split(".").map((part) => Number.parseInt(part, 10));
     for (let index = 0; index < MIN_NODE.length; index += 1) {
@@ -445,7 +548,8 @@ class SelfTestRun {
         fail("E_NODE_VERSION", `Node ${node} < ${MIN_NODE.join(".")}`);
       }
     }
-    return `node=${node} electron=${process.versions.electron ?? "-"} vscode=${this.options.vscodeVersion}`;
+    return `node=${node} electron=${process.versions.electron ?? "-"} vscode=${this.options.vscodeVersion}` +
+      `；已配置 provider=[${providerSummary}]；模型=${modelDetail}`;
   }
 
   // -------------------------------------------------------------------------
@@ -662,9 +766,13 @@ class SelfTestRun {
     }
 
     if (toolCallId === undefined) {
+      const error = lastAssistantError(session);
+      if (error !== undefined) {
+        fail(providerErrorCode(error), `模型未能发起 bash 调用；${describeLastAssistant(session)}`);
+      }
       throw new SelfTestSkip(
         "E_NO_TOOLCALL",
-        `60 秒内模型没有发起 bash 调用；model=${describeModel(session)}；最后一条 assistant 文本：${lastAssistantText(session)}`,
+        `60 秒内模型没有发起 bash 调用；model=${describeModel(session)}；${describeLastAssistant(session)}`,
       );
     }
     if (markerAt === undefined) {
@@ -701,9 +809,10 @@ class SelfTestRun {
       `Use the write tool to create the file ${target} with exactly this content: jerrypi-selftest. Do not use bash.`,
     );
     if (!existsSync(target)) {
-      fail(
+      failModelRelated(
+        session,
         "E_MODEL_NOT_COOPERATING",
-        `write 之后文件不存在；model=${describeModel(session)}；最后一条 assistant 文本：${lastAssistantText(session)}`,
+        `write 之后文件不存在；model=${describeModel(session)}`,
       );
     }
 
@@ -717,7 +826,7 @@ class SelfTestRun {
     if (content !== "jerrypi-selftest-edited") {
       fail(
         "E_MODEL_NOT_COOPERATING",
-        `文件内容是 ${JSON.stringify(content)}；model=${describeModel(session)}；最后一条 assistant 文本：${lastAssistantText(session)}`,
+        `文件内容是 ${JSON.stringify(content)}；model=${describeModel(session)}；${describeLastAssistant(session)}`,
       );
     }
 
