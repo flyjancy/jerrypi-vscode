@@ -307,7 +307,7 @@ function toolBodyOf(message: AnyMessage): { text?: string; textTruncated?: boole
 }
 
 /** toolResult 的 details → 展示用的标量（**绝不带** pi 的 `truncation.content`）。 */
-function toolMetaOf(details: unknown): {
+export function toolMetaOf(details: unknown): {
   truncation?: { truncatedBy: "lines" | "bytes"; totalLines: number; outputLines: number; maxBytes?: number };
   fullOutputPath?: string;
 } {

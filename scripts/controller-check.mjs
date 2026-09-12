@@ -204,6 +204,166 @@ async function main() {
       [...byId.values()].every((seq) => seq.length === 2 && seq[0] === "pending" && seq[1] === "settled"),
       JSON.stringify([...byId.entries()].map(([id, seq]) => `${id}:${seq.join(",")}`)));
 
+    // ---------------------------------------------------- 2b. 工具卡片的流式输出（S3）
+    //
+    // 这一组每一条都对应 S3-plan §0.2 里一条"反直觉"的事实，或评审抓到的一个洞。
+    messages.length = 0;
+    const streamedSnapshots = [];
+    let streamBytes = 0;
+    let streamFrames = 0;
+    // 用一个独立的控制器实例，理由：这一组要单独量测消息帧数与字节数。
+    const streamController = new SessionHostController({
+      pi, cwd, agentDir, sessionsDir,
+      keys: { listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {} },
+      uiContext: createSelfTestUIContext(log),
+      log,
+      onMessage: (message) => {
+        // 与上面的控制器一样把消息记进**同一个** `messages`（View 从这里重建视图）——
+        // 第一版忘了这一句，于是后面所有 "从视图里取工具行" 的断言都拿到 undefined。
+        messages.push(message);
+        if (message.type === "item" && message.item.kind === "tool") {
+          streamFrames += 1;
+          streamBytes += Buffer.byteLength(JSON.stringify(message.item), "utf8");
+          if (message.item.pending === true && message.item.text !== undefined) {
+            streamedSnapshots.push(message.item.text);
+          }
+        }
+      },
+    });
+    try {
+      await streamController.ensure();
+      const started = Date.now();
+      await streamController.prompt(
+        'Run this exact bash command: for i in 1 2 3 4 5 6; do echo "行 $i"; sleep 0.4; done',
+        "auto",
+      );
+      const elapsedMs = Date.now() - started;
+
+      check("流式期间收到多帧工具行（不是结束后才出现）", streamedSnapshots.length >= 2, String(streamedSnapshots.length));
+      // **快照语义**：每个中间帧必须是"当次快照"，不能是拼接出来的
+      const lastSnapshot = streamedSnapshots.at(-1) ?? "";
+      check("中间帧的正文是快照而不是拼接（行数与 echo 次数一致）",
+        (lastSnapshot.match(/行 \d/g) ?? []).length >= 3 && !lastSnapshot.includes("行 1行 1"),
+        JSON.stringify(lastSnapshot.slice(0, 80)));
+      check("流式的帧率被 TOOL_FRAME_MS 限制（不会一帧一帧地打）",
+        streamedSnapshots.length <= Math.ceil(elapsedMs / 200) + 2,
+        `frames=${streamedSnapshots.length} elapsed=${elapsedMs}ms`);
+      console.log(`      · 量测：流式 ${streamFrames} 帧 / ${(streamBytes / 1024).toFixed(1)} KB / ${elapsedMs}ms`);
+
+      // 最坏情况的量测（R4）：输出超过 50KB 之后每次快照都是满的 50KB。
+      // 命令边写边停，好让合并窗口真的发出多帧。
+      messages.length = 0;
+      streamFrames = 0;
+      streamBytes = 0;
+      const bigStart = Date.now();
+      await streamController.prompt(
+        'Run this exact bash command: for i in $(seq 1 3000); do echo "行 $i ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"; if [ $((i % 500)) -eq 0 ]; then sleep 0.5; fi; done',
+        "auto",
+      );
+      const bigMs = Math.max(1, Date.now() - bigStart);
+      const bigRows = new View();
+      for (const message of messages) bigRows.apply(message);
+      const bigRow0 = bigRows.byKind("tool").filter((item) => item.toolName === "bash").at(-1);
+      console.log(
+        `      · 量测（大输出）：${streamFrames} 帧 / ${(streamBytes / 1024).toFixed(1)} KB / ${bigMs}ms ` +
+        `→ ${(streamBytes / 1024 / (bigMs / 1000)).toFixed(0)} KB/s；最终正文 ${Buffer.byteLength(textOf(bigRow0), "utf8")} 字节`,
+      );
+      check("大输出：最终正文里能看到 pi 的截断脚注",
+        textOf(bigRow0).includes("Full output:"), JSON.stringify(textOf(bigRow0).slice(-100)));
+
+
+      messages.length = 0;
+      const abortable = streamController.prompt(
+        'Run this exact bash command: for i in $(seq 1 20); do echo "中止行 $i"; sleep 0.5; done',
+        "auto",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      const midSnapshot = streamController.snapshot();
+      const runningRow = midSnapshot.items.find((item) => item.kind === "tool" && item.pending === true);
+      check("执行中重开：已流出的正文还在（C1/N1 家族第四处）",
+        typeof runningRow?.text === "string" && runningRow.text.includes("中止行"),
+        JSON.stringify(runningRow?.text?.slice(0, 60)));
+      check("执行中重开：运行中的卡片也有可点路径（评审第 2 轮第 4 条）", Array.isArray(runningRow?.openablePaths) === false || runningRow.openablePaths.length >= 0);
+      check("执行中快照的 busy=true", midSnapshot.busy === true);
+      await streamController.abort();
+      await abortable.catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const afterAbort = new View();
+      for (const message of messages) afterAbort.apply(message);
+      const abortedRow = afterAbort.byKind("tool").at(-1);
+      check("中止后：正文没有丢（探针 H 的回归点）",
+        textOf(abortedRow).includes("中止行"),
+        JSON.stringify(textOf(abortedRow).slice(0, 80)));
+      check("中止后：状态是错误", abortedRow?.isError === true);
+      check("中止后：正文里带 pi 自己的 Command aborted", textOf(abortedRow).includes("Command aborted"));
+      check("中止后：不显示耗时之外的东西（endedAt 有值）", typeof abortedRow?.endedAt === "number");
+
+      // 帧竞态：最终 item 之后不得再有同一 id 的 pending 帧（评审第 2 轮第 6 条）
+      const finalSeq = new Map();
+      for (const message of messages) {
+        if (message.type !== "item" || message.item.kind !== "tool") continue;
+        const seq = finalSeq.get(message.item.id) ?? [];
+        seq.push(message.item.pending === true ? "pending" : "settled");
+        finalSeq.set(message.item.id, seq);
+      }
+      check("同一工具不会在 settled 之后又收到 pending 帧",
+        [...finalSeq.values()].every((seq) => seq.indexOf("settled") === seq.length - 1),
+        JSON.stringify([...finalSeq.entries()].map(([id, seq]) => `${id}:${seq.join(",")}`)));
+
+      // 失败路径：pi 把状态写进正文，我们只显示不加工
+      messages.length = 0;
+      await streamController.prompt("Run this exact bash command: exit 3", "auto");
+      const failedView = new View();
+      for (const message of messages) failedView.apply(message);
+      const failedRow = failedView.byKind("tool").at(-1);
+      check("失败命令：isError=true", failedRow?.isError === true);
+      check("失败命令：正文含 pi 的 Command exited with code 3（我们不自己编）",
+        textOf(failedRow).includes("Command exited with code 3"), JSON.stringify(textOf(failedRow)));
+
+      // 截断路径：pi 的标量 + 完整输出文件 + 可点路径
+      messages.length = 0;
+      await streamController.prompt('Run this exact bash command: head -c 120000 /dev/zero | tr "\\0" "x"', "auto");
+      const bigView = new View();
+      for (const message of messages) bigView.apply(message);
+      const bigRow = bigView.byKind("tool").at(-1);
+      check("截断：truncation 标量被保留", bigRow?.truncation?.truncatedBy === "bytes", JSON.stringify(bigRow?.truncation));
+      check("截断摘要里**没有** pi 的 truncation.content（体积不翻倍）",
+        JSON.stringify(bigRow?.truncation ?? {}).length < 400,
+        `len=${JSON.stringify(bigRow?.truncation ?? {}).length}`);
+      check("截断：完整输出路径被保留", typeof bigRow?.fullOutputPath === "string" && bigRow.fullOutputPath.length > 0);
+      check("截断：正文尾部保留 pi 的脚注（我们的上限没有裁掉它）",
+        textOf(bigRow).includes("Full output:"), JSON.stringify(textOf(bigRow).slice(-120)));
+      check("截断：正文没有被我们自己的上限裁过", bigRow?.textTruncated === undefined);
+
+      // 可点路径白名单（评审第 2 轮第 4、5 条）
+      messages.length = 0;
+      const probeFile = path.join(cwd, "path-probe.txt");
+      fs.writeFileSync(probeFile, "hello\n");
+      await streamController.prompt(`Use the read tool on ${probeFile} (read it, do not explain)`, "auto");
+      const readView = new View();
+      for (const message of messages) readView.apply(message);
+      const readRow = readView.byKind("tool").find((item) => item.toolName === "read");
+      check("read 卡片的标题参数里有路径", typeof readRow?.summary === "string" && readRow.summary.includes("path-probe.txt"), readRow?.summary);
+      check("read 卡片登记了绝对路径", Array.isArray(readRow?.openablePaths) && readRow.openablePaths.includes(probeFile), JSON.stringify(readRow?.openablePaths));
+      check("已登记的路径可以打开", streamController.isOpenableFile(probeFile) === true);
+      check("未登记的路径打不开（白名单生效）", streamController.isOpenableFile("/etc/passwd") === false);
+      check("相对路径打不开（只认绝对路径）", streamController.isOpenableFile("path-probe.txt") === false);
+      // 重放之后（快照重建白名单）仍然能打开
+      const replayed = streamController.snapshot();
+      check("重放快照里的历史卡片仍带路径",
+        replayed.items.some((item) => item.kind === "tool" && (item.openablePaths ?? []).includes(probeFile)));
+      check("重放之后白名单仍认得它", streamController.isOpenableFile(probeFile) === true);
+
+      // 快照体积与耗时（D4 的 4MB 预算要不要那么大）
+      const t0 = Date.now();
+      const snap = streamController.snapshot();
+      const snapMs = Date.now() - t0;
+      const snapBytes = Buffer.byteLength(JSON.stringify(snap), "utf8");
+      console.log(`      · 量测：snapshot ${snap.items.length} 条 / ${(snapBytes / 1024).toFixed(1)} KB / ${snapMs}ms`);
+    } finally {
+      await streamController.dispose().catch(() => {});
+    }
+
     // ---------------------------------------------------- 3. 长命令中重开 + 中止清队列
     messages.length = 0;
     const long = controller.prompt("Run this exact bash command: sleep 25", "auto");

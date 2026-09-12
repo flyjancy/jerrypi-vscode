@@ -14,7 +14,7 @@
 //   3. **空闲以 `agent_settled` 为准**，但 `agent_settled` 不是万能的：扩展命令由
 //      `prompt()` 内部直接执行、不启动 agent run，因此永远不会settle —— 必须在
 //      `prompt()` 返回后与 `session.isIdle` 对账一次（否则状态行永久卡在"生成中"）。
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type {
   AgentSession,
   AgentSessionEvent,
@@ -22,11 +22,21 @@ import type {
   ExtensionUIContext,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import type { ChatItem, ServerMessage } from "../shared/protocol";
+import { TOOL_FRAME_MS, type ChatItem, type ServerMessage } from "../shared/protocol";
+import { toolTextFromContent } from "../shared/toolText";
 import type { EventSink } from "./bindings";
 import type { PiModule } from "./loader";
 import { alignPanelModel } from "./model-choice";
-import { createToolCallIndex, indexToolCalls, serializeMessage, serializeMessages, summarizeArgs, type ToolCallIndex } from "./serialize";
+import {
+  createToolCallIndex,
+  indexToolCalls,
+  openablePathsOfToolCall,
+  serializeMessage,
+  serializeMessages,
+  summarizeArgs,
+  toolMetaOf,
+  type ToolCallIndex,
+} from "./serialize";
 import { createSessionHost, type SessionHost } from "./session";
 import { getModelRuntime, type ApiKeyStore } from "./runtime";
 
@@ -112,7 +122,36 @@ export class SessionHostController {
   /** 工具调用登记表：给 toolResult 补参数摘要（与重放共用同一套转写逻辑）。 */
   private readonly toolCalls: ToolCallIndex = createToolCallIndex();
   /** 已发出的工具行，用于"中止时把仍在执行的标记为已中止"。 */
-  private readonly toolItems = new Map<string, ChatItem>();
+  private readonly toolItems = new Map<string, ToolItem>();
+  /**
+   * 正在执行的工具（toolCallId）。
+   *
+   * 存在的唯一理由是**丢弃过期帧**：`tool_execution_end` 之后可能还有一帧排着队，
+   * 如果它落在最终 item 之后，就会用不带截断脚注的旧正文把最终正文覆盖回去
+   * （docs/S3-plan.md 评审第 2 轮第 6 条）。
+   */
+  private readonly runningTools = new Set<string>();
+  /**
+   * 每个工具**已经流出来的**正文快照。
+   *
+   * pi 不保存 partial 输出（消息里没有、`state.pendingToolCalls` 只有 id），
+   * 所以"面板中途重开时已经流出来的字还在吗"完全取决于这份缓存 —— C1/N1 家族的第四处。
+   */
+  private readonly partials = new Map<string, ToolPartial>();
+  /** 每个工具的起止时间（只在实时路径有；重放时没有就不显示耗时）。 */
+  private readonly toolTimes = new Map<string, { startedAt?: number; endedAt?: number }>();
+  /** 每个工具的待发帧（`TOOL_FRAME_MS` 合并）。 */
+  private readonly toolFrameTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** 每个工具上一次发帧的时间。 */
+  private readonly toolLastEmit = new Map<string, number>();
+  /**
+   * 可打开路径的白名单。
+   *
+   * 铸造点在 `serialize.ts`（实时与重放同一套逻辑），这里只登记；
+   * `snapshot()` 时**重建**而不是累加 —— 快照之后 webview 上的卡片就是这些，
+   * 于是"重开面板后历史卡片的路径仍可点"自然成立。
+   */
+  private openableFiles = new Set<string>();
 
   /** 在途的发送（乐观 busy 用：`isStreaming` 在 agent_start 之前还是 false）。 */
   private pendingSend = false;
@@ -306,15 +345,19 @@ export class SessionHostController {
       };
     }
 
-    const { items, truncated } = serializeMessages(session.messages);
+    const { items, truncated } = serializeMessages(session.messages, { cwd: this.options.cwd });
     const knownToolIds = new Set(
       items.filter((item) => item.kind === "tool").map((item) => (item as { id: string }).id),
     );
 
+    // 白名单重建（不是累加）：重放出来的卡片才是 webview 上真实存在的卡片。
+    this.openableFiles = new Set();
+    for (const item of items) this.registerOpenable(item);
+
     const streaming = session.state.streamingMessage;
     if (streaming !== undefined && streaming !== null) {
       const lastIndex = Math.max(0, session.messages.length - 1);
-      const partial = serializeMessage(streaming, lastIndex, this.toolCalls);
+      const partial = serializeMessage(streaming, lastIndex, this.toolCalls, { cwd: this.options.cwd });
       if (partial !== undefined && partial.kind === "assistant") {
         // **必须复用** activeAssistantId：重开后后续 delta 打的是这个 id，
         // 换一个 id 就等于把回复的后半截丢掉。
@@ -328,15 +371,25 @@ export class SessionHostController {
       const id = `tool-${toolCallId}`;
       if (knownToolIds.has(id)) continue;
       const known = this.toolCalls.get(toolCallId);
-      items.push({
-        kind: "tool",
-        id,
-        toolCallId,
-        toolName: known?.name ?? "tool",
-        summary: known?.argsText ?? "",
-        isError: false,
-        pending: true,
-      });
+      // 运行中的行也要带上**已经流出来的正文**（否则重开面板会看到它退回"运行中…"），
+      // 以及**可点路径**（否则重开后一个仍在执行的卡片，标题上的路径点不开）。
+      const paths = openablePathsOfToolCall(known?.args, this.options.cwd);
+      const row = this.applyPartial(
+        {
+          kind: "tool",
+          id,
+          toolCallId,
+          toolName: known?.name ?? "tool",
+          summary: known?.argsText ?? "",
+          isError: false,
+          pending: true,
+          ...(paths.length > 0 ? { openablePaths: paths } : {}),
+        },
+        this.partials.get(toolCallId),
+        this.toolTimes.get(toolCallId),
+      );
+      this.registerOpenable(row);
+      items.push(row);
     }
 
     const model = session.model;
@@ -384,8 +437,11 @@ export class SessionHostController {
       case "tool_execution_start":
         this.onToolExecutionStart(event as unknown as { toolCallId: string; toolName: string; args: unknown });
         return;
+      case "tool_execution_update":
+        this.onToolExecutionUpdate(event as unknown as ToolUpdateEvent);
+        return;
       case "tool_execution_end":
-        // 最终态由随后的 toolResult 的 message_end 用同一个 id upsert 出来。
+        this.onToolExecutionEnd(event as unknown as { toolCallId: string });
         return;
       case "queue_update":
         this.emit({ type: "queue", steering: [...event.steering], followUp: [...event.followUp] });
@@ -464,8 +520,16 @@ export class SessionHostController {
     const index = session.messages.length - 1;
     if (message.role === "assistant") indexToolCalls(raw as never, this.toolCalls);
 
-    const item = serializeMessage(raw, index, this.toolCalls);
+    const item = serializeMessage(raw, index, this.toolCalls, { cwd: this.options.cwd });
     if (item === undefined) return;
+
+    if (item.kind === "tool") {
+      const times = this.toolTimes.get(item.toolCallId);
+      if (times?.startedAt !== undefined) item.startedAt = times.startedAt;
+      if (times?.endedAt !== undefined) item.endedAt = times.endedAt;
+      this.registerOpenable(item);
+      this.cleanupTool(item.toolCallId);
+    }
 
     if (item.kind === "assistant" && this.activeAssistantId !== undefined) {
       // 收尾端复用同一个 id：否则 message_start 建的节点与这里的节点 id 不同，
@@ -480,7 +544,14 @@ export class SessionHostController {
     const toolCallId = event.toolCallId;
     const summary = summarizeArgs(event.args);
     this.toolCalls.set(toolCallId, { name: event.toolName, argsText: summary, args: event.args });
-    const item: ChatItem = {
+    const startedAt = Date.now();
+    this.runningTools.add(toolCallId);
+    this.toolTimes.set(toolCallId, { startedAt });
+    this.toolLastEmit.set(toolCallId, startedAt);
+
+    // 运行中的卡片也要有可点路径：`tool_execution_start` 手上就有 args。
+    const paths = openablePathsOfToolCall(event.args, this.options.cwd);
+    const item: ToolItem = {
       kind: "tool",
       id: `tool-${toolCallId}`,
       toolCallId,
@@ -488,27 +559,145 @@ export class SessionHostController {
       summary,
       isError: false,
       pending: true,
+      startedAt,
+      ...(paths.length > 0 ? { openablePaths: paths } : {}),
     };
+    this.registerOpenable(item);
     this.toolItems.set(toolCallId, item);
     this.emit({ type: "item", item });
   }
 
   /**
-   * 兜底：中止或异常路径下，某个工具调用的 toolResult 可能永远不来，
-   * 那样它会永远停在"运行中"。实测正常 abort 仍会发出 toolResult
-   * （agent-loop.js:316-320 / 354-360），所以这里是低频路径，但一旦触发就必须收口。
+   * 工具的流式输出。
+   *
+   * 三条容易写错的规矩（都在 S3-plan §0.2 里，且都有探针）：
+   *   1. 正文是**累积快照**，语义是整体替换，不是增量；
+   *   2. 第一次更新带的是 `content: []`（bash 的占位）→ **不能**用它把已有正文清空；
+   *   3. 超过 50KB 后快照会"换头"（保留最后 50KB），所以也不能假定内容只增不减。
+   */
+  private onToolExecutionUpdate(event: ToolUpdateEvent): void {
+    const toolCallId = event.toolCallId;
+    if (!this.runningTools.has(toolCallId)) return;
+    const partial = event.partialResult as { content?: unknown; details?: unknown } | undefined;
+    const text = partial === undefined ? "" : toolTextFromContent(partial.content);
+    const meta = toolMetaOf(partial?.details);
+    const previous = this.partials.get(toolCallId);
+    const kept = text === "" ? (previous?.text ?? "") : text;
+    this.partials.set(toolCallId, { text: kept, ...meta });
+    this.scheduleToolFrame(toolCallId);
+  }
+
+  /** 工具执行结束：停掉待发帧、记结束时间。最终态由随后的 toolResult 构建。 */
+  private onToolExecutionEnd(event: { toolCallId: string }): void {
+    const toolCallId = event.toolCallId;
+    const timer = this.toolFrameTimers.get(toolCallId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.toolFrameTimers.delete(toolCallId);
+    }
+    // 先移出 runningTools：即便上面那行没拦住，回调也会因为不在 runningTools 里而丢弃。
+    this.runningTools.delete(toolCallId);
+    const times = this.toolTimes.get(toolCallId);
+    if (times !== undefined) times.endedAt = Date.now();
+  }
+
+  /** 排一帧（同一工具最多一帧在途，间隔不小于 `TOOL_FRAME_MS`）。 */
+  private scheduleToolFrame(toolCallId: string): void {
+    if (this.toolFrameTimers.has(toolCallId)) return;
+    const last = this.toolLastEmit.get(toolCallId) ?? 0;
+    const wait = Math.max(0, TOOL_FRAME_MS - (Date.now() - last));
+    const timer = setTimeout(() => {
+      this.toolFrameTimers.delete(toolCallId);
+      this.flushToolFrame(toolCallId);
+    }, wait);
+    this.toolFrameTimers.set(toolCallId, timer);
+  }
+
+  private flushToolFrame(toolCallId: string): void {
+    // 过期帧：工具已经结束了，正文的最终态由 toolResult 决定，这一帧必须丢。
+    if (!this.runningTools.has(toolCallId)) return;
+    const base = this.toolItems.get(toolCallId);
+    if (base === undefined || base.kind !== "tool") return;
+    this.toolLastEmit.set(toolCallId, Date.now());
+    const item = this.applyPartial(base, this.partials.get(toolCallId), this.toolTimes.get(toolCallId));
+    this.toolItems.set(toolCallId, item);
+    this.registerOpenable(item);
+    this.emit({ type: "item", item });
+  }
+
+  /** 把"已流出来的正文 + 元信息 + 时间"贴到一条工具行上。 */
+  private applyPartial(
+    item: ToolItem,
+    partial: ToolPartial | undefined,
+    times: { startedAt?: number; endedAt?: number } | undefined,
+  ): ToolItem {
+    const next: ToolItem = { ...item };
+    if (partial?.text !== undefined && partial.text !== "") next.text = partial.text;
+    if (partial?.textTruncated === true) next.textTruncated = true;
+    if (partial?.truncation !== undefined) next.truncation = partial.truncation;
+    if (partial?.fullOutputPath !== undefined) next.fullOutputPath = partial.fullOutputPath;
+    if (times?.startedAt !== undefined) next.startedAt = times.startedAt;
+    if (times?.endedAt !== undefined) next.endedAt = times.endedAt;
+    return next;
+  }
+
+  /** 清掉一个工具的全部内存态（正文缓存、时间、待发帧、行）。 */
+  private cleanupTool(toolCallId: string): void {
+    this.runningTools.delete(toolCallId);
+    this.partials.delete(toolCallId);
+    this.toolTimes.delete(toolCallId);
+    this.toolItems.delete(toolCallId);
+    this.toolLastEmit.delete(toolCallId);
+    const timer = this.toolFrameTimers.get(toolCallId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.toolFrameTimers.delete(toolCallId);
+    }
+  }
+
+  /** 登记一条 item 里的可打开路径（`snapshot()` 与实时路径都走这里）。 */
+  private registerOpenable(item: ChatItem | ToolItem): void {
+    if (item.kind !== "tool" || item.openablePaths === undefined) return;
+    for (const path of item.openablePaths) this.openableFiles.add(path);
+  }
+
+  /**
+   * 这个路径能不能打开。
+   *
+   * 只做**精确字符串比对** + 绝对路径校验：host 侧不解析路径，也就不存在
+   * "两个解析器各解各的"的歧义（`Uri.parse` 会把 `#` 当 fragment）。
+   */
+  isOpenableFile(path: string): boolean {
+    return path !== "" && isAbsolute(path) && this.openableFiles.has(path);
+  }
+
+  /**
+   * 兜底：某个工具调用的 toolResult **永远不来**时，别让它停在"运行中"。
+   *
+   * 探针 H 实测（S3）：**正常中止走不到这里** —— 中止时 pi 会发一条
+   * `isError=true`、正文为"已流出内容 + `Command aborted`"的 toolResult，
+   * 于是这条工具已经从 `pendingToolCalls` 里消失了。所以这里是"扩展工具挂死 /
+   * 宿主异常"的低频路径，一旦触发就必须收口。
+   *
+   * ⚠️ 收口时必须**把已流出来的正文贴上**（否则用户眼看着流了 10 秒的输出，
+   * 因为一次异常全没了），并且必须**清掉 partial 缓存**（那个 `message_end`
+   * 永远不来，不删就是每次触发泄漏一份 ≤64KB 的字符串）。
    */
   private settlePendingTools(): void {
     const session = this.host === undefined ? undefined : this.view();
     const stillPending = new Set(session?.state.pendingToolCalls ?? []);
-    for (const [toolCallId, item] of this.toolItems) {
+    for (const [toolCallId, item] of [...this.toolItems]) {
       if (!stillPending.has(toolCallId)) {
         this.toolItems.delete(toolCallId);
         continue;
       }
-      if (item.kind !== "tool") continue;
-      this.toolItems.delete(toolCallId);
-      this.emit({ type: "item", item: { ...item, pending: false, isError: true } });
+      const settled: ToolItem = {
+        ...this.applyPartial(item, this.partials.get(toolCallId), this.toolTimes.get(toolCallId)),
+        pending: false,
+        isError: true,
+      };
+      this.cleanupTool(toolCallId);
+      this.emit({ type: "item", item: settled });
     }
   }
 
@@ -559,7 +748,14 @@ export class SessionHostController {
     this.deltaBuffer.clear();
     this.activeAssistantId = undefined;
     this.toolCalls.clear();
+    for (const timer of this.toolFrameTimers.values()) clearTimeout(timer);
+    this.toolFrameTimers.clear();
+    this.runningTools.clear();
+    this.partials.clear();
+    this.toolTimes.clear();
+    this.toolLastEmit.clear();
     this.toolItems.clear();
+    this.openableFiles = new Set();
   }
 
   private emit(message: ServerMessage): void {
@@ -572,6 +768,23 @@ export class SessionHostController {
     }
     this.options.onMessage(message);
   }
+}
+
+/** 工具行在协议里的类型（唯一需要"贴正文"的变体）。 */
+type ToolItem = Extract<ChatItem, { kind: "tool" }>;
+
+/** `tool_execution_update` 里我们真正读的字段。 */
+interface ToolUpdateEvent {
+  toolCallId: string;
+  partialResult?: { content?: unknown; details?: unknown };
+}
+
+/** 一个工具已经流出来的正文与元信息。 */
+interface ToolPartial {
+  text: string;
+  textTruncated?: boolean;
+  truncation?: { truncatedBy: "lines" | "bytes"; totalLines: number; outputLines: number; maxBytes?: number };
+  fullOutputPath?: string;
 }
 
 /** pi 在流式期间收到没有 `streamingBehavior` 的 prompt 时的报错原文。 */
