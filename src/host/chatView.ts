@@ -121,6 +121,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await vscode.env.openExternal(vscode.Uri.parse(message.href));
           return;
         }
+        case "openFile": {
+          // 工具卡片里的路径。**只认控制器登记过的绝对路径**（精确字符串比对）：
+          // 渲染层也是按同一份 `openablePaths` 决定"渲染成可点还是纯文字"的，
+          // 两层不可能各说各话。
+          if (!controller.isOpenableFile(message.path)) {
+            output.appendLine(`[webview] 拒绝打开未登记的文件：${message.path.slice(0, 200)}`);
+            return;
+          }
+          try {
+            // 用 `Uri.file` 而不是 `Uri.parse`：后者会把路径里的 `#` 当 fragment、
+            // `?` 当 query（`/tmp/a#b.log` 会打开成另一个文件或直接失败）。
+            await vscode.window.showTextDocument(vscode.Uri.file(message.path), { preview: true });
+          } catch (error) {
+            // 文件可能已经被删了、或者是二进制/超大文件。**不静默失败**。
+            const text = describeError(error);
+            output.appendLine(`[webview] 打开文件失败：${message.path} — ${text}`);
+            void vscode.window.showWarningMessage(`jerrypi: 打不开 ${message.path}（${text}）`);
+          }
+          return;
+        }
         default: {
           output.appendLine(`[webview] 未知消息：${JSON.stringify(message).slice(0, 200)}`);
         }
