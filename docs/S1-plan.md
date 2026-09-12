@@ -523,3 +523,48 @@ GATE BLOCKED T3,T6
 | S1-R5 | 自测耗时长（最坏约 16 分钟） | 每项独立超时 + 每项完成即写 Output；bash 由外层计时 |
 | S1-R6 | 模型不配合导致假 BLOCKED | 模型项重试 1 次 + 区分 `E_MODEL_*` |
 | S1-R7 | T9 切换会话时 cwd 已被清理 | R 与 R2 共用 cwd，统一在全部测试后清理 |
+
+## 11. 实施记录（已落地）
+
+### 11.1 A 系列结果
+
+| # | 项 | 结果 |
+| --- | --- | --- |
+| A1 | `npm run typecheck` / `npm run build` | ✅ `dist/extension.js` **44.52 KB**（含自测引擎，上限 256 KB） |
+| A2 | `npm run sync` + `npm run self-test` | ✅ 7/7 + **5/5**（含新增的资源清单一致性用例） |
+| A3 | `npm run package` + 体积门禁 + 解包复跑 | ✅ 335 files / **5.69 MB**（19.0% 门禁）；解包后 `CHECK 2/7 PASS`、`VERIFY OK` |
+| A4 | CI | ✅（见提交后的 Actions） |
+| A5 | 静态检查 | ✅ 产物中无 pi 导入（守卫另有两次"故意写错"的实测：裸名与深路径都被拦下） |
+
+### 11.2 本地干跑（无 VS Code、无凭据）
+
+`src/pi/selftest.ts` 及其依赖在**运行期不 import `vscode`**（`runtime.ts` 只有 `import type`），
+因此可以用 esbuild 打一个临时 harness 在纯 Node 下跑闸门，用于快速迭代：
+
+| 项 | 干跑结果 |
+| --- | --- |
+| T1 / T2 | ✅ Node 26.8.1；12 文件 + 2 目录全部合格 |
+| T3 | ✅ 命令 `[smoke, smoke-custom]`；`onError` 命中；`write` 来源 = `sdk`（同名覆盖生效） |
+| T5a / T5b | ✅ `shell=/bin/bash`；`abortBash` 后 2ms 返回、`cancelled=true` |
+| T8 | ✅ worker 往返 1000x1000；`resizeImage` 1000x1000 |
+| T4 / T6 / T7 | `E_NO_CREDENTIALS`（本机无 key，符合预期） |
+| T5c | `SKIP E_NO_CREDENTIALS`（advisory） |
+| T9 | `E_PRECONDITION`（T7 未产出会话文件） |
+
+→ 判定为 **GATE BLOCKED T4,T6,T7,T9**，全部由"缺凭据"引起；配好 key 后应转为 PASS（待 B1/B2 验证）。
+
+### 11.3 落地时发现的偏差（已修正）
+
+1. **`ExtensionMode` 没有从 pi 包根导出**（只存在于 `dist/core/extensions`）→ 改从
+   `Parameters<AgentSession["bindExtensions"]>[0]["mode"]` 推导，避免写死字符串联合。
+2. **`session_start` 不属于 `AgentSessionEvent`**（它是扩展事件，由 `bindExtensions` 触发）→
+   事件日志的 switch 去掉该分支；T3 用 fixture 写的标记文件来断言它。
+3. **`AgentSession.isIdle` 是 getter 不是方法**（`isBashRunning` 同理）。
+4. **`customTools` 需要一次 cast**：write 定义是 `ToolDefinition<typeof writeSchema, undefined>`，
+   而接口要 `ToolDefinition`（默认泛型是宽 `TSchema`），`renderCall` 在参数位置逆变导致直接赋值被拒。
+5. **自测 UIContext 的 `theme` 不能抛错**：pi 在绑定/初始化阶段会读 `ctx.ui.theme`，
+   第一版直接抛错导致 **T3 以 `E_UNEXPECTED` 失败**。改为返回"任何属性都是空操作函数"的 Proxy。
+6. **凭据错误要显式分类**：pi 的报错是 `No API key found for the selected model.`；
+   现在除了 `prompt` 失败时按消息归类，模型相关项开头还会用 `requireUsableModel()` 直接报
+   `E_NO_CREDENTIALS`，避免它被读成"pi 跑不起来"。
+7. **T9 的前置失败用 `E_PRECONDITION`**（不可重试），否则会白白重试一次。
