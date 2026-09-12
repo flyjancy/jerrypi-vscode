@@ -887,7 +887,8 @@ VERDICT: **NON_BLOCKING**。评审者对本轮的判断是"剩下的是收尾级
 | M5 | 队列非空时 `agent_end` 后仍禁用输入 | ✅ PASS | 队列条非空期间状态行一直是「生成中…」 |
 | — | pi 的 dequeue（"edit all queued messages"） | ✅ PASS | 点「取回编辑」后两条按 `steering` 在前、空行分隔回到输入框（对齐 `interactive-mode.js`） |
 | M6 | 切走再切回 | ✅ PASS | 历史原样；Output **没有**新增 `[webview] ready` → `retainContextWhenHidden` 生效 |
-| M6b | 强制重建后再接上流 | ⏳ 未测到 | 用「右键 Hide」并未销毁页面（Output 仍只有一行 `ready`），所以"重建后能否接上流"这次**没被覆盖**。改用 `Developer: Reload Webviews` 强制重建 |
+| M6b | 强制重建后再接上流 | ✅ PASS | 改用 `Developer: Reload Webviews` 在**流式中**强制重建：Output 在 `[agent] start` 与 `[agent] end` 之间**新增了一行 `[webview] ready`**，面板里的已写部分重新出现并**继续增长到写完**，全文连贯无缺字。→ **C1 / N1 那个"重开后接不上"的坑在真实 VS Code 里也不会发生** |
+| — | 「右键 Hide」是否销毁页面 | 记录 | **不会**：`retainContextWhenHidden` 生效，Output 始终只有一行 `ready`。所以**别再用 Hide 来测重建**，要用 `Developer: Reload Webviews` |
 | — | 空闲态 | ✅ PASS | 一切跑完后状态行显示「空闲」，未出现卡在"生成中"（防御性修复已提交） |
 
 ### 11.7 待人工验收（剩余步骤）
