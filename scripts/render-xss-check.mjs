@@ -154,6 +154,15 @@ async function main() {
       stopReason: "stop",
     });
     check("助手正文走同一套消毒", audit(assistant) === null, assistant);
+    // toolUse 轮次本来就没有正文，不能报"没有内容"（实测误导过一次）
+    const toolUseTurn = render.renderAssistant({
+      kind: "assistant",
+      id: "msg-t",
+      text: "",
+      thinking: "",
+      stopReason: "toolUse",
+    });
+    check("工具调用轮次不显示「没有内容」提示", toolUseTurn === "", JSON.stringify(toolUseTurn));
     const emptyAssistant = render.renderAssistant({
       kind: "assistant",
       id: "msg-2",

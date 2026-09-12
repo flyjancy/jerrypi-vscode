@@ -212,6 +212,12 @@ function checkWebviewElementIds() {
   const referenced = [...main.matchAll(/getElementById\("([^"]+)"\)/g)].map((match) => match[1]);
   const declared = new Set([...html.matchAll(/id="([^"]+)"/g)].map((match) => match[1]));
   check("main.ts 至少引用了一个元素", referenced.length > 0, String(referenced.length));
+  // 侧栏很窄：工具名与图标一旦可收缩就会被参数挤成竖排单字母（实测踩过）。
+  const css = fs.readFileSync(path.join(REPO_ROOT, "src/webview/style.css"), "utf8");
+  const toolNameRule = css.match(/\.tool-name\s*\{[^}]*\}/)?.[0] ?? "";
+  check("工具名声明了不可收缩", /flex:\s*0 0 auto/.test(toolNameRule), toolNameRule.trim());
+  const toolLineRule = css.match(/\.tool-line\s*\{[^}]*\}/)?.[0] ?? "";
+  check("工具行允许换行", /flex-wrap:\s*wrap/.test(toolLineRule));
   // 协议版本只能有一处来源：两边硬编码成两个数字是最容易漏的漂移。
   const chatView = fs.readFileSync(path.join(REPO_ROOT, "src/host/chatView.ts"), "utf8");
   check("chatView 不硬编码协议版本", !/protocol:\s*\d/.test(chatView));

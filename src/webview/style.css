@@ -67,21 +67,34 @@ body {
 
 .tool-line {
   display: flex;
-  gap: 6px;
+  /* 一定要允许换行：侧栏很窄，参数一长就会把工具名挤成一列单字母
+     （实测第一版就是这样，`bash` 被压成了竖排的 b/a/s/h）。 */
+  flex-wrap: wrap;
+  gap: 4px 6px;
   align-items: baseline;
   font-family: var(--vscode-editor-font-family);
   font-size: 0.9em;
   color: var(--vscode-descriptionForeground);
 }
 
+/* 图标与工具名**不许收缩**：它们是这一行的标识，宁可让参数换到下一行。 */
 .tool-icon {
+  flex: 0 0 auto;
   width: 1em;
   text-align: center;
 }
 
+.tool-name {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .tool-args {
+  flex: 1 1 auto;
+  min-width: 0;
   opacity: 0.75;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .tool-error .tool-name,

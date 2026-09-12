@@ -121,10 +121,18 @@ export function renderAssistant(item: Extract<ChatItem, { kind: "assistant" }>):
   if (item.thinking !== "") parts.push(renderThinking(item.thinking, item.streaming === true));
   if (item.text !== "") {
     parts.push(`<div class="markdown">${renderMarkdown(item.text)}</div>`);
-  } else if (item.streaming !== true) {
+  } else if (item.streaming !== true && item.stopReason !== "toolUse") {
     // 中止或模型没吐字时，别留一个空壳让人以为界面坏了。
-    const reason = item.stopReason === "" ? "无内容" : item.stopReason;
-    parts.push(`<div class="notice notice-warn">（本次回复${reason === "aborted" ? "已被中止" : `没有内容：${renderPlain(reason)}`}）</div>`);
+    //
+    // ⚠️ `toolUse` 必须排除：那一轮的 assistant 消息**本来就只带工具调用、没有正文**
+    // （正文在工具执行完之后的下一轮才产生）。实测第一版会显示一行橙字
+    // "（本次回复没有内容：toolUse）"，紧接着才是工具行和真正的回复 —— 纯属误导。
+    const reason = item.stopReason;
+    parts.push(
+      `<div class="notice notice-warn">（本次回复${
+        reason === "aborted" ? "已被中止" : reason === "" ? "没有内容" : `没有内容：${renderPlain(reason)}`
+      }）</div>`,
+    );
   }
   if (item.errorMessage !== undefined && item.errorMessage !== "") {
     parts.push(`<div class="notice notice-error">${renderPlain(item.errorMessage)}</div>`);
