@@ -53,6 +53,18 @@ entry_appended, turn_end, agent_end, agent_settled
      最终态要断"以最后一次快照为**前缀**"（最终态还会多出 pi 的截断脚注）；
    UI 上展开态看到顶部内容被顶掉是**预期行为**（pi 的 TUI 同样如此，它用 `... (N earlier lines)` 提示）。
 
+5. **被中止的工具*会*产生 toolResult，而且 pi 自己把已流出的正文带上了**（探针 H，**推翻了本计划的初版假设**）。
+   实测：流式中途 `abort()`，1ms 内得到
+   `tool_execution_end isError=true content=[{text:"行 1\n\n\nCommand aborted"}]`
+   → `message_start/message_end(role=toolResult)` → `agent_settled`；
+   中止后 `pendingToolCalls` **已空**，历史里那条 toolResult 的正文以中止前的最后一次快照为前缀。
+   两个推论：
+   - **正常中止路径不丢正文**（最终 item 由这条 toolResult 构建，本来就带正文）；
+   - `settlePendingTools()` 在正常中止时**根本不会触发**（`pendingToolCalls` 已经空了）
+     —— 它是"工具永不返回"的真兜底路径（§4.4 第 2 条）。
+   附带观察：中止后 pi 会**追加一条 `stopReason=error` 的空 assistant 消息**，
+   S2 的序列化器会把它渲染成一条提示 —— M13 顺带确认这条提示不误导人。
+
 ### 0.3 只有 bash 会流式（`onUpdate(` 的真实调用次数）
 
 | 工具 | `onUpdate(` 调用 |
@@ -203,7 +215,8 @@ entry_appended, turn_end, agent_end, agent_settled
 
    | 字段 | 谁产出 | 重放时 |
    | --- | --- | --- |
-   | `toolName / summary / text / truncation / isError` | `serialize.ts` | ✅ 有 |
+   | `toolName / summary / truncation / isError`（**已完成**的行） | `serialize.ts` | ✅ 有（权威，可做逐字节等价断言） |
+   | `text`（**运行中 / 被兜底收口**的行） | `controller.ts` 给的是 `partials` 里的快照 | ⚠️ 运行中的行**有**（从 `partials` 重建）；此类行**不参与**等价性断言 |
    | `openablePaths` | `serialize.ts`（读 `ctx.cwd`） | ✅ 有（每次重放重新铸造） |
    | `startedAt / endedAt` | `controller.ts` 装饰（只在实时路径） | ❌ **没有**（内存时钟，重启后无从得知） |
    | `pending` | `controller.ts` 装饰 | ✅ **有**：`snapshot()` 用 `state.pendingToolCalls` + 我们的 `partials` 重建运行中的行（§4.4 第 2 条）；但它**不由 `serialize.ts` 产出**，所以等价性断言要把它单独排除 |
@@ -239,7 +252,13 @@ entry_appended, turn_end, agent_end, agent_settled
   // ↓ S3 新增
   text?: string;                // 结果正文（已净化、已按上限裁剪）
   textTruncated?: boolean;      // 是否被**我们的上限**裁过（区分 pi 自己的截断）
-  truncation?: { truncatedBy: "lines" | "bytes"; totalLines: number; outputLines: number };
+  truncation?: {                // §0.4：**只取标量**，绝不带 pi 的 truncation.content
+    truncated: true;
+    truncatedBy: "lines" | "bytes";
+    totalLines: number;
+    outputLines: number;
+    maxBytes?: number;
+  };
   fullOutputPath?: string;      // bash 截断时的完整输出文件（也是可点路径）
   openablePaths?: string[];     // 本条卡片里可点击打开的**绝对路径**（fsPath，不是 URL）
   startedAt?: number;           // ms epoch；重启后消失（重放时没有就不显示耗时）
@@ -323,14 +342,21 @@ const openablePaths = openablePathsOfResult(message, ctx);  // 参数 path + det
    - `private readonly partials = new Map<string, { text: string; truncation?; fullOutputPath? }>()`；
    - `snapshot()` 重建 pending 工具行时，把 `partials` 里的正文一并带上
      → **面板中途重开能看到已经流出来的字，并且继续长**（C1/N1 家族第四处）；
+     同时**用 `toolCalls` 索引里的 args 走一遍 `openablePathsOfArgs(args, cwd)`**
+     —— 否则"重开后一个仍在运行的卡片"标题上的路径点不开（M11 只覆盖已完成的行，M14 只覆盖实时）；
+     这条判据并进 M3。
    - 清理时机：`tool_execution_end` 之后仍保留到该 toolResult 的 `message_end`
      （最终态由消息构建），随后删除；会话替换 / `newSession` 时整体清空。
-   - ⚠️ **中止路径必须一起改**：`settlePendingTools()`（`controller.ts:501-513`）现在发的是
-     `{...item, pending:false, isError:true}`，而那个 `item` 是 S2 在 `tool_execution_start`
-     时建的**只有参数摘要的壳**。正文放在 `partials` 里之后，中止瞬间发出的这一条**不带正文**
-     → 用户眼看着流了 10 秒的输出，一点中止全没了。所以这一处必须
-     **(a) 合并 partial 正文、(b) 同时删掉 `partials` 里的条目**（被中止的工具通常不会产生
-     toolResult，那个 `message_end` 永远不来，不删就是每次中止泄漏一份 ≤64KB 的字符串）。
+   - **正常中止路径不需要特殊处理**（探针 H）：中止时 pi 自己会发一条
+     `isError=true`、正文为"已流出内容 + `Command aborted`"的 toolResult，
+     最终 item 由它构建，正文本来就在。这一格的验收判据见 M13。
+   - ⚠️ **兜底路径（`settlePendingTools()`，`controller.ts:501-513`）要改**：
+     它对"还在 `pendingToolCalls` 里、但 toolResult 永不到来"的工具发
+     `{...item, pending:false, isError:true}`，而那个 `item` 是 `tool_execution_start`
+     时建的**只有参数摘要的壳**。正文放进 `partials` 之后，这条最终 item 会**没有正文**，
+     同时 `partials` 也永远等不到那个 `message_end` —— **每次触发泄漏一份 ≤64KB 的字符串**。
+     所以这里必须 **(a) 合并 partial 正文、(b) 删除 `partials` 中该工具的条目**。
+     （正常 abort 走不到这里，探针 H 已证；它只在扩展工具挂死/宿主异常时生效。）
 
 3. **可打开路径白名单**
    - `private openable = new Set<string>()`（值 = **绝对路径**，不是 URL）；
@@ -369,12 +395,19 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 - bash：折叠时取正文**最后 5 行**；展开时全量；行数不足 5 行时原样显示；
 - read/write/edit：折叠时不显示正文，展开时全量（最多前 10 行 + `… 还有 N 行`）；
 - 空正文：显示灰色 `（无输出）`；
-- 截断：正文末尾加脚注 `[完整输出：<path>]`（path 若是可点路径则渲染成链接）。
+- **pi 的截断**：正文末尾加脚注 `[完整输出：<path>]`（path 可点则渲染成链接）。
+- **我们自己的裁剪**（`textTruncated`，D3，只可能被扩展工具触发）：在正文末尾加一行
+  灰色 `…（已省略 N 字节）`，**不加 pi 的脚注样式**（两者来源不同，长得一样会让人以为
+  pi 又截了一次）。
 
 ### 4.7 `src/webview/main.ts`（增量）
 
 - `toolViews: Map<string, { node, head, body, open: boolean }>`；
   upsert 时**只更新 head 与 body 的 innerHTML**，节点本身复用 → 展开态与选中不丢；
+  ⚠️ 但 `innerHTML` 重写会**销毁子节点、把正文容器的 `scrollTop` 归零**（§4.8 给正文定了
+  `max-height: 40vh` + 内部滚动）：用户展开一个大输出卡片往下读，每 200ms 就被拽回正文顶部。
+  所以更新 body 时**必须保存并恢复 `scrollTop`**；更稳的做法是正文内部也做粘底判定
+  （本来在底部附近就跟随，否则保位置）。判据并进 M7。
 - 展开/折叠由用户点击标题行切换（`<button aria-expanded>`），状态记在 `toolViews` 里；
 - 粘底：`isAtBottom()` 阈值约 40px；`renderItem` 只在 `isAtBottom()` 为真时滚到底；
   用户点发送/回车时强制滚到底；
@@ -436,13 +469,13 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 | M4 | 发 `bash: exit 3` | 行首是红色 ✗，正文含 `Command exited with code 3`，**没有**我们自己编的解释 |
 | M5 | 发 `head -c 120000 /dev/zero \| tr '\0' 'x'` | 正文尾部有 `[Showing last 50.0KB …]` 与可点的完整输出路径；点它能打开那个临时文件 |
 | M6 | 让它**一次**同时调两个工具（如 `echo AAA` + `read 一个文件`） | 两条卡片各自独立、顺序与调用一致，不合并成一行。（**依赖模型行为**：它没并发调用时重试即可，不算 FAIL —— 探针 F 已证明这种调用会发生） |
-| M7 | **把 bash 卡片展开**，然后等它继续输出 | 展开态**不被重置**（就地更新），且新增内容可见 |
+| M7 | **把 bash 卡片展开**，等它继续输出，并且**把正文往下滚到中部** | 展开态**不被重置**；新增内容可见；**正文的滚动位置不被拽回顶部**（§4.7 的 `scrollTop` 保持） |
 | M8 | 流式期间**往上滚动**看历史 | 视图**不被拽回底部**；点发送后自动回到底部 |
 | M9 | 发 `echo '<img src=x onerror=alert(1)>'` | 面板里是**文字**，不弹窗（结果正文是不受信输入） |
 | M10 | 让 agent `edit` 一个小文件 | 卡片标题是可点路径；正文是结果文本（**没有 diff** —— 那是 S7） |
 | M11 | **重开面板（`Developer: Reload Webviews`）后点历史卡片里的路径** | 仍能在编辑器里打开（白名单由重放重新铸造 —— 这是评审抓到的洞） |
 | M12 | 让 agent 输出超过 50KB（如 `seq 1 4000`）并展开卡片 | 正文能看到尾部与 pi 的截断脚注 `[Showing … Full output: …]`；**顶部内容被顶掉是预期的**（§0.2 第 4 条） |
-| M13 | **M2 流式中途点「中止」** | 已经流出来的正文**仍在**（状态变 ✗、不再增长），**不是空白** —— 这是评审抓到的"中止吃掉输出"回归点 |
+| M13 | **M2 流式中途点「中止」** | 已经流出来的正文**仍在**（状态变 ✗、不再增长），末尾是 pi 自己加的 `Command aborted` —— 探针 H 已证实这条由 **pi 的结果**带来（不是我们拼的）。顺带确认中止后那条 `stopReason=error` 的空 assistant 提示文案不误导人 |
 | M14 | **让 agent `read` 一个文件，在它执行期间点卡片标题上的路径** | 能打开 —— 运行中的卡片也要有可点路径（§4.4 第 3 条） |
 
 ### 6.3 受限 Windows 机（人工，从 Marketplace 更新后）—— W 系列
@@ -451,11 +484,11 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 | --- | --- | --- |
 | W0 | **先跑 `Pi: Run Self-Test`** | 仍须 `GATE PASS`（本步动了 `serialize.ts`/`controller.ts`，属于 S1 已验证路径的邻居，必须先自证没破坏） |
 | W1 | M1 + M2 | 同 Mac |
-| W6 | M13（中止不丢正文） | 受限机上中止走的是 Git Bash + 进程树回收，路径与 Mac 不同，值得单独回归一次 |
 | W2 | M3 + M7（重开 + 展开态） | 同 Mac —— 这两条是 S3 最容易在两台机器上表现不同的地方 |
 | W3 | M5（截断 + 打开完整输出） | Windows 的临时目录路径形态不同（`C:\Users\…\AppData\Local\Temp\…`），要确认可点路径在 Windows 上也能打开 |
 | W4 | M4 + M9 | 失败态与 XSS 回归 |
-| W5 | M11（重开后点历史路径） | Windows 的路径形态（`C:\…`）与 Mac 不同，白名单比对必须仍然精确命中 |
+| W5 | M11 + M14（重开后点历史路径 / 运行中点路径） | Windows 的路径形态（`C:\…`）与 Mac 不同，白名单比对必须仍然精确命中 |
+| W6 | M13（中止不丢正文） | 受限机上中止走的是 Git Bash + 进程树回收，路径与 Mac 不同，值得单独回归一次 |
 
 ### 6.4 判据
 
@@ -492,6 +525,7 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 | D10 | 展开态是否跨重开保持 | **不保持**（webview 内存态） | 不引入"UI 状态进协议"的复杂度；`retainContextWhenHidden` 场景下本来不重建 |
 | D11 | 未知/扩展工具的正文 | 与内置工具同一条路径（有 partial 就流式、有正文就显示） | 不特判，避免"扩展工具的卡片长得不一样" |
 | D12 | 卡片正文的最大高度 | `40vh` + 内部滚动 | 一条 `ls -R` 不该把整屏吃掉；与 pi 的"折叠优先"一致 |
+| D13 | 借鉴 pi 的界面文案用哪种语言 | **跟 pi 一致用英文**：`Took 1.2s` / `Elapsed 1.2s`（折叠预览的 `... (N earlier lines)` 同理）；我们自己新写的文案（`（无输出）`、`…（已省略 N 字节）`）用中文 | 判据是"这句话 pi 有没有"：有就照抄（省得两处对不上），没有才自己写。pi 的脚注 `[Showing last 50.0KB …]` 本来就无法翻译 |
 
 ---
 
@@ -502,7 +536,7 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 | R1 | **把快照当增量**拼接（§0.2 第 2 条） | 协议里 tool 正文是"整体替换"语义。`check:controller` 要写**两条**断言，不能合成一条：<br>① 流式期间每次 upsert 的正文 **=== 当次收到的快照**（不拼接、不合并历史）；<br>② **最终**正文以最后一次快照为**前缀**，可以多出 pi 的截断脚注（探针 G：`最终 = 最后一次快照 + 脚注`）。<br>⚠️ 不能断言"正文单调增长"：超过 50KB 后快照会换头（§0.2 第 4 条） |
 | R2 | **第一次更新的 `content: []`** 被当成"空输出"覆盖掉已有正文 | `onToolExecutionUpdate` 只在 `content[0]?.text` 存在时才更新正文（占位更新只用来建行） |
 | R3 | 就地更新写错 → 展开态在流式期间被重置 | M7 作为回归点；`toolViews` 只改 head/body 的 innerHTML |
-| R4 | 50KB/次 × 5 次/秒的 postMessage 体积 | 先量：`check:controller` 里统计一个 5 秒命令的消息数/字节数并打印；若持续 >100KB/s 再引入"前缀增量 + 最终整体 upsert" |
+| R4 | 整份快照的传输体积：bash 节流 100ms + 我们 200ms 合并 → **5 帧/秒 × 最多 50KB ≈ 250KB/s** | **S3 只量不改**（与 D5 一致：不做前缀增量，避免"实时与重放两份数据"）。`check:controller` 里打印一个 5 秒命令的消息数与总字节数，量出来的数字**记入 S3 的遗留事项**，要不要优化留到 S4+ 再定。（原先写的">100KB/s 就做增量"与 D5 互相矛盾，且 100KB/s 这个阈值本身没有依据 —— 结构化克隆未必真的卡。） |
 | R5 | 重放时正文与实时不一致（历史里没有我们的裁剪标记） | 单点序列化 + `itemBytes` 计入正文 + protocol-check 的等价性断言 |
 | R6 | `details` 里的 `truncation.content` 让单条 item 翻倍 | 只取标量字段（§0.4 的结论），render/protocol 两侧各有一条断言 |
 | R7 | 路径白名单失效（伪造一个路径打开任意文件） | 白名单由序列化器铸造、控制器登记；host 侧只做**精确字符串**比对（不解析路径）；render-xss-check 里有"未登记路径不可点"的断言 |
@@ -583,3 +617,24 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 **这一轮最有价值的第 1 条**是"两个都对的改动的交集"：S3 把正文放进 `partials` 是对的，
 S2 的 `settlePendingTools` 兜底也是对的，但两者一合并就产生"中止即丢正文"。
 这类问题只有把**改动面**读全（而不是只读计划描述的那几行）才看得出来。
+
+
+### 第 3 轮（Claude Opus 5，只读；**6 条，6 接受**）
+
+评审先确认第 2 轮的 12 条全部落地，并把**边际收益正在下降**这件事直接说了出来
+（"这已经是第三轮，剩下的多是「同一家族的第 N 格」和文字同步"）。这一轮第一条再次证明
+"凡是要写进代码的 pi 行为都要先跑一遍"这条规矩的价值 —— **它推翻的是我和评审共同接受的一个假设**：
+
+| # | 评审意见 | 处置 |
+| --- | --- | --- |
+| 1 | §4.4 的「被中止的工具**通常**不会产生 toolResult」是**推理**不是实测，而两个设计决定押在它上面；且没定义 `message_end` 与 `agent_settled` 的先后 | **接受，并已补跑探针 H —— 结论推翻了这句前提**：中止时 pi **会**发 `tool_execution_end isError=true` + toolResult（正文 = 已流出内容 + `Command aborted`），`pendingToolCalls` 在 `agent_settled` 时**已空**、顺序是 `message_end` → `agent_settled`。所以**正常中止不丢正文**，`settlePendingTools()` 是"工具永不返回"的真兜底；合并正文/清缓存只在那条路径上需要。§0.2 新增第 5 条、§4.4 与 M13 按实测改写 |
+| 2 | **展开的大输出卡片每 200ms 被拽回正文顶部**：重写 `innerHTML` 会销毁子节点、`scrollTop` 归零（§4.7 × §4.8 的交叉点），M7 只看 `<details>` 开着没开，测不到 | **接受**。§4.7 规定更新 body 时必须保存/恢复 `scrollTop`（或正文内部粘底）；M7 判据补"把正文往下滚到中部" |
+| 3 | R4 的">100KB/s 就做前缀增量"与 D5"不做增量"**自相矛盾**（按默认参数，大输出必然 250KB/s 越线），实施者只能违反其中一条 | **接受**。R4 改为"S3 只量不改，数字记入遗留事项，S4+ 再定"；并注明原阈值本身没有依据 |
+| 4 | 约束 #1 的分工表把 `text` 一律标成 `serialize.ts` 产出，但**运行中/被兜底收口**的行其实来自控制器的 `partials` | **接受**。`text` 拆成两种情形写清楚（已完成的行权威、参与等价断言；运行中的行不参与） |
+| 5 | **"重开后 + 仍在运行的卡片"这一格没人守**：M14 管实时、M11 管重开后的已完成行；§4.4 第 2 条也没说重建 pending 行时要铸路径 | **接受**。§4.4 第 2 条补"用 `toolCalls` 索引里的 args 走一遍 `openablePathsOfArgs`"，判据并进 M3 |
+| 6 | 四小项：`truncation` 只列 3 个字段（§0.4 结论是 5 个）、`textTruncated` 有字段无渲染规则、W 表顺序乱（W0,W1,W6,W2…）、界面文案语言不统一（中文正文 + 英文耗时） | **接受**。字段补齐 5 个；`textTruncated` 补渲染规则（灰色 `…（已省略 N 字节）`，**不加** pi 的脚注样式）；W 表排回 0–6；新增 **D13**：pi 有的文案照 pi（`Took/Elapsed` 用英文），pi 没有的我们自己写中文 |
+
+**第 1 条的教训值得单独记一笔**：那条"被中止的工具通常不会产生 toolResult"是我写的，
+依据是 S1 的 T5c 注释（"实测正常 abort 仍会发出 toolResult"）—— 我自己在 S1 就实测过它，
+却在写 S3 时又把它当成"通常不会"。**同一条事实在四份计划里被引用过三次，第三次写反了。**
+补探针 H 的成本是 4 个模型调用，而它挡住的是一次会让"中止吃掉输出"的错误修复方向。
