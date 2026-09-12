@@ -21,9 +21,10 @@ const VERSION_FILE = path.join(RUNTIME_DIR, ".version");
 const SYNC_SCRIPT = path.join(SCRIPT_DIR, "sync-pi-runtime.mjs");
 const VERIFY_SCRIPT = path.join(SCRIPT_DIR, "verify-isolated-runtime.mjs");
 const FIXTURE_PATH = path.join(REPO_ROOT, "test-fixtures", "ext-smoke", "index.ts");
+const RESOURCES_TS = path.join(REPO_ROOT, "src", "pi", "resources.ts");
 const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 
-const TOTAL = 4;
+const TOTAL = 5;
 let passed = 0;
 
 function pass(id, name, detail) {
@@ -130,12 +131,57 @@ function testIdempotentSync() {
   pass(4, "sync is idempotent", "pre-existing stale files are removed");
 }
 
+async function testResourceListDrift() {
+  // 资源清单在两处存在：
+  //   - scripts/sync-pi-runtime.mjs（打包期校验，REQUIRED_FILES / REQUIRED_DIRS）
+  //   - src/pi/resources.ts（随扩展发布，自测 T2 用）
+  // scripts/ 不进 .vsix，所以无法合并成一份；这里用一致性用例盯住它们。
+  const syncModule = await import(pathToFileURL(SYNC_SCRIPT).href);
+  const source = fs.readFileSync(RESOURCES_TS, "utf8");
+  const shippedFiles = extractStringArray(source, "REQUIRED_RESOURCE_FILES");
+  const shippedDirs = extractStringArray(source, "REQUIRED_RESOURCE_DIRS");
+
+  const sameSet = (left, right) =>
+    JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
+
+  if (!sameSet(shippedFiles, syncModule.REQUIRED_FILES)) {
+    fail(
+      5,
+      "resource file lists match",
+      `src/pi/resources.ts=${JSON.stringify([...shippedFiles].sort())} vs sync=${JSON.stringify([...syncModule.REQUIRED_FILES].sort())}`,
+    );
+  }
+  if (!sameSet(shippedDirs, syncModule.REQUIRED_DIRS)) {
+    fail(
+      5,
+      "resource directory lists match",
+      `src/pi/resources.ts=${JSON.stringify(shippedDirs)} vs sync=${JSON.stringify(syncModule.REQUIRED_DIRS)}`,
+    );
+  }
+
+  pass(
+    5,
+    "resource lists match between shipped and packaging checks",
+    `${shippedFiles.length} files + ${shippedDirs.length} dirs`,
+  );
+}
+
+/** 从 TS 源码里取「字符串字面量数组」——两份清单都刻意写成这个形状。 */
+function extractStringArray(source, exportName) {
+  const match = source.match(new RegExp(`export const ${exportName}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
+  if (match === null) {
+    fail(5, "resource list is parseable", `cannot find ${exportName} in src/pi/resources.ts`);
+  }
+  return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
+}
+
 async function main() {
   console.log(`[self-test] pi runtime: ${RUNTIME_DIR}`);
   testSyncProducesVersion();
   await testBareImportGate();
   testMissingDependencyFailsVerification();
   testIdempotentSync();
+  await testResourceListDrift();
   console.log(`SELF-TEST OK (${passed}/${TOTAL})`);
 }
 

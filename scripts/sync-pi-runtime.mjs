@@ -75,7 +75,7 @@ const COPY_ENTRIES = [
   "package.json",
 ];
 
-const REQUIRED_FILES = [
+export const REQUIRED_FILES = [
   "package.json",
   "README.md",
   "dist/bundle/index.js",
@@ -90,7 +90,7 @@ const REQUIRED_FILES = [
   "node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm",
 ];
 
-const REQUIRED_DIRS = ["docs", "examples"];
+export const REQUIRED_DIRS = ["docs", "examples"];
 
 // ---------------------------------------------------------------------------
 // 校验 ①：裸依赖扫描（快速门禁，证据层级见 docs/S0-plan.md §1.2）
