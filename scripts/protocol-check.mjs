@@ -227,6 +227,8 @@ function checkWebviewElementIds() {
   check("按钮不可收缩且不换行",
     /flex:\s*0 0 auto/.test(buttonRule) && /white-space:\s*nowrap/.test(buttonRule), buttonRule.trim());
   // D10 修订：发送即清空，不再依赖"回显时比对文本"。
+  check("提示语不再谎称会打断（steer 只在本段结束后注入）",
+    !/打断当前回复/.test(main) && /这段写完后注入/.test(main));
   check("发送后立即清空输入框（不再比对 sentText）",
     /input\.value = ""/.test(main) && !/sentText/.test(main));
   // 协议版本只能有一处来源：两边硬编码成两个数字是最容易漏的漂移。

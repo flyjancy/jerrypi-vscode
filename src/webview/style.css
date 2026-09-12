@@ -254,6 +254,9 @@ body {
 
 .hint {
   font-size: 0.8em;
+  /* 提示语里带换行（说清两种发送语义的区别），按 
+ 断行 */
+  white-space: pre-line;
   color: var(--vscode-descriptionForeground);
 }
 

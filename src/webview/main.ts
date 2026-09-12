@@ -147,7 +147,7 @@ function renderQueue(queue: { steering: string[]; followUp: string[] }): void {
   queueBar.append(title, clear);
   for (const text of queue.steering) {
     const row = element("div", "queue-row queue-steer");
-    row.textContent = `将打断：${text}`;
+    row.textContent = `下一步注入：${text}`;
     queueBar.appendChild(row);
   }
   for (const text of queue.followUp) {
@@ -165,7 +165,10 @@ function renderStatus(): void {
   // 发出一份、还没确认的期间禁用发送按钮（避免连点重复发送），但**不禁用输入框**：
   // 流式期间用户还要能打字发 steer。
   sendButton.disabled = pendingText !== undefined;
-  hint.textContent = busy ? "Enter 将打断当前回复；点「排队」等本轮结束再发" : "";
+  // 提示语必须说真话：pi 的 steer **不会掐断正在生成的那段文字**，
+  // 而是在"这段输出结束、下一次调用模型之前"注入（pi 的 TUI 也是这个行为）。
+  // 第一版写成"将打断当前回复"，是照抄了 PLAN.md 5.2 的错误描述。
+  hint.textContent = busy ? "Enter：这段写完后注入新指令\n「排队」：整轮全部结束后再发" : "";
   scrollToBottom();
 }
 
