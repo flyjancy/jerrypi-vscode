@@ -704,3 +704,24 @@ T4 FAIL E_MODEL_NOT_COOPERATING
 （最可能是 `Pi: Set API Key` 时误选了 `openai`），因此 pi 每次都挑 `openai/gpt-5.5`。
 而且这个凭据会留在 SecretStorage 里，**即使重设 deepseek，pi 仍会看到 openai 可用** ——
 所以"纠正 provider"这一步是必需的，不是可选的优化。
+
+### 11.9 模型选择的收尾（用户指定：不用 pro）
+
+用户明确要求闸门**不要用 `deepseek-v4-pro`**（贵），因此 11.8 的"provider 一致就沿用 pi 的选择"
+被收回，改为**指定模型表**：
+
+```ts
+const PREFERRED_MODEL_IDS = { deepseek: ["deepseek-v4-flash"] };
+```
+
+规则：该 provider 有指定模型 → **总是** `setModel()` 强制过去；没有指定 → 才沿用 pi 自己的选择。
+
+本地两个场景复验：
+
+| 场景 | 输出 |
+| --- | --- |
+| 只配 deepseek | `deepseek/deepseek-v4-pro → 已改为 deepseek/deepseek-v4-flash（指定模型，不用 pi 的默认）` |
+| deepseek + openai | `openai/gpt-5.5 → 已改为 deepseek/deepseek-v4-flash（指定模型，不用 pi 的默认）` |
+
+⚠️ 代价：`flash` 的工具调用能力未经验证，若 T6（write/read/edit）因此失败，
+错误码会是 `E_MODEL_NOT_COOPERATING` 并附上模型说话的内容，届时再决定是否换回 pro。

@@ -59,6 +59,17 @@ const MIN_NODE = [24, 15, 0] as const;
 const PREFERRED_PROVIDERS = ["deepseek", "anthropic", "google", "openrouter", "openai"] as const;
 
 /**
+ * 每个 provider 下**指定使用**的模型（按顺序取第一个可用的）。
+ *
+ * 为什么需要它：pi 内部的 `defaultModelPerProvider` 会给 deepseek 选 `deepseek-v4-pro`（贵），
+ * 而闸门会跑好几次真实模型调用，所以这里显式指定用便宜的 flash。
+ * 未列出的 provider 仍沿用 pi 自己的选择（那才是它认为最合适的模型）。
+ */
+const PREFERRED_MODEL_IDS: Record<string, readonly string[]> = {
+  deepseek: ["deepseek-v4-flash"],
+};
+
+/**
  * 选一个**真正可用**（有凭据）的模型。
  *
  * 为什么要显式选：不传 model 时 pi 会按 settings 与内置默认规则自己挑，
@@ -70,6 +81,7 @@ const PREFERRED_PROVIDERS = ["deepseek", "anthropic", "google", "openrouter", "o
 async function pickModel(runtime: { getAvailable(): Promise<readonly unknown[]> }): Promise<{
   model: unknown;
   provider: string | undefined;
+  pinned: boolean;
   detail: string;
 }> {
   const available = (await runtime.getAvailable()) as Array<{
@@ -81,44 +93,56 @@ async function pickModel(runtime: { getAvailable(): Promise<readonly unknown[]> 
     return {
       model: undefined,
       provider: undefined,
+      pinned: false,
       detail: "(没有任何可用模型：未配置任何 provider 的凭据)",
     };
   }
   for (const provider of PREFERRED_PROVIDERS) {
     const matches = available.filter((model) => model.provider === provider);
     if (matches.length === 0) continue;
-    // 注意：这里只能拿到 pi 的可用列表顺序，拿不到 pi 内部的
-    // defaultModelPerProvider（模块私有）。所以真正生效的模型由 alignModel() 决定：
-    // 若 pi 自己解析出的 provider 就是 targetProvider，就沿用 pi 的选择。
+    // 该 provider 有指定模型就用指定的；没有则交给 pi 自己解析（见 alignModel）。
+    const pinned = PREFERRED_MODEL_IDS[provider];
+    const pinnedMatch =
+      pinned === undefined
+        ? undefined
+        : matches.find((model) => pinned.includes(String(model.id ?? model.name)));
+    const picked = pinnedMatch ?? (pinned === undefined ? undefined : matches[0]);
     return {
-      model: matches[0],
+      model: picked ?? matches[0],
       provider,
-      detail: `${matches.map((m) => m.id ?? m.name).join(", ")}（首选 ${provider}；共 ${available.length} 个可用）`,
+      pinned: pinnedMatch !== undefined,
+      detail:
+        `${matches.map((m) => m.id ?? m.name).join(", ")}（首选 ${provider}` +
+        `${pinnedMatch !== undefined ? `，锁定 ${String(pinnedMatch.id)}` : pinned !== undefined ? `，未找到指定模型，取第一个` : "，交给 pi 自己解析"}）`,
     };
   }
   const first = available[0];
   return {
     model: first,
     provider: first.provider,
+    pinned: true,
     detail: `${first.provider}/${first.id ?? first.name}（无首选 provider，取第一个）`,
   };
 }
 
 /**
- * 把会话的模型对齐到首选 provider。
+ * 把会话的模型对齐到首选 provider / 指定模型。
  *
- * 为什么不直接在建会时指定 model：pi 内部有一张 defaultModelPerProvider 表
- * （bundle 里可见，但未导出），它才会挑出"该 provider 最合适的那个模型"
- * （实测 deepseek → `deepseek-v4-pro`，而可用列表第一个是 `flash`）。
- * 所以先让 pi 自己解析：
- *   - 它的 provider 就是首选 → 沿用（得到 pi 认为最好的那个模型）；
- *   - 否则（例如另一台只配了别的 provider 的机器上它选中了 `openai/gpt-5.5`）
- *     → 用 setModel 改成首选 provider 的模型。
+ * 背景：pi 内部有一张 `defaultModelPerProvider` 表（bundle 里可见但未导出），
+ * 它才会挑出"该 provider 默认的模型"（实测 deepseek → `deepseek-v4-pro`，贵；
+ * 而可用列表第一个是 `flash`）。
+ *
+ * 规则：
+ *   - 该 provider 在 PREFERRED_MODEL_IDS 里**有指定模型** → **总是** setModel 强制过去
+ *     （否则 pi 会选它自己的默认，如 pro）；
+ *   - 没有指定 → 若 pi 选中的 provider 就是首选，则**沿用 pi 的选择**
+ *     （那才是它认为最合适的模型）；否则改成该 provider 的可用列表第一个。
  */
 async function alignModel(
   host: SessionHost,
   targetProvider: string | undefined,
   preferredModel: unknown,
+  pinned: boolean,
 ): Promise<string> {
   const session = host.session as unknown as {
     model?: { provider?: string; id?: string };
@@ -130,16 +154,24 @@ async function alignModel(
   if (targetProvider === undefined) {
     return `无可用 provider，沿用 pi 的选择 ${piChoiceLabel}`;
   }
-  if (piChoice?.provider === targetProvider) {
-    return `${piChoiceLabel}（沿用 pi 的选择：provider 与首选一致）`;
-  }
   if (preferredModel === undefined) {
     return `无法改模型：首选 provider ${targetProvider} 没有候选；pi 选的是 ${piChoiceLabel}`;
   }
 
   const preferred = preferredModel as { provider?: string; id?: string };
+  const preferredLabel = `${preferred.provider}/${preferred.id}`;
+
+  if (!pinned && piChoice?.provider === targetProvider) {
+    return `${piChoiceLabel}（沿用 pi 的选择：provider 与首选一致）`;
+  }
+  if (piChoiceLabel === preferredLabel) {
+    return `${piChoiceLabel}（已是目标模型）`;
+  }
+
   await session.setModel(preferredModel, { persist: false });
-  return `pi 选的是 ${piChoiceLabel} → 已改为 ${preferred.provider}/${preferred.id}（首选 provider ${targetProvider}）`;
+  return pinned
+    ? `${piChoiceLabel} → 已改为 ${preferredLabel}（指定模型，不用 pi 的默认）`
+    : `${piChoiceLabel} → 已改为 ${preferredLabel}（首选 provider ${targetProvider}）`;
 }
 
 /** 各项超时（毫秒）。 */
@@ -422,6 +454,7 @@ class SelfTestRun {
       const modelDetail = chosen.detail;
       const targetProvider = chosen.provider;
       const preferredModel = chosen.model;
+      const modelPinned = chosen.pinned;
       this.sink.appendLine(`[selftest] 已配置的 provider: ${providerSummary}`);
       this.sink.appendLine(`[selftest] 首选 provider: ${targetProvider ?? "(无)"}；候选模型: ${modelDetail}`);
 
@@ -456,7 +489,7 @@ class SelfTestRun {
             ...hostOptions,
             sessionManager: pi.SessionManager.create(cwd, sessionDirR),
           });
-          const modelInfo = await alignModel(hostR, targetProvider, preferredModel);
+          const modelInfo = await alignModel(hostR, targetProvider, preferredModel, modelPinned);
           this.sink.appendLine(`[selftest] 模型：${modelInfo}`);
           return this.testExtensionLifecycle(
             hostR,
