@@ -725,3 +725,20 @@ const PREFERRED_MODEL_IDS = { deepseek: ["deepseek-v4-flash"] };
 
 ⚠️ 代价：`flash` 的工具调用能力未经验证，若 T6（write/read/edit）因此失败，
 错误码会是 `E_MODEL_NOT_COOPERATING` 并附上模型说话的内容，届时再决定是否换回 pro。
+
+### 11.10 0.1.2 已上线，最终逻辑另发 0.1.3
+
+`0.1.2` 已经上传到 Marketplace（预发布，2026-09-12），对应提交 `356a5cf`，
+**里面是中间版本的选模型逻辑**（按首选 provider 取可用列表第一个）。之后 11.8/11.9 的两次改进
+（`alignModel` + 指定模型表）都没能进去，因为**同一个版本号不能重传，也不会被 VS Code 当成更新**。
+
+因此最终逻辑以 **`0.1.3`** 发布：
+
+| 版本 | 提交 | 选模型逻辑 |
+| --- | --- | --- |
+| 0.1.1 | `7e3ba01` | 不指定 model，完全交给 pi（受限机上会选到 `openai/gpt-5.5`） |
+| 0.1.2 | `356a5cf` | 建会话时指定首选 provider 的**可用列表第一个**（已上线，未在受限机验证） |
+| **0.1.3** | 本次 | **先让 pi 解析 → `alignModel()` 纠正 provider → `PREFERRED_MODEL_IDS` 锁定 `deepseek-v4-flash`** |
+
+产物 `jerrypi-0.1.3.vsix`：5,971,218 字节，
+SHA-256 `c021f820f720657bfc5f6bb0f2ff82b5abbdd9bd9c9f1ccd426230d57fe47168`。
