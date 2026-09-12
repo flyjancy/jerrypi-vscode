@@ -893,6 +893,8 @@ VERDICT: **NON_BLOCKING**。评审者对本轮的判断是"剩下的是收尾级
 
 | M7 | **XSS 三条载荷** | ✅ PASS | 三个载荷分别粘进输入框发送：**没有任何 alert/对话框**；`<img src=x onerror=alert(1)>` 与 `<script>alert(1)</script>` **以文字显示**（用户气泡与模型复述的代码块两条渲染路径都是文字）；`[x](javascript:alert(1))` 只显示一个**不可点的 `x`**。→ 渲染层的消毒（HTML 当纯文本 + scheme 白名单）在真实 webview 里确认生效。**用户明确确认：全程没有弹出过任何对话框** |
 
+| M8 | 链接与图片 | ✅ PASS | 让模型读 `/tmp/jerrypi-m8.md` 并原样复述：远程图片 `![](https://…)` **只显示 alt 文字 `x`**（无图片框、无裂图图标）；`[a](https://example.com)` 呈**蓝色可点**，点击后由**系统浏览器**打开。顺带验证了工具行（`✓ read {"path":"/tmp/jerrypi-m8.md"}`）渲染正常 |
+
 ### 11.7 待人工验收（剩余步骤）
 
 自动化覆盖不到的是**真实 webview**：CSP 是否真的放行样式、`retainContextWhenHidden` 在视图上是否生效、
