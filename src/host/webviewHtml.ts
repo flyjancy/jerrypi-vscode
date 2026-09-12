@@ -63,9 +63,11 @@ export function buildWebviewHtml(options: WebviewHtmlOptions): string {
   <textarea id="input" class="input" rows="3" placeholder="输入消息，Enter 发送（Shift+Enter 换行）"></textarea>
   <div class="composer-actions">
     <span id="composer-hint" class="hint"></span>
-    <button id="queue-button" class="button secondary" hidden>排队</button>
-    <button id="abort-button" class="button secondary" hidden>中止</button>
-    <button id="send-button" class="button primary">发送</button>
+    <div class="buttons">
+      <button id="queue-button" class="button secondary" hidden>排队</button>
+      <button id="abort-button" class="button secondary" hidden>中止</button>
+      <button id="send-button" class="button primary">发送</button>
+    </div>
   </div>
   <div id="composer-error" class="composer-error" hidden></div>
 </div>

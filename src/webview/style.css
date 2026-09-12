@@ -244,20 +244,27 @@ body {
   outline: 1px solid var(--vscode-focusBorder);
 }
 
+/* 提示语与按钮**分两行**：挤在同一行时，总有一方被压成一列单字
+   （实测两次：先是按钮变成竖排，改完按钮后又轮到提示语）。 */
 .composer-actions {
   display: flex;
-  gap: 6px;
-  align-items: center;
-  justify-content: flex-end;
+  flex-direction: column;
+  gap: 4px;
 }
 
-/* 提示语可以换行、可以收缩；按钮**不可以**——它们一旦被挤窄就会变成竖排字
-   （实测：侧栏里 "排队"/"中止"/"发送" 都变成了一列单字）。 */
 .hint {
-  flex: 1 1 auto;
-  min-width: 0;
   font-size: 0.8em;
   color: var(--vscode-descriptionForeground);
+}
+
+.hint:empty {
+  display: none;
+}
+
+.buttons {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
 }
 
 .button {

@@ -218,6 +218,10 @@ function checkWebviewElementIds() {
   check("工具名声明了不可收缩", /flex:\s*0 0 auto/.test(toolNameRule), toolNameRule.trim());
   const toolLineRule = css.match(/\.tool-line\s*\{[^}]*\}/)?.[0] ?? "";
   check("工具行允许换行", /flex-wrap:\s*wrap/.test(toolLineRule));
+  // 同一类错误的第三处：提示语被按钮挤成一列单字。根治办法是分两行。
+  const actionsRule = css.match(/\.composer-actions\s*\{[^}]*\}/)?.[0] ?? "";
+  check("提示语与按钮分成两行（不再互相挤压）",
+    /flex-direction:\s*column/.test(actionsRule) && /class="buttons"/.test(html));
   // 同一类错误的第二处：按钮被 hint 挤成竖排字。
   const buttonRule = css.match(/\.button\s*\{[^}]*\}/)?.[0] ?? "";
   check("按钮不可收缩且不换行",
