@@ -167,7 +167,7 @@ function renderStatus(): void {
   sendButton.disabled = pendingText !== undefined;
   // 提示语必须说真话：pi 的 steer **不会掐断正在生成的那段文字**，
   // 而是在"这段输出结束、下一次调用模型之前"注入（pi 的 TUI 也是这个行为）。
-  // 第一版写成"将打断当前回复"，是照抄了 PLAN.md 5.2 的错误描述。
+  // 第一版的提示语声称"会打断当前回复"，那是照抄 PLAN.md 5.2 的错误描述，已更正。
   hint.textContent = busy ? "Enter：这段写完后注入新指令\n「排队」：整轮全部结束后再发" : "";
   scrollToBottom();
 }
