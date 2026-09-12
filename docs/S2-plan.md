@@ -816,6 +816,30 @@ VERDICT: **NON_BLOCKING**。评审者对本轮的判断是"剩下的是收尾级
 | 3 | `tsconfig.webview.json` 漏进 `.vsix` | 解包后 `ls` 扩展根目录 | `.vscodeignore` 改 `tsconfig*.json` |
 | 4 | 图片白名单只判 scheme，`data:text/html` 会被当图片放行 | `protocol-check` 的断言 | 收紧为 `data:image/` 前缀 |
 | 5 | URL 里含空白时各解析器可能各解各的 | 自写的"伪装"用例 | `isExternalUrlAllowed` 增加"不得含空白" |
+| 6 | **`newSession()` 之后模型对齐丢失**：新会话由 pi 按自己的规则重新解析模型，于是建会话时做过的对齐被丢掉（实测又变回 `deepseek-v4-pro`）。**这条是"用户选过模型不能被覆盖"的需求带出来的** | `check:controller` 新增的第 6 组断言（新会话后重新检查模型） | `session.ts` 新增 `onRebind` 钩子；模型对齐挂在"每次会话替换"上，而不是建会话之后做一次 |
+
+### 11.3.1 模型策略：面板与自测分开（用户 2026-09-12 决定）
+
+用户的原话是"测试时候做成 flash，实际使用时应该是可选的"。落成为：
+
+| 场景 | 策略 | 实现 |
+| --- | --- | --- |
+| **自测闸门** | **钉死**便宜的 `deepseek-v4-flash` | `pickModel` + `alignSessionModel`（原样保留）—— 闸门要跑很多次真实调用，需要确定性与低开销 |
+| **面板** | **用户选过就听用户的**；用户没选过（全新机器）才用我们的偏好兜底 | 新增 `alignPanelModel`：读 `settingsManager.getDefaultProvider()/getDefaultModel()`，任一非空即不覆盖 |
+
+为什么面板不该钉：PLAN 5.3 明确写着"配置来源遵循 pi 自己的约定"，硬钉模型等于**覆盖用户在 pi 里做的选择**。
+兜底仍然必要，因为受限那台机器就是被"凭据填错了但 pi 认为可用"的 `openai/gpt-5.5` 卡住的。
+
+实测数据（本机真实 agentDir，只读探查）：
+
+| 模型 | 图片输入 | 价格（输入/输出，每百万 token） | 备注 |
+| --- | --- | --- | --- |
+| `deepseek-v4-flash` | ❌ | 0.14 / 0.28 | 自测闸门钉的就是它（最便宜） |
+| `deepseek-v4-flash-vision-exp` | ✅ | 0.14 / 0.28 | `exp` = 实验版，没用它做默认 |
+| `deepseek-flash` | ✅ | 0.3 / 1.2 | 用户终端里 pi 的默认，面板跟随之 |
+| `deepseek-v4-pro` | ❌ | 1.32 / 3.96 | 刻意避开的（约 9 倍价） |
+
+**面板内的模型选择器是 S4 的范围**（"模型与思考等级"）。S2 只做到"不覆盖用户的选择 + 在状态行显示当前模型"。
 
 ### 11.4 自动化验收结果（本地，全部通过）
 

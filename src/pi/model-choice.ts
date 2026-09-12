@@ -104,6 +104,11 @@ export async function pickModel(runtime: {
 export interface AlignableSession {
   model?: { provider?: string; id?: string } | null;
   setModel(model: never, options?: { persist?: boolean }): Promise<void>;
+  /** 用来判断"用户有没有自己选过模型"（见 alignPanelModel）。 */
+  settingsManager?: {
+    getDefaultProvider?(): string | undefined;
+    getDefaultModel?(): string | undefined;
+  };
 }
 
 /**
@@ -155,6 +160,34 @@ export async function alignSessionModel(
   choice: Pick<ModelChoice, "provider" | "model" | "pinned">,
 ): Promise<string> {
   return alignModel(host.session as unknown as AlignableSession, choice);
+}
+
+/**
+ * **面板**用的模型策略：用户选过就听用户的，没选过才用我们的偏好兜底。
+ *
+ * 为什么与自测不同：
+ *   - 自测（`pickModel` + `alignModel`）会**钉死**一个便宜的模型，
+ *     因为它要跑很多次真实调用，需要确定性与低开销；
+ *   - 面板是给人用的，**不该覆盖用户在 pi 里选的模型**（PLAN 5.3 明确写着
+ *     "配置来源遵循 pi 自己的约定"）。用户没选过时（全新机器）才由我们兜底，
+ *     避免落到一个"凭据填错了但 pi 认为可用"的 provider 上
+ *     —— 受限那台机器就是这样被 `openai/gpt-5.5` 卡住的。
+ *
+ * 判断依据是 pi 设置里的 `defaultProvider` / `defaultModel`（都为空 = 用户没选过）。
+ */
+export async function alignPanelModel(
+  session: AlignableSession,
+  runtime: { getAvailable(): Promise<readonly unknown[]> },
+): Promise<string> {
+  const settings = session.settingsManager;
+  const savedProvider = settings?.getDefaultProvider?.();
+  const savedModel = settings?.getDefaultModel?.();
+  const current = session.model ? `${session.model.provider}/${session.model.id}` : "(none)";
+  if (savedProvider !== undefined || savedModel !== undefined) {
+    return `${current}（沿用 pi 设置里的默认 ${savedProvider ?? "?"}/${savedModel ?? "?"}，未覆盖）`;
+  }
+  const choice = await pickModel(runtime);
+  return alignModel(session, choice);
 }
 
 /** 列出**已配置凭据**的 provider，用于诊断输出。 */

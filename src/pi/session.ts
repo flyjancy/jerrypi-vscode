@@ -50,6 +50,14 @@ export interface SessionHostOptions {
   projectTrusted?: boolean;
   onEvent?: (event: AgentSessionEvent) => void;
   onExtensionError?: (error: ExtensionError) => void;
+  /**
+   * 每次会话替换（含首个会话）绑定完成后的钩子。
+   *
+   * 存在的理由：`newSession()` / `switchSession()` 会**按 pi 自己的规则重新解析模型**，
+   * 于是在建会话时做过的模型对齐会被丢掉（实测：新会话又变回 `deepseek-v4-pro`）。
+   * 需要"每个新会话都要做一次"的事（模型对齐）必须挂在这里，而不是建会话之后做一次。
+   */
+  onRebind?: (session: AgentSession) => Promise<void>;
 }
 
 export interface SessionHost {
@@ -126,6 +134,7 @@ export async function createSessionHost(options: SessionHostOptions): Promise<Se
         },
       },
     });
+    await options.onRebind?.(session);
   };
 
   runtime.setRebindSession(async (session) => {

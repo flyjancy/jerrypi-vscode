@@ -25,7 +25,7 @@ import type {
 import type { ChatItem, ServerMessage } from "../shared/protocol";
 import type { EventSink } from "./bindings";
 import type { PiModule } from "./loader";
-import { alignSessionModel, pickModel } from "./model-choice";
+import { alignPanelModel } from "./model-choice";
 import { createToolCallIndex, indexToolCalls, serializeMessage, serializeMessages, summarizeArgs, type ToolCallIndex } from "./serialize";
 import { createSessionHost, type SessionHost } from "./session";
 import { getModelRuntime, type ApiKeyStore } from "./runtime";
@@ -168,14 +168,19 @@ export class SessionHostController {
       projectTrusted: false,
       onEvent: (event) => this.handleEvent(event),
       onExtensionError: (error) => this.handleExtensionError(error),
+      // 面板不钉模型：用户选过就听用户的（见 alignPanelModel 的注释）。
+      // 挂在 onRebind 上是因为 `newSession()` 之后 pi 会重新解析模型，建会话时做一次不够。
+      onRebind: async (session) => {
+        const detail = await alignPanelModel(
+          session as unknown as Parameters<typeof alignPanelModel>[0],
+          modelRuntime as { getAvailable(): Promise<readonly unknown[]> },
+        );
+        this.options.log.appendLine(`[controller] 模型：${detail}｜cwd=${cwd}｜agentDir=${agentDir}`);
+      },
     });
     this.host = host;
 
-    const choice = await pickModel(modelRuntime as { getAvailable(): Promise<readonly unknown[]> });
-    const detail = await alignSessionModel(host, choice);
-    this.options.log.appendLine(
-      `[controller] 模型：${detail}｜cwd=${cwd}｜agentDir=${agentDir}`,
-    );
+
   }
 
   // ---------------------------------------------------------------- 发送语义

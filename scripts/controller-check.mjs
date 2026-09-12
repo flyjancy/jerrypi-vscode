@@ -246,6 +246,44 @@ async function main() {
     const before = controller.snapshot().items.length;
     await controller.newSession();
     check("newSession 后历史清空", controller.snapshot().items.length === 0 && before > 0);
+
+    // ---------------------------------------------------- 6. 面板的模型策略
+    // 6a：临时 agentDir 里**没有** settings.json → 用户没选过 → 用我们的偏好兜底
+    check("用户没选过模型时，兜底到便宜的 flash（不用 pro）",
+      controller.snapshot().model === "deepseek/deepseek-v4-flash", controller.snapshot().model);
+
+    // 6b：用户选过（settings.json 里有 defaultProvider/defaultModel）→ 不覆盖
+    {
+      const agentDir2 = path.join(root, "agent2");
+      fs.mkdirSync(agentDir2, { recursive: true });
+      fs.copyFileSync(path.join(sourceAgentDir, "auth.json"), path.join(agentDir2, "auth.json"));
+      fs.writeFileSync(
+        path.join(agentDir2, "settings.json"),
+        // 用一个"与我们的兜底不同"的模型，才能真正证明没有被覆盖：
+        // 兜底会选 deepseek-v4-flash，这里故意选 flash-vision-exp。
+        JSON.stringify({ defaultProvider: "deepseek", defaultModel: "deepseek-v4-flash-vision-exp" }),
+        "utf8",
+      );
+      const second = new SessionHostController({
+        pi, cwd, agentDir: agentDir2, sessionsDir: path.join(root, "sessions2"),
+        keys: { listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {} },
+        uiContext: createSelfTestUIContext(log),
+        log,
+        onMessage: () => {},
+      });
+      try {
+        await second.ensure();
+        const picked = second.snapshot().model;
+        check("用户选过模型时，面板不覆盖（跟着 pi 设置走）",
+          picked === "deepseek/deepseek-v4-flash-vision-exp", picked);
+        // 再换一个会话：新会话同样要保住用户的选择
+        await second.newSession();
+        check("新会话之后仍然保住用户的选择",
+          second.snapshot().model === "deepseek/deepseek-v4-flash-vision-exp", second.snapshot().model);
+      } finally {
+        await second.dispose().catch(() => {});
+      }
+    }
   } finally {
     await controller.dispose().catch(() => {});
     fs.rmSync(root, { recursive: true, force: true });
