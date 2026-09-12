@@ -2,7 +2,7 @@
 /**
  * 最小自检 —— 不引入测试框架，只用 node:assert 风格的手写断言 + 子进程。
  *
- * 覆盖 4 个用例（对应 docs/S0-plan.md §4.4）：
+ * 覆盖 6 个用例：
  *   1. 正用例：`npm run sync` 成功，且 pi-runtime/.version 等于 package.json 的钉版；
  *   2. 负用例：裸依赖扫描对未知包抛错（同时对已知包放行）；
  *   3. 负用例：删掉 jiti 后，隔离校验必须非零退出（依赖完整性）；
@@ -22,9 +22,10 @@ const SYNC_SCRIPT = path.join(SCRIPT_DIR, "sync-pi-runtime.mjs");
 const VERIFY_SCRIPT = path.join(SCRIPT_DIR, "verify-isolated-runtime.mjs");
 const FIXTURE_PATH = path.join(REPO_ROOT, "test-fixtures", "ext-smoke", "index.ts");
 const RESOURCES_TS = path.join(REPO_ROOT, "src", "pi", "resources.ts");
+const PROTOCOL_CHECK = path.join(SCRIPT_DIR, "protocol-check.mjs");
 const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 
-const TOTAL = 5;
+const TOTAL = 6;
 let passed = 0;
 
 function pass(id, name, detail) {
@@ -175,6 +176,17 @@ function extractStringArray(source, exportName) {
   return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
 }
 
+function testProtocolChecks() {
+  // S2 的纯函数层（serialize 的 id 规则、urlPolicy 的白名单）单独由脚本检查，
+  // 这里只保证它**真的会被跑**——漂移的检查脚本等于没有检查。
+  const result = spawnSync(process.execPath, [PROTOCOL_CHECK], { cwd: REPO_ROOT, encoding: "utf8" });
+  const output = `${result.stdout}${result.stderr}`.trim();
+  if (result.status !== 0) {
+    fail(6, "protocol checks pass", output.split("\n").slice(-3).join(" | "));
+  }
+  pass(6, "protocol checks pass", output.split("\n").slice(-1)[0]);
+}
+
 async function main() {
   console.log(`[self-test] pi runtime: ${RUNTIME_DIR}`);
   testSyncProducesVersion();
@@ -182,6 +194,7 @@ async function main() {
   testMissingDependencyFailsVerification();
   testIdempotentSync();
   await testResourceListDrift();
+  testProtocolChecks();
   console.log(`SELF-TEST OK (${passed}/${TOTAL})`);
 }
 

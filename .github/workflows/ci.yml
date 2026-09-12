@@ -41,8 +41,11 @@ jobs:
       - name: Sync pi runtime + 7 checks (A2)
         run: npm run sync
 
-      - name: Self-test, 1 positive + 4 negative (A3)
+      - name: Self-test, 4 positive + 2 negative (A3)
         run: npm run self-test
+
+      - name: Unit checks (serialize + url policy)
+        run: npm run check:protocol
 
       - name: Clean build + package (A5b, A6)
         run: |

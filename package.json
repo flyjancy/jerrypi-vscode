@@ -57,6 +57,7 @@
   "scripts": {
     "sync": "node scripts/sync-pi-runtime.mjs",
     "self-test": "node scripts/self-test.mjs",
+    "check:protocol": "node scripts/protocol-check.mjs",
     "build": "node esbuild.mjs",
     "typecheck": "tsc --noEmit",
     "compile": "npm run sync && npm run build",
