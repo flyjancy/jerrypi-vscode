@@ -26,6 +26,11 @@ const REQUIRED_FILES = [
   "dist/webview.js",
   "dist/style.css",
   "media/jerrypi.svg",
+  // CHANGELOG.md 会被 VS Code 读成扩展详情页的 Changelog 标签页；
+  // vsce 的 ignore 规则同样能把它静默排除，所以一并断言。
+  // 注意路径是**小写**：vsce 把根级的 README/CHANGELOG 放进包时会统一转小写
+  // （实测 readme.md / changelog.md），写成 CHANGELOG.md 反而会误报缺失。
+  "changelog.md",
 ];
 
 const target = process.argv[2];

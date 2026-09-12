@@ -99,11 +99,24 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 | 命令 | 作用 |
 | --- | --- |
 | `npm run sync` | 把 pi 运行时复制进 `pi-runtime/`，并跑 7 条打包校验（含隔离 import、隔离加载扩展） |
-| `npm run self-test` | 1 个正用例 + 3 个负用例（缺依赖必须非零退出、sync 必须幂等） |
-| `npm run typecheck` / `npm run build` | 类型检查 / esbuild 打包扩展自身 |
+| `npm run typecheck` | 类型检查（两个 tsconfig：扩展宿主一份、webview 一份带 DOM 类型） |
+| `npm run build` | esbuild 产出三个文件：`dist/extension.js`、`dist/webview.js`、`dist/style.css` |
+| `npm run self-test` | 6 个用例：打包断言的正/负用例、`sync` 幂等性、协议与渲染断言 | 
+| `npm run check:protocol` | 63 条聊天协议断言（纯函数，不需要网络） |
+| `npm run check:render` | 42 条渲染与 XSS 断言（12 个载荷 + 图片策略 + CSP） |
+| `npm run check:controller` | 27 条面板控制器断言；**需要凭据与网络**（没有凭据时打印 SKIPPED 并跳过） |
 | `npm run package` | 构建 + 打包 `.vsix`；vsce 打包前会自动执行 `vscode:prepublish`（唯一构建入口） |
-| `npm run check-vsix -- jerrypi-0.1.0.vsix` | `.vsix` 体积门禁（< 30 MB） |
+| `npm run check-vsix -- jerrypi-0.1.4.vsix` | `.vsix` 体积门禁（< 30 MB）与必需文件校验 |
 | `npm run vscode:prepublish` | 等同于 `sync && build` |
+
+**发布一个新版本**（目前的流程是手动上传）：
+
+1. 改 `package.json` 的 `version`，并在 `CHANGELOG.md` **顶部**为这个版本号写一段
+   —— VS Code 扩展详情页的 Changelog 标签页直接读这个文件；
+2. `npm run typecheck && npm run self-test && npm run check:controller`；
+3. `npm run package`，再 `npm run check-vsix -- jerrypi-<版本>.vsix`；
+4. 到 https://marketplace.visualstudio.com/manage 手动上传，**保持"预发布"勾选**；
+5. 上传完成后从市场下载回来比对字节数与 SHA-256，确认与本地构建一致。
 
 装好扩展后，用 `Pi: Run Self-Test` 跑可行性闸门（T1–T9，结果写在 `jerrypi` Output 频道）：它会验证 pi 运行时能否在扩展宿主里真实加载、扩展生命周期、真实模型流式对话、子进程与中止、文件读写编辑、会话持久化与替换、图片 worker 往返。**跑之前先用 `Pi: Set API Key` 配一把 provider key**（默认 DeepSeek），否则 T4/T6/T7/T9 会以 `E_NO_CREDENTIALS` 失败。
 
@@ -242,11 +255,24 @@ Common scripts:
 | Command | Purpose |
 | --- | --- |
 | `npm run sync` | Copies the pi runtime into `pi-runtime/` and runs the 7 packaging checks (including isolated import and isolated extension loading) |
-| `npm run self-test` | 1 positive + 3 negative cases (missing dependency must exit non-zero, sync must be idempotent) |
-| `npm run typecheck` / `npm run build` | Type checking / bundles the extension itself with esbuild |
+| `npm run typecheck` | Type checking for both tsconfigs (extension host, and the webview one with DOM types) |
+| `npm run build` | esbuild produces `dist/extension.js`, `dist/webview.js` and `dist/style.css` |
+| `npm run self-test` | 6 cases: positive/negative packaging assertions, `sync` idempotency, protocol and render checks |
+| `npm run check:protocol` | 63 chat-protocol assertions (pure functions, no network) |
+| `npm run check:render` | 42 rendering and XSS assertions (12 payloads, image policy, CSP) |
+| `npm run check:controller` | 27 panel-controller assertions; **needs credentials and network** (prints SKIPPED without them) |
 | `npm run package` | Build + package the `.vsix`; vsce runs `vscode:prepublish` first (the single build entry point) |
-| `npm run check-vsix -- jerrypi-0.1.0.vsix` | `.vsix` size gate (< 30 MB) |
+| `npm run check-vsix -- jerrypi-0.1.4.vsix` | `.vsix` size gate (< 30 MB) and required-file check |
 | `npm run vscode:prepublish` | Equivalent to `sync && build` |
+
+**Releasing a new version** (currently a manual upload):
+
+1. Bump `version` in `package.json` and add a section for that version at the **top** of
+   `CHANGELOG.md` — VS Code's extension page reads it for the Changelog tab;
+2. `npm run typecheck && npm run self-test && npm run check:controller`;
+3. `npm run package`, then `npm run check-vsix -- jerrypi-<version>.vsix`;
+4. Upload manually at https://marketplace.visualstudio.com/manage, **keeping the pre-release box ticked**;
+5. After the upload, download it back from the Marketplace and compare size and SHA-256 with the local build.
 
 Once installed, run the feasibility gate with `Pi: Run Self-Test` (T1–T9, results go to the `jerrypi` output channel): it checks that the pi runtime really loads inside the extension host, extension lifecycle, a real streaming model call, subprocesses and aborts, file read/write/edit, session persistence and replacement, and the image worker round-trip. **Configure a provider key with `Pi: Set API Key` first** (DeepSeek by default), otherwise T4/T6/T7/T9 fail with `E_NO_CREDENTIALS`.
 
