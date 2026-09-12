@@ -214,8 +214,8 @@ async function main() {
       JSON.stringify(mid.items.map((i) => i.id)));
     check("执行中快照 busy=true", mid.busy === true);
     messages.length = 0;
-    void controller.prompt("排队一", "followUp");
-    void controller.prompt("排队二", "steer");
+    void controller.prompt("取回甲", "steer").catch(() => {});
+    void controller.prompt("取回乙", "followUp").catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 600));
     // 关键回归：入队也必须回一个"已接受"，否则前端会把用户的下一条消息卡住
     // （实测现象：队列里有一条时，第二条点「排队」毫无反应）。
@@ -225,11 +225,25 @@ async function main() {
     const queued = controller.snapshot().queue;
     check("排队后快照里能看到两条（steering + followUp）",
       queued.steering.length === 1 && queued.followUp.length === 1, JSON.stringify(queued));
+
+    // pi 的 "edit all queued messages"（dequeue）：**取回**而不是丢弃，
+    // 顺序 steering 在前、空行分隔（对齐 interactive-mode.js 的 allQueued.join("\n\n")）。
+    const taken = controller.clearQueue();
+    check("取回队列返回文本而不是丢弃", taken === "取回甲\n\n取回乙", JSON.stringify(taken));
+    check("取回后队列为空",
+      controller.snapshot().queue.steering.length === 0 && controller.snapshot().queue.followUp.length === 0,
+      JSON.stringify(controller.snapshot().queue));
+
+    // 再排两条，这次用中止把它们退回输入框（Esc 在 pi 里就是这个行为）
+    messages.length = 0;
+    void controller.prompt("退回甲", "steer").catch(() => {});
+    void controller.prompt("退回乙", "followUp").catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 600));
     await controller.abort();
     await long.catch(() => {});
     const restored = messages.filter((m) => m.type === "restoreComposer").map((m) => m.text);
     check("中止后被清掉的排队文本退回输入框（D9 回归）",
-      restored.join("|").includes("排队一") && restored.join("|").includes("排队二"), JSON.stringify(restored));
+      restored.join("|").includes("退回甲") && restored.join("|").includes("退回乙"), JSON.stringify(restored));
     const lastQueue = messages.filter((m) => m.type === "queue").pop();
     check("中止后队列条清空",
       lastQueue !== undefined && lastQueue.steering.length === 0 && lastQueue.followUp.length === 0,

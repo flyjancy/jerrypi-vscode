@@ -229,13 +229,22 @@ function checkWebviewElementIds() {
   check("按钮不可收缩且不换行",
     /flex:\s*0 0 auto/.test(buttonRule) && /white-space:\s*nowrap/.test(buttonRule), buttonRule.trim());
   // D10 修订：发送即清空，不再依赖"回显时比对文本"。
+  // 用词一律对齐 pi 的 TUI：Steering / Follow-up / "edit all queued messages"。
   check("提示语不再谎称会打断（steer 只在本段结束后注入）",
-    !/打断当前回复/.test(mainCode) && /这段写完后注入/.test(mainCode));
+    !/打断当前回复/.test(mainCode) && /转向（写完这段就注入）/.test(mainCode));
+  check("队列条用词对齐 pi（转向 / 追加 / 取回编辑）",
+    /转向：/.test(mainCode) && /追加：/.test(mainCode) && /取回编辑/.test(mainCode));
   check("发送后立即清空输入框（不再比对 sentText）",
     /input\.value = ""/.test(mainCode) && !/sentText/.test(mainCode));
   // 协议版本只能有一处来源：两边硬编码成两个数字是最容易漏的漂移。
   const chatView = fs.readFileSync(path.join(REPO_ROOT, "src/host/chatView.ts"), "utf8");
   check("chatView 不硬编码协议版本", !/protocol:\s*\d/.test(chatView));
+  // pi 的 dequeue 是"取回编辑"，不是"丢弃"：聊天视图必须把返回值回填。
+  check("取回队列的文本被回填而不是丢弃",
+    /const restoredText = controller\.clearQueue\(\)/.test(chatView) && /restoreComposer/.test(chatView));
+  // 回填顺序对齐 pi：队列在前、当前输入在后、空行分隔
+  check("回填顺序与 pi 一致（队列在前、当前输入在后、空行分隔）",
+    /\[message\.text, input\.value\]/.test(mainCode) && /join\("\\n\\n"\)/.test(mainCode));
   for (const id of referenced) {
     check(`HTML 里存在 id="${id}"`, declared.has(id), `已声明：${[...declared].join(", ")}`);
   }

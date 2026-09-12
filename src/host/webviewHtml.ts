@@ -64,7 +64,7 @@ export function buildWebviewHtml(options: WebviewHtmlOptions): string {
   <div class="composer-actions">
     <span id="composer-hint" class="hint"></span>
     <div class="buttons">
-      <button id="queue-button" class="button secondary" hidden>排队</button>
+      <button id="queue-button" class="button secondary" hidden>追加</button>
       <button id="abort-button" class="button secondary" hidden>中止</button>
       <button id="send-button" class="button primary">发送</button>
     </div>

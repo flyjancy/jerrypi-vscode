@@ -141,18 +141,23 @@ function renderQueue(queue: { steering: string[]; followUp: string[] }): void {
   if (total === 0) return;
   const title = element("div", "queue-title");
   title.textContent = `待处理 ${total} 条`;
-  const clear = element("button", "button tiny");
-  clear.textContent = "清空队列";
-  clear.addEventListener("click", () => vscode.postMessage({ type: "clearQueue" }));
-  queueBar.append(title, clear);
+  // pi 的队列区在消息下面还有一行提示，指向"取回全部排队消息"这个动作，照做。
+  const dequeue = element("button", "button tiny");
+  dequeue.textContent = "取回编辑";
+  dequeue.addEventListener("click", () => vscode.postMessage({ type: "clearQueue" }));
+  queueBar.append(title, dequeue);
+  const hintRow = element("div", "queue-hint");
+  hintRow.textContent = "↳ 点「取回编辑」把排队的消息放回输入框";
+  queueBar.appendChild(hintRow);
   for (const text of queue.steering) {
     const row = element("div", "queue-row queue-steer");
-    row.textContent = `下一步注入：${text}`;
+    // 用词对齐 pi 的 TUI：Steering / Follow-up
+    row.textContent = `转向：${text}`;
     queueBar.appendChild(row);
   }
   for (const text of queue.followUp) {
     const row = element("div", "queue-row queue-followup");
-    row.textContent = `排队：${text}`;
+    row.textContent = `追加：${text}`;
     queueBar.appendChild(row);
   }
 }
@@ -168,7 +173,7 @@ function renderStatus(): void {
   // 提示语必须说真话：pi 的 steer **不会掐断正在生成的那段文字**，
   // 而是在"这段输出结束、下一次调用模型之前"注入（pi 的 TUI 也是这个行为）。
   // 第一版的提示语声称"会打断当前回复"，那是照抄 PLAN.md 5.2 的错误描述，已更正。
-  hint.textContent = busy ? "Enter：这段写完后注入新指令\n「排队」：整轮全部结束后再发" : "";
+  hint.textContent = busy ? "Enter：转向（写完这段就注入）\n「追加」：整轮结束后再发" : "";
   scrollToBottom();
 }
 
@@ -240,11 +245,15 @@ window.addEventListener("message", (event: MessageEvent<ServerMessage>) => {
       }
       renderStatus();
       return;
-    case "restoreComposer":
-      // 中止时被退回的排队文本：追加到输入框（不覆盖用户已经打了一半的内容）。
-      input.value = input.value === "" ? message.text : `${input.value}\n${message.text}`;
+    case "restoreComposer": {
+      // 退回队列消息到输入框。顺序与分隔符**对齐 pi 的 TUI**：
+      //   const combinedText = [queuedText, currentText].filter(t => t.trim()).join("\n\n");
+      // 即"队列消息在前、用户已打的内容在后"，空行分隔（按时间顺序读起来才顺）。
+      const combined = [message.text, input.value].filter((part) => part.trim() !== "").join("\n\n");
+      input.value = combined;
       input.focus();
       return;
+    }
     default:
       return;
   }

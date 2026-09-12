@@ -200,6 +200,11 @@ body {
   color: var(--vscode-descriptionForeground);
 }
 
+.queue-hint {
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.8;
+}
+
 .queue-row {
   color: var(--vscode-descriptionForeground);
   white-space: pre-wrap;

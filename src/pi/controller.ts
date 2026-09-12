@@ -253,16 +253,24 @@ export class SessionHostController {
     if (session.isIdle) this.emit({ type: "busy", busy: false });
   }
 
-  clearQueue(): void {
-    this.drainQueue();
+  /**
+   * 把队列里的消息全部取出来（pi 的 `clearQueue`）。
+   *
+   * 对应 pi TUI 的 **"edit all queued messages"**：不是"丢弃"，而是**取回输入框**，
+   * 所以这里把文本返回给调用方去回填。返回顺序与 pi 一致：
+   * steering 在前、followUp 在后，用空行连接（`interactive-mode.js` 的
+   * `allQueued.join("\n\n")`）。
+   */
+  clearQueue(): string {
+    return this.drainQueue();
   }
 
   private drainQueue(): string {
     const session = this.view();
     const cleared = session.clearQueue();
     this.emit({ type: "queue", steering: [], followUp: [] });
-    // 退回顺序与投递顺序一致：steering 在前、followUp 在后。
-    return [...cleared.steering, ...cleared.followUp].join("\n");
+    // 顺序与分隔符都对齐 pi 的 TUI：steering 在前、followUp 在后，空行分隔。
+    return [...cleared.steering, ...cleared.followUp].join("\n\n");
   }
 
   /** 开一个新会话（D8 的 `Pi: New Session`）。 */

@@ -106,7 +106,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           return;
         }
         case "clearQueue": {
-          controller.clearQueue();
+          // pi 的 "edit all queued messages"：取回输入框，不是丢弃。
+          // （第一版这里把返回值扔了 —— 用户排队的字会静默消失。）
+          const restoredText = controller.clearQueue();
+          if (restoredText !== "") this.post({ type: "restoreComposer", text: restoredText });
           return;
         }
         case "openExternal": {
