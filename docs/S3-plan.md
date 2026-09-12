@@ -49,7 +49,8 @@ entry_appended, turn_end, agent_end, agent_settled
 
 4. **快照会"换头"：超过 50KB 后保留的是最后 50KB，先前流出的开头会消失**（探针 G）。
    实测 160KB 输出：`update#2` = 82 字符（从"行 1"起）、`update#3` = 48,971 字符（从**"行 2888"**起）。
-   → 断言**不能**写"正文单调增长"，只能写"正文 === 最后一次快照"；
+   → 断言**不能**写"正文单调增长"：流式期间要断"正文 === 当次快照"，
+     最终态要断"以最后一次快照为**前缀**"（最终态还会多出 pi 的截断脚注）；
    UI 上展开态看到顶部内容被顶掉是**预期行为**（pi 的 TUI 同样如此，它用 `... (N earlier lines)` 提示）。
 
 ### 0.3 只有 bash 会流式（`onUpdate(` 的真实调用次数）
@@ -148,14 +149,17 @@ entry_appended, turn_end, agent_end, agent_settled
    单条上限裁剪），`serialize.ts` 用它把 `toolResult` 消息转成带正文的 item。
    **实时与重放仍然共用这一个序列化器**（S2 的硬约束，不许破）。
 3. **控制器**：处理 `tool_execution_update` → 就地 upsert 同一 id 的工具行；
-   缓存每个工具的 partial 文本供重放使用；登记"可打开的文件路径"白名单。
-4. **宿主**：处理 `openFile`（只放行控制器铸造过的 `file://` URL）。
+   `tool_execution_start` 记开始时间并铸造路径、`tool_execution_end` 记结束时间；
+   缓存每个工具的 partial 文本供重放**和**中止收口使用；登记"可打开的文件路径"白名单。
+4. **宿主**：处理 `openFile`（只放行由序列化器铸造过、控制器登记过的**绝对路径**）。
 5. **UI**：工具卡片（标题行 + 可展开正文）、bash 折叠显示最后 5 行、耗时、截断脚注、
    **就地更新**（不整体重写 DOM）、**粘底滚动**。
 6. **可打开路径**：由 `serialize.ts` 在每次序列化时铸造（重放也会重新铸造，所以历史卡片照样能点），
    控制器登记成白名单，host 只做精确比对后 `Uri.file` 打开。
-7. **检查**：新增纯函数与渲染断言；`check:controller` 补真实场景（流式、重开、失败、截断、
-   帧竞态、快照体积与耗时）。
+7. **中止路径**：`settlePendingTools()` 发最终 item 时**必须合并 partial 正文**，
+   并清理该工具的 partial 缓存（否则中止一次泄漏一份最多 64KB 的字符串）。
+8. **检查**：新增纯函数与渲染断言；`check:controller` 补真实场景（流式、重开、失败、截断、
+   中止、帧竞态、快照体积与耗时）。
 
 ### 1.2 不做（留给后续步骤，明确边界）
 
@@ -175,7 +179,7 @@ entry_appended, turn_end, agent_end, agent_settled
 | --- | --- | --- |
 | `src/shared/toolText.ts` | **新增** | 纯函数：ANSI 剥离、控制字符净化、图片降级提示、单条裁剪 |
 | `src/shared/protocol.ts` | 改 | tool item 新字段；`openFile`；三个新常量 |
-| `src/pi/serialize.ts` | 改 | `toolResult` 分支补正文与元信息；`itemChars` 计入正文 |
+| `src/pi/serialize.ts` | 改 | `toolResult` 分支补正文与元信息；新收 `ctx = { cwd }`（铸路径）；`itemChars` → `itemBytes`（按 UTF-8 字节） |
 | `src/pi/controller.ts` | 改 | `tool_execution_update`；partial 缓存；可打开路径登记；重放合并 |
 | `src/host/chatView.ts` | 改 | `openFile` 分发（校验后 `showTextDocument`） |
 | `src/webview/render.ts` | 改 | `renderToolCard`（纯函数，仍可在 Node 里跑） |
@@ -185,7 +189,7 @@ entry_appended, turn_end, agent_end, agent_settled
 | `scripts/self-test.mjs` | 改 | 用例 6 挂上新的检查脚本 |
 | `scripts/protocol-check.mjs` | 改 | tool item 字段、实时/重放一致性的静态断言 |
 | `scripts/render-xss-check.mjs` | 改 | 卡片渲染与转义断言 |
-| `scripts/controller-check.mjs` | 改 | 真实场景：流式多次 upsert、中途重开、失败、截断、白名单 |
+| `scripts/controller-check.mjs` | 改 | 真实场景：流式多次 upsert、中途重开、失败、截断、**中止不丢正文**、**帧竞态**、白名单（含运行中的卡片）；并打印两项量测（流式字节率、snapshot 体积与耗时） |
 | `README.md` | 改 | 特性表把"工具行"升级为"工具卡片"；已知限制补一条（图片不显示） |
 | `docs/PLAN.md` | 改 | S3 状态标记；如发现事实与计划不符，就地更正 |
 
@@ -201,7 +205,8 @@ entry_appended, turn_end, agent_end, agent_settled
    | --- | --- | --- |
    | `toolName / summary / text / truncation / isError` | `serialize.ts` | ✅ 有 |
    | `openablePaths` | `serialize.ts`（读 `ctx.cwd`） | ✅ 有（每次重放重新铸造） |
-   | `startedAt / endedAt / pending` | `controller.ts` 装饰 | ❌ 没有（内存态） |
+   | `startedAt / endedAt` | `controller.ts` 装饰（只在实时路径） | ❌ **没有**（内存时钟，重启后无从得知） |
+   | `pending` | `controller.ts` 装饰 | ✅ **有**：`snapshot()` 用 `state.pendingToolCalls` + 我们的 `partials` 重建运行中的行（§4.4 第 2 条）；但它**不由 `serialize.ts` 产出**，所以等价性断言要把它单独排除 |
 
    → `serializeMessage(raw, index, toolCalls, ctx)` / `serializeMessages(messages, ctx)`，
    `ctx = { cwd }`；等价性断言比较时**显式剔除**实时独占字段（§6.1）。
@@ -252,6 +257,12 @@ export const TOOL_FRAME_MS = 200;           // 工具 upsert 合并窗口
 ```
 
 `openablePaths` 只出现在 item 里，**由 `serialize.ts` 铸造**（见 §4.3），也是唯一的白名单来源。
+铸造逻辑拆成两个可复用函数（**运行中的卡片也要有可点路径**，见 §4.4 第 3 条）：
+
+```ts
+openablePathsOfArgs(args, cwd): string[]    // 工具参数里的 path，相对路径按 cwd 解析
+openablePathsOfResult(message, ctx): string[] // 上面那个 + details.fullOutputPath
+```
 **传路径而不是 `file://` URL**：`vscode.Uri.parse("/tmp/a#b.log")` 会把 `#` 当 fragment，
 打开的是另一个文件或直接失败；用 `vscode.Uri.file(path)` 没有这个歧义
 （Windows 的 `C:\…` 形态也因此不必转义）。
@@ -269,7 +280,7 @@ clipToolText(text, maxBytes): { text, clipped }  // 按 **UTF-8 字节**裁剪�
 ```
 
 守卫：`clipToolText` 必须按**字节**量（`TextEncoder`），但裁剪点要回退到**字符/代理对边界**
-（不能切出半个 emoji），并且只裁一次（二次裁剪会把"已截断"标记也裁掉）。
+（不能切出半个 emoji），并且只裁一次（二次裁剪会把"…（已省略 N 字节）"这个标记自己也裁掉）。
 
 ### 4.3 `src/pi/serialize.ts`（增量）
 
@@ -279,7 +290,7 @@ clipToolText(text, maxBytes): { text, clipped }  // 按 **UTF-8 字节**裁剪�
 const body = toolTextFromContent(message.content);
 const clipped = clipToolText(body, TOOL_TEXT_MAX_BYTES);
 const meta = toolMetaOf(message.details);   // 只取标量，**不带** truncation.content
-const openablePaths = openablePathsOf(message, ctx);  // 参数 path + details.fullOutputPath，按 ctx.cwd 解析成绝对路径
+const openablePaths = openablePathsOfResult(message, ctx);  // 参数 path + details.fullOutputPath，按 ctx.cwd 解析
 ```
 
 `itemChars` 改名 `itemBytes`，并把 `text` 的 **UTF-8 字节数**算进去
@@ -314,11 +325,19 @@ const openablePaths = openablePathsOf(message, ctx);  // 参数 path + details.f
      → **面板中途重开能看到已经流出来的字，并且继续长**（C1/N1 家族第四处）；
    - 清理时机：`tool_execution_end` 之后仍保留到该 toolResult 的 `message_end`
      （最终态由消息构建），随后删除；会话替换 / `newSession` 时整体清空。
+   - ⚠️ **中止路径必须一起改**：`settlePendingTools()`（`controller.ts:501-513`）现在发的是
+     `{...item, pending:false, isError:true}`，而那个 `item` 是 S2 在 `tool_execution_start`
+     时建的**只有参数摘要的壳**。正文放在 `partials` 里之后，中止瞬间发出的这一条**不带正文**
+     → 用户眼看着流了 10 秒的输出，一点中止全没了。所以这一处必须
+     **(a) 合并 partial 正文、(b) 同时删掉 `partials` 里的条目**（被中止的工具通常不会产生
+     toolResult，那个 `message_end` 永远不来，不删就是每次中止泄漏一份 ≤64KB 的字符串）。
 
 3. **可打开路径白名单**
    - `private openable = new Set<string>()`（值 = **绝对路径**，不是 URL）；
    - 铸造点在 `serialize.ts`（§4.3）：工具参数里的 `path` 与 `details.fullOutputPath`，
      相对路径按**会话 cwd** 解析（`path.resolve`，与 pi 的 `linkPath` 同规则）；
+   - **`tool_execution_start` 建行时也要铸造**（它手上就有 `args`）：否则一个**正在执行**的
+     `read`/`edit` 卡片，标题里的路径点下去会被 host 拒 —— 而 M1/M11 都是在工具结束后点的，测不到这一格；
    - 控制器在**每次发 item / 每次 `snapshot()` 时**把这些路径登记进来；
      `snapshot()` **重建**集合（不是累加）——因为重放出来的卡片才是 webview 上真实存在的卡片；
    - `isOpenableFile(path: string): boolean` 只做精确字符串比对（外加绝对路径校验）。
@@ -360,6 +379,7 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 - 粘底：`isAtBottom()` 阈值约 40px；`renderItem` 只在 `isAtBottom()` 为真时滚到底；
   用户点发送/回车时强制滚到底；
 - 进行中的耗时：`setInterval(1s)` 只更新"进行中"卡片的耗时文本（不重发协议消息）。
+  **停表条件**：没有 running 卡片时清掉定时器；`window` 的 `pagehide`/`unload` 时也要清。
 
 ### 4.8 `src/webview/style.css`（增量）
 
@@ -422,6 +442,8 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 | M10 | 让 agent `edit` 一个小文件 | 卡片标题是可点路径；正文是结果文本（**没有 diff** —— 那是 S7） |
 | M11 | **重开面板（`Developer: Reload Webviews`）后点历史卡片里的路径** | 仍能在编辑器里打开（白名单由重放重新铸造 —— 这是评审抓到的洞） |
 | M12 | 让 agent 输出超过 50KB（如 `seq 1 4000`）并展开卡片 | 正文能看到尾部与 pi 的截断脚注 `[Showing … Full output: …]`；**顶部内容被顶掉是预期的**（§0.2 第 4 条） |
+| M13 | **M2 流式中途点「中止」** | 已经流出来的正文**仍在**（状态变 ✗、不再增长），**不是空白** —— 这是评审抓到的"中止吃掉输出"回归点 |
+| M14 | **让 agent `read` 一个文件，在它执行期间点卡片标题上的路径** | 能打开 —— 运行中的卡片也要有可点路径（§4.4 第 3 条） |
 
 ### 6.3 受限 Windows 机（人工，从 Marketplace 更新后）—— W 系列
 
@@ -429,6 +451,7 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 | --- | --- | --- |
 | W0 | **先跑 `Pi: Run Self-Test`** | 仍须 `GATE PASS`（本步动了 `serialize.ts`/`controller.ts`，属于 S1 已验证路径的邻居，必须先自证没破坏） |
 | W1 | M1 + M2 | 同 Mac |
+| W6 | M13（中止不丢正文） | 受限机上中止走的是 Git Bash + 进程树回收，路径与 Mac 不同，值得单独回归一次 |
 | W2 | M3 + M7（重开 + 展开态） | 同 Mac —— 这两条是 S3 最容易在两台机器上表现不同的地方 |
 | W3 | M5（截断 + 打开完整输出） | Windows 的临时目录路径形态不同（`C:\Users\…\AppData\Local\Temp\…`），要确认可点路径在 Windows 上也能打开 |
 | W4 | M4 + M9 | 失败态与 XSS 回归 |
@@ -436,7 +459,7 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 
 ### 6.4 判据
 
-- CI 全绿；Mac 的 M1–M10 全 PASS；Windows 的 W0–W4 全 PASS。
+- CI 全绿；Mac 的 **M1–M14** 全 PASS；Windows 的 **W0–W6** 全 PASS。
 - 任一 FAIL 都记录在 `docs/S3-plan.md` 的实施记录里（含截图/日志），**不许口头放过**。
 
 ---
@@ -476,13 +499,13 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 
 | # | 风险 | 缓解 |
 | --- | --- | --- |
-| R1 | **把快照当增量**拼接（§0.2 第 2 条） | 协议里 tool 正文是"整体替换"语义；controller-check 断言"**正文 === 最后一次快照**"。⚠️ **不能**断言"单调增长"：超过 50KB 后快照会换头（探针 G，§0.2 第 4 条） |
+| R1 | **把快照当增量**拼接（§0.2 第 2 条） | 协议里 tool 正文是"整体替换"语义。`check:controller` 要写**两条**断言，不能合成一条：<br>① 流式期间每次 upsert 的正文 **=== 当次收到的快照**（不拼接、不合并历史）；<br>② **最终**正文以最后一次快照为**前缀**，可以多出 pi 的截断脚注（探针 G：`最终 = 最后一次快照 + 脚注`）。<br>⚠️ 不能断言"正文单调增长"：超过 50KB 后快照会换头（§0.2 第 4 条） |
 | R2 | **第一次更新的 `content: []`** 被当成"空输出"覆盖掉已有正文 | `onToolExecutionUpdate` 只在 `content[0]?.text` 存在时才更新正文（占位更新只用来建行） |
 | R3 | 就地更新写错 → 展开态在流式期间被重置 | M7 作为回归点；`toolViews` 只改 head/body 的 innerHTML |
 | R4 | 50KB/次 × 5 次/秒的 postMessage 体积 | 先量：`check:controller` 里统计一个 5 秒命令的消息数/字节数并打印；若持续 >100KB/s 再引入"前缀增量 + 最终整体 upsert" |
 | R5 | 重放时正文与实时不一致（历史里没有我们的裁剪标记） | 单点序列化 + `itemBytes` 计入正文 + protocol-check 的等价性断言 |
 | R6 | `details` 里的 `truncation.content` 让单条 item 翻倍 | 只取标量字段（§0.4 的结论），render/protocol 两侧各有一条断言 |
-| R7 | 路径白名单失效（伪造 `file://` 打开任意文件） | 白名单由控制器铸造；host 侧再校验一次；render-xss-check 里有"未登记 URL 不可点"的断言 |
+| R7 | 路径白名单失效（伪造一个路径打开任意文件） | 白名单由序列化器铸造、控制器登记；host 侧只做**精确字符串**比对（不解析路径）；render-xss-check 里有"未登记路径不可点"的断言 |
 | R8 | 大正文把 DOM 拖慢（每次 upsert 重排 50KB） | 折叠态只渲染 5 行；展开态仍重排但受 `max-height` 限制；必要时后续做虚拟滚动（记入 S3 的"遗留事项"） |
 
 ---
@@ -505,7 +528,7 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 - **探针 E**：`read` 一个 60 行文件 → 530 字符正文，`details = undefined`。
 - **探针 F**：一条 assistant 消息里两个工具调用 → `tool_execution_start` 顺序 `bash → read`，
   `toolResult` 顺序一致。
-- **探针 G（流式 + 超过 50KB，约 160KB 输出）**：
+- **探针 G（流式 + 超过 50KB，实测输出 182,893 字节 ≈ 180KB）**：
   `update#1` 占位（`text=null`）；`update#2` 82 字符（首行"行 1"）；
   `update#3` 48,971 字符（首行**"行 2888"** —— 开头已被丢弃）；
   最终正文 49,113 字符，尾部 `… 4000 of 4000 (50.0KB limit). Full output: /var/…/pi-bash-6452….log]`，
@@ -534,3 +557,29 @@ renderToolBody(item): string     // 只重绘正文（就地更新时用）
 | 9 | D9 的 README 措辞不能只写"图片不显示" | **接受**。写成"显示 `[图片 image/png]`，与 pi 在无图片能力终端下的行为一致"（§1.2） |
 | 10 | 命名不一致（`TOOL_TEXT_MAX_CHARS` / `MAX_REPLAY_CHARS` 残留）、M9 撞号、M6 依赖模型行为 | **接受**。三处都已改（`S2-M9`、M6 加注） |
 | 11 | §2 文件清单只列 `docs/PLAN.md`，但根目录 `PLAN.md` 还在（内容不同），建议顺手删掉 | **不受理**。这是 S0 就定下的设计：根目录那份是**本地完整版，已被 `.gitignore` 排除**（`git check-ignore` 确认、`git ls-files` 里没有任何 PLAN.md），仓库读者只看得到 `docs/PLAN.md`，两份状态不会对读者分叉。评审看的是工作目录而不是仓库内容 —— 这条在 S2 期间也提过一次，记在这里避免第三次。 |
+
+
+### 第 2 轮（Claude Opus 5，只读；**12 条，12 接受 / 0 驳回**）
+
+评审先确认了第一轮的 10 条都已落地，并**主动撤回**了上一轮的第 11 条
+（它自己跑了 `git check-ignore` 与 `git ls-files`，确认根目录 `PLAN.md` 不在仓库里）。
+这一轮找到两个**会改事件处理形状**的真问题：
+
+| # | 评审意见 | 处置 |
+| --- | --- | --- |
+| 1 | **中止路径会把已流出的正文抹掉**：`settlePendingTools()`（`controller.ts:501-513`）发的是 `{...item, pending:false, isError:true}`，而那个 `item` 是 S2 的"只有参数摘要的壳"；正文一旦放进独立的 `partials`，中止瞬间发出的这条就不带正文 | **接受**（已对着代码复核）。§1.1 新增第 7 条 + §4.4 第 2 条写明：这一处必须**合并 partial 正文** |
+| 2 | 同处的**泄漏**：被中止的工具通常不产生 toolResult → `partials` 永远不会被清理，每次中止泄漏 ≤64KB | **接受**。清理动作放进同一个函数 |
+| 3 | R1 的断言措辞会让实施者写出必挂的断言（最终正文 = 最后一次快照 **+ 脚注**） | **接受**。拆成两条断言：流式期间"正文 === 当次快照"；最终态"以最后一次快照为**前缀**" |
+| 4 | **运行中的卡片路径点不开**：铸造点在 `toolResult` 分支，而运行中的行由 `tool_execution_start` 造 | **接受**。铸造逻辑抽成 `openablePathsOfArgs(args, cwd)`，`tool_execution_start` 建行时也调用；新增 **M14** |
+| 5 | §1.1 第 4 条与 R7 仍写 `file:// URL`（第 7 条已改成传路径） | **接受**。两处措辞同步（R7 是 `render-xss-check` 断言的文案来源，留着会写错） |
+| 6 | §6.4 判据仍是 M1–M10 / W0–W4，新增的 M11/M12/W5 不在闸门里 | **接受**。改成 M1–**M14** / W0–**W6** |
+| 7 | §3 分工表把 `pending` 和 `startedAt/endedAt` 混成一行标"重放没有" | **接受**。`pending` 单独一行：**重放时确实会重建**，只是不由 `serialize.ts` 产出，等价性断言单独排除 |
+| 8 | §2 的 `serialize.ts` 行还写 `itemChars`、没提 `ctx`；`controller-check` 行没提新增断言与量测 | **接受**。两行都同步了 |
+| 9 | §10 探针 G 标题写"约 160KB"，正文里却 `totalBytes = 182893` | **接受**。标题改成"实测 182,893 字节 ≈ 180KB"（那 160KB 是估算，实际每行比估算长） |
+| 10 | §4.7 的 `setInterval(1s)` 没写停表条件 | **接受**。补"没有 running 卡片时停；`pagehide` 时停" |
+| 11 | §4.2 守卫句里的标记名还是旧的 | **接受**。改成"…（已省略 N 字节）" |
+| 12 | 建议把意见整理成 §11 草稿 | **不受理**（流程性建议）。实施方自己回填，评审保持只读 |
+
+**这一轮最有价值的第 1 条**是"两个都对的改动的交集"：S3 把正文放进 `partials` 是对的，
+S2 的 `settlePendingTools` 兜底也是对的，但两者一合并就产生"中止即丢正文"。
+这类问题只有把**改动面**读全（而不是只读计划描述的那几行）才看得出来。
