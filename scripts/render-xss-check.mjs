@@ -86,6 +86,7 @@ async function loadModules(tempDir) {
     entryPoints: [
       path.join(REPO_ROOT, "src", "webview", "render.ts"),
       path.join(REPO_ROOT, "src", "shared", "urlPolicy.ts"),
+      path.join(REPO_ROOT, "src", "host", "webviewHtml.ts"),
     ],
     bundle: true,
     platform: "node",
@@ -99,6 +100,7 @@ async function loadModules(tempDir) {
   return {
     render: await import(pathToFileURL(path.join(tempDir, "render.mjs")).href),
     urlPolicy: await import(pathToFileURL(path.join(tempDir, "urlPolicy.mjs")).href),
+    html: await import(pathToFileURL(path.join(tempDir, "webviewHtml.mjs")).href),
   };
 }
 
@@ -106,7 +108,7 @@ async function main() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-render-check-"));
   let failed = 0;
   try {
-    const { render, urlPolicy } = await loadModules(tempDir);
+    const { render, urlPolicy, html: htmlModule } = await loadModules(tempDir);
 
     console.log("[render-check] 攻击载荷");
     for (const [name, payload] of PAYLOADS) {
@@ -160,6 +162,35 @@ async function main() {
       stopReason: "aborted",
     });
     check("中止的空回复有占位文字（不留空壳）", emptyAssistant.includes("已被中止"), emptyAssistant);
+
+    // 面板 HTML 与 CSP：CSP 写错不会报错，只会让样式/脚本静默失效。
+    console.log("[render-check] 面板 CSP");
+    const fakeSource = "vscode-webview://test";
+    const csp = htmlModule.contentSecurityPolicy(fakeSource, "NONCE123");
+    check("default-src 'none'（默认全禁）", csp.includes("default-src 'none'"), csp);
+    check("放行 style-src（少了它面板没有样式）", csp.includes(`style-src ${fakeSource}`), csp);
+    check("放行 script-src 且只认 nonce", csp.includes("script-src 'nonce-NONCE123'"), csp);
+    check("放行 img-src 且含 data:", csp.includes(`img-src ${fakeSource} data:`), csp);
+    check("没有 unsafe-inline / unsafe-eval",
+      !/unsafe-inline|unsafe-eval/.test(csp), csp);
+    check("禁掉 connect-src（面板不需要出网）", csp.includes("connect-src 'none'"), csp);
+    const pageHtml = htmlModule.buildWebviewHtml({
+      scriptUri: "vscode-webview://test/dist/webview.js",
+      styleUri: "vscode-webview://test/dist/style.css",
+      cspSource: fakeSource,
+      nonce: "NONCE123",
+    });
+    check("脚本标签带 nonce", /<script nonce="NONCE123"/.test(pageHtml), pageHtml.slice(0, 200));
+    check("样式表用本地 URI", pageHtml.includes('href="vscode-webview://test/dist/style.css"'));
+    // 注意：这里不能直接用 audit()——页面里的 <link>/<meta> 是合法的，
+    // 要检查的是"脚本是否都带 nonce"与"有没有事件属性"。
+    check("每个 script 标签都带 nonce",
+      [...pageHtml.matchAll(/<script[^>]*>/g)].every((match) => match[0].includes('nonce="NONCE123"')),
+      JSON.stringify([...pageHtml.matchAll(/<script[^>]*>/g)].map((m) => m[0])));
+    check("页面里没有内联事件属性",
+      ![...pageHtml.matchAll(/<[^>]*>/g)].some((match) => /\son\w+\s*=/.test(match[0])));
+    check("nonce 是随机的两次不同",
+      htmlModule.createNonce() !== htmlModule.createNonce());
 
     // 渲染层与外部打开层必须同源（N8：不能断言"常量等于它自己"，要断言行为一致）
     console.log("[render-check] 与 urlPolicy 的一致性");

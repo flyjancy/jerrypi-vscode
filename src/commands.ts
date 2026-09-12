@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as vscode from "vscode";
+import type { SessionHostController } from "./pi/controller";
 import { loadPi } from "./pi/loader";
 import { createApiKeyStore, DEFAULT_PROVIDER, injectApiKey, SUGGESTED_PROVIDERS } from "./pi/runtime";
 import { runSelfTest } from "./pi/selftest";
@@ -15,6 +16,7 @@ const CUSTOM_PROVIDER = "其他（手动输入 provider id）";
 export function registerCommands(
   context: vscode.ExtensionContext,
   output: vscode.OutputChannel,
+  controller?: SessionHostController,
 ): void {
   const extensionPath = context.extensionUri.fsPath;
   const keys = createApiKeyStore(context);
@@ -91,6 +93,18 @@ export function registerCommands(
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         void vscode.window.showErrorMessage(`jerrypi: 保存 API key 失败：${message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand("jerrypi.newSession", async () => {
+      if (controller === undefined) return;
+      try {
+        // 会话替换由 controller 负责 rebind（`runtime.setRebindSession`），
+        // 面板随后会重新要一次全量状态。
+        await controller.newSession();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        void vscode.window.showErrorMessage(`jerrypi: 新建会话失败：${message}`);
       }
     }),
 

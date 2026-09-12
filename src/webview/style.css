@@ -1,0 +1,279 @@
+/* 面板样式：只用 VS Code 主题变量，不硬编码颜色（否则换主题就不像原生的）。 */
+
+:root {
+  --gap: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background: transparent;
+}
+
+/* ------------------------------------------------------------------ 状态行 */
+
+.status {
+  flex: 0 0 auto;
+  padding: 4px var(--gap);
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+}
+
+/* ------------------------------------------------------------------ 转写区 */
+
+.transcript {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--gap);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.msg {
+  border-radius: 4px;
+  padding: 6px 8px;
+  overflow-wrap: anywhere;
+}
+
+.msg-user {
+  background: var(--vscode-input-background);
+  border-left: 3px solid var(--vscode-focusBorder);
+}
+
+.msg-assistant {
+  background: transparent;
+}
+
+.msg-notice {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+  padding: 2px 8px;
+}
+
+/* ------------------------------------------------------------------ 工具行 */
+
+.tool-line {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.9em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.tool-icon {
+  width: 1em;
+  text-align: center;
+}
+
+.tool-args {
+  opacity: 0.75;
+  white-space: pre-wrap;
+}
+
+.tool-error .tool-name,
+.tool-error .tool-icon {
+  color: var(--vscode-errorForeground);
+}
+
+/* ------------------------------------------------------------------ 提示块 */
+
+.notice {
+  padding: 2px 0;
+}
+
+.notice-warn {
+  color: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground));
+}
+
+.notice-error {
+  color: var(--vscode-errorForeground);
+}
+
+/* ------------------------------------------------------------------ 思考块 */
+
+.thinking {
+  margin: 4px 0;
+  border-left: 2px solid var(--vscode-panel-border, currentColor);
+  padding-left: 6px;
+  opacity: 0.85;
+}
+
+.thinking > summary {
+  cursor: pointer;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.thinking-body,
+.live-text,
+.live-thinking {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.live-thinking {
+  opacity: 0.7;
+  font-size: 0.9em;
+  border-left: 2px solid var(--vscode-panel-border, currentColor);
+  padding-left: 6px;
+}
+
+/* ------------------------------------------------------------------ markdown */
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown pre.code {
+  background: var(--vscode-textCodeBlock-background);
+  padding: 6px 8px;
+  border-radius: 3px;
+  overflow-x: auto;
+}
+
+.markdown code {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.95em;
+}
+
+.markdown a {
+  color: var(--vscode-textLink-foreground);
+}
+
+.markdown a:hover {
+  color: var(--vscode-textLink-activeForeground);
+}
+
+.img-blocked {
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+}
+
+.markdown img {
+  max-width: 100%;
+}
+
+/* ------------------------------------------------------------------ 队列条 */
+
+.queue {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--vscode-panel-border, transparent);
+  padding: 4px var(--gap);
+  font-size: 0.85em;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.queue-title {
+  color: var(--vscode-descriptionForeground);
+}
+
+.queue-row {
+  color: var(--vscode-descriptionForeground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.queue-steer {
+  border-left: 2px solid var(--vscode-editorWarning-foreground, currentColor);
+  padding-left: 4px;
+}
+
+.queue-followup {
+  border-left: 2px solid var(--vscode-focusBorder);
+  padding-left: 4px;
+}
+
+/* ------------------------------------------------------------------ 输入区 */
+
+.composer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--vscode-panel-border, transparent);
+  padding: var(--gap);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.input {
+  width: 100%;
+  resize: vertical;
+  min-height: 3.5em;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 3px;
+  padding: 4px 6px;
+}
+
+.input:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.composer-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.hint {
+  margin-right: auto;
+  font-size: 0.8em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.button {
+  border: none;
+  border-radius: 3px;
+  padding: 3px 10px;
+  cursor: pointer;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+}
+
+.button:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.button.secondary {
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
+}
+
+.button.secondary:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.button.tiny {
+  padding: 1px 6px;
+  font-size: 0.85em;
+  align-self: flex-start;
+}
+
+.composer-error {
+  color: var(--vscode-errorForeground);
+  font-size: 0.85em;
+  white-space: pre-wrap;
+}

@@ -2,7 +2,7 @@
   "name": "jerrypi",
   "displayName": "jerrypi",
   "description": "Drive the Pi coding agent from a VS Code sidebar chat panel — no local Node.js required",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "flyjancy",
   "private": true,
   "license": "MIT",
@@ -51,8 +51,31 @@
         "command": "jerrypi.openSettingsFile",
         "title": "Open Settings File",
         "category": "Pi"
+      },
+      {
+        "command": "jerrypi.newSession",
+        "title": "New Session",
+        "category": "Pi"
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "jerrypi",
+          "title": "Pi",
+          "icon": "media/jerrypi.svg"
+        }
+      ]
+    },
+    "views": {
+      "jerrypi": [
+        {
+          "type": "webview",
+          "id": "jerrypi.chat",
+          "name": "Chat"
+        }
+      ]
+    }
   },
   "scripts": {
     "sync": "node scripts/sync-pi-runtime.mjs",
@@ -61,7 +84,7 @@
     "check:controller": "node scripts/controller-check.mjs",
     "check:render": "node scripts/render-xss-check.mjs",
     "build": "node esbuild.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.webview.json",
     "compile": "npm run sync && npm run build",
     "vscode:prepublish": "npm run compile",
     "package": "vsce package --pre-release --follow-symlinks --no-dependencies",

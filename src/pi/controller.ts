@@ -36,10 +36,16 @@ const DELTA_FRAME_MS = 16;
 export type PromptBehavior = "auto" | "steer" | "followUp";
 
 export interface SessionHostControllerOptions {
-  /** pi 已经加载好的句柄（由 `loader.loadPi` 提供，保证只有一处 import pi）。 */
-  pi: PiModule;
+  /**
+   * pi 的句柄或加载器。
+   *
+   * 允许传加载器（`() => loadPi(...)`）是因为扩展的 `activate()` **不能**被 pi 的加载阻塞
+   * （S0-D3）：视图与命令要立刻注册，pi 留到面板第一次要数据时再加载。
+   */
+  pi: PiModule | (() => Promise<PiModule>);
   cwd: string;
-  agentDir: string;
+  /** 不传时用 `pi.getAgentDir()`（即尊重 `PI_CODING_AGENT_DIR` 与 `~/.pi/agent`）。 */
+  agentDir?: string;
   keys: ApiKeyStore;
   uiContext: ExtensionUIContext;
   /** 诊断输出（Output channel）。 */
@@ -121,6 +127,12 @@ export class SessionHostController {
     return this.host?.session;
   }
 
+  /** 取 pi 句柄（惰性加载只发生一次，失败会把 promise 丢弃以便下次重试）。 */
+  private async loadPi(): Promise<PiModule> {
+    const { pi } = this.options;
+    return typeof pi === "function" ? await pi() : pi;
+  }
+
   /** 幂等地建会话。失败会抛错，由调用方转成面板提示。 */
   async ensure(): Promise<void> {
     if (this.host !== undefined) return;
@@ -132,7 +144,9 @@ export class SessionHostController {
   }
 
   private async createHost(): Promise<void> {
-    const { pi, cwd, agentDir, keys } = this.options;
+    const { cwd, keys } = this.options;
+    const pi = await this.loadPi();
+    const agentDir = this.options.agentDir ?? pi.getAgentDir();
     // 每次创建 ModelRuntime 之后都要重新注入 key：pi 的 setRuntimeApiKey 只写内存。
     const modelRuntime = await getModelRuntime(pi, agentDir, keys);
     const sessionManager: SessionManager = pi.SessionManager.create(

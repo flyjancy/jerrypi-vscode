@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ]
+  },
+  "include": [
+    "src/webview",
+    "src/shared"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "pi-runtime",
+    "test-fixtures"
+  ]
+}

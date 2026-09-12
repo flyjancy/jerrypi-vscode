@@ -197,6 +197,26 @@ async function checkUrlPolicy(urlPolicy) {
   check("图片拦截相对路径", urlPolicy.isImageUrlAllowed("a.png") === false);
 }
 
+/**
+ * 源码级交叉检查：webview 侧 `getElementById("x")` 的每个 id，
+ * 都必须在 HTML 生成器里真的存在。
+ *
+ * 为什么值得单独查一次：写错一个 id 的表现是 `null.xxx` 抛错 → 面板白屏，
+ * 而这类错误在 Node 侧的任何单元检查里都看不出来（没有 DOM），
+ * 只能靠 F5 或人眼比对。用它换掉一次 F5 很划算。
+ */
+function checkWebviewElementIds() {
+  console.log("[protocol-check] webview 元素 id 交叉检查");
+  const main = fs.readFileSync(path.join(REPO_ROOT, "src/webview/main.ts"), "utf8");
+  const html = fs.readFileSync(path.join(REPO_ROOT, "src/host/webviewHtml.ts"), "utf8");
+  const referenced = [...main.matchAll(/getElementById\("([^"]+)"\)/g)].map((match) => match[1]);
+  const declared = new Set([...html.matchAll(/id="([^"]+)"/g)].map((match) => match[1]));
+  check("main.ts 至少引用了一个元素", referenced.length > 0, String(referenced.length));
+  for (const id of referenced) {
+    check(`HTML 里存在 id="${id}"`, declared.has(id), `已声明：${[...declared].join(", ")}`);
+  }
+}
+
 function main() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-protocol-check-"));
   return Promise.resolve()
@@ -206,6 +226,7 @@ function main() {
       const protocol = await loadModule("src/shared/protocol.ts", tempDir);
       await checkSerialize(serialize, protocol);
       await checkUrlPolicy(urlPolicy);
+      checkWebviewElementIds();
     })
     .then(() => {
       fs.rmSync(tempDir, { recursive: true, force: true });
