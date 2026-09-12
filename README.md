@@ -29,16 +29,19 @@
 
 ### 特性
 
-| 能力 | 说明 |
-| --- | --- |
-| 聊天面板 | 侧边栏 Webview，流式文本、思考块、可折叠工具卡片 |
-| 内置工具 | `read` / `bash` / `edit` / `write`（bash 走 Git Bash，运行中可中止） |
-| 模型与思考等级 | 模型列表来自 `~/.pi/agent/models.json` 与内置 provider，面板内切换 |
-| 会话管理 | 列表、新建、恢复；写入 `~/.pi/agent/sessions/`，与 pi CLI `--resume` 互通 |
-| Diff 审阅 | `edit` 直接展示 unified patch；`write` 展示本次调用的前后对比 |
-| 工具审批 | 开关式确认，默认 `off`（与 pi CLI 一致），可选 `mutating` / `all` |
-| 扩展与包 | 加载用户的 pi TypeScript 扩展；支持安装本地路径 / git / `npm:` 包源 |
-| 密钥管理 | API key 存入 VS Code SecretStorage，优先于 `models.json` 中的 key |
+| 能力 | 状态 | 说明 |
+| --- | --- | --- |
+| 聊天面板 | **已实现** | 侧边栏 Webview：流式文本、思考块折叠、中止、排队、面板重开/重载后不丢历史 |
+| 排队语义 | **已实现** | 与 pi CLI 一致：`Enter` = **转向**（写完当前这段就注入），「追加」= 等整轮结束再发，「取回编辑」= 把排队消息放回输入框 |
+| 工具行 | **已实现**（一行） | 工具调用以一行显示：名字 + 参数摘要 + `✓`/`✗`；执行中先显示「运行中…」 |
+| 内置工具 | **已实现** | `read` / `bash` / `edit` / `write`（bash 可中止） |
+| 密钥管理 | **已实现** | API key 存入 VS Code SecretStorage，优先于 `models.json` 中的 key；可在面板里设置 |
+| 模型选择 | **部分** | 面板**不覆盖**你在 pi 里选定的模型（没选过时才由扩展兜底避开不可用 provider）；面板内切换选择器见 S4 |
+| 会话管理 | 计划中（S5） | 列表、新建、恢复；写入 `~/.pi/agent/sessions/`，与 pi CLI `--resume` 互通 |
+| 工具卡片 | 计划中（S3） | 参数与结果、bash 输出流式、点路径打开文件 |
+| Diff 审阅 | 计划中（S7） | `edit` 展示 unified patch；`write` 展示本次调用的前后对比 |
+| 工具审批 | 计划中（S8） | 开关式确认，默认 `off`（与 pi CLI 一致），可选 `mutating` / `all` |
+| 扩展与包 | 计划中（S9） | 加载用户的 pi TypeScript 扩展；支持本地路径 / git / `npm:` 包源 |
 
 ### 环境要求
 
@@ -74,9 +77,13 @@
 ### 使用
 
 1. 打开侧边栏 Pi 面板（命令 `Pi: Focus Chat`）；
-2. 输入消息发送；回复会流式显示，工具调用以可折叠卡片呈现；
-3. 回复过程中可继续输入：发送行为会进入排队（steer / follow-up），或点中止按钮停止；
-4. 通过面板顶部的选择器切换模型与思考等级；侧边栏状态栏显示模型与上下文用量。
+2. 输入消息、按 `Enter` 发送；回复流式显示，结束后按 markdown 渲染；
+3. **回复过程中**面板不会禁用输入，可以继续打字，此时有三种选择：
+   - `Enter` = **转向**：等当前这段输出结束、下一次调用模型之前，把新指令注入进去（**不会掐断正在生成的文字**）；
+   - 「**追加**」= 等整轮全部结束后再作为新的一轮发送；
+   - 「**取回编辑**」= 把排队里的消息全部放回输入框，方便改写；
+   - 「**中止**」= 立刻停止（排队中的消息会一并放回输入框）；
+4. 状态行显示当前模型与是否"生成中"；生成中时状态行**不会**因为一轮回答结束就提前变回"空闲"——队列里还有消息时它保持"生成中"。
 
 ### 从源码构建
 
@@ -134,6 +141,10 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 - **写入历史提示**：`edit` 的 diff 会随会话持久化；`write` 的前后快照只存在于当前进程内，重启 VS Code 后不再显示。
 - **会话落盘条件**（pi 行为）：只有完成过至少一轮 assistant 回复的会话才会写入磁盘。
 - **项目级设置默认不被信任**：pi CLI 会解析信任并询问用户，而 jerrypi 固定以 `projectTrusted: false` 初始化会话，因此工作区里的 `.pi/settings.json`、`SYSTEM.md` 等项目级资源不会被加载，也**不会有任何提示**。这是刻意的安全默认值（项目级设置能改 `shellPath` 与默认工具），信任流程待 S6 补上；在此之前如需使用项目级配置，请改用全局 `settings.json`。
+- **远程图片不加载**：markdown 里的 `![](https://…)` 会被降级成 alt 文字。放行远程图片等于让模型可控的 URL 变成一条出网信道（一张 1×1 像素就能把内容编码进 query 发出去），因此**只有 `data:image/...` 会被渲染**。
+- **依赖 `ctx.ui.custom()` 的 pi 扩展在面板里不可用**：那是终端 TUI 专有的全屏自定义渲染入口（需要真实的 TUI 实例），扩展宿主里无法实现。这类命令会**显示一条明确的错误**（而不是静默失败），其余功能不受影响。
+- **窗口重载（`Reload Window`）会开始新会话**：历史保存在 `~/.pi/agent/sessions/` 里没有丢，但 S2 还没有"恢复最近会话"的入口（S5 补）。面板被单独重载（`Developer: Reload Webviews`）则会完整重放当前会话，**包括正在流式接收的那一条**。
+- **队列只能整体取回**：pi 只提供 `clearQueue()`，没有按条移除/编辑的 API，所以「取回编辑」是全部取回。
 - **卸载扩展不会撤销**工作区文件改动，也不清除 `~/.pi/agent` 下的会话、配置与已安装的包。
 
 ### 许可证
@@ -153,7 +164,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 
 ## English
 
-> 🚧 **Status**: the implementation plan is finalized (see [`docs/PLAN.md`](docs/PLAN.md)), the code is under development and the extension is **not yet published to the VS Code Marketplace**. This README describes the intended shape.
+> 🚧 **Status**: steps S0–S2 are implemented and accepted on macOS (chat panel); the extension is published only as a pre-release on the VS Code Marketplace. Sections marked "Planned" below are not implemented yet.
 
 `jerrypi` is a VS Code extension that brings the [`@earendil-works/pi-coding-agent`](https://github.com/earendil-works/pi) coding agent into a sidebar chat panel. It targets a constrained environment: a Windows machine with **no Node.js installed and no permission to run downloaded executables**, where extensions can only be installed from the Marketplace.
 
@@ -165,16 +176,19 @@ To make that possible, the extension **ships pi's official pre-bundled SDK** ins
 
 ### Features
 
-| Capability | Description |
-| --- | --- |
-| Chat panel | Sidebar webview with streaming text, thinking blocks and collapsible tool cards |
-| Built-in tools | `read` / `bash` / `edit` / `write` (bash uses Git Bash and can be aborted mid-run) |
-| Models & thinking | Model list from `~/.pi/agent/models.json` plus built-in providers, switchable in the panel |
-| Sessions | List, create and resume; stored in `~/.pi/agent/sessions/`, interoperable with `pi --resume` |
-| Diff review | `edit` shows the unified patch; `write` shows per-call before/after snapshots |
-| Tool approval | Optional confirmation gate (default `off`, matching the pi CLI), plus `mutating` / `all` |
-| Extensions & packages | Loads user pi TypeScript extensions; installs local / git / `npm:` package sources |
-| API keys | Stored in VS Code SecretStorage, taking precedence over keys in `models.json` |
+| Capability | Status | Description |
+| --- | --- | --- |
+| Chat panel | **Implemented** | Sidebar webview: streaming text, collapsible thinking blocks, abort, queueing, history survives panel reload |
+| Queue semantics | **Implemented** | Same as the pi CLI: `Enter` = **steer** (injected once the current response finishes), "Follow-up" = wait for the whole turn, "Edit queued" = put queued messages back in the composer |
+| Tool rows | **Implemented** (one line) | Each tool call is one line: name + argument summary + `✓`/`✗`; shows "running…" while in flight |
+| Built-in tools | **Implemented** | `read` / `bash` / `edit` / `write` (bash can be aborted) |
+| API keys | **Implemented** | Stored in VS Code SecretStorage, taking precedence over keys in `models.json` |
+| Model selection | **Partial** | The panel **never overrides** the model you picked in pi; it only falls back (to a credentialed provider) when nothing is configured. An in-panel model picker lands in S4 |
+| Sessions | Planned (S5) | List, create and resume; stored in `~/.pi/agent/sessions/`, interoperable with `pi --resume` |
+| Tool cards | Planned (S3) | Arguments and results, streaming bash output, click a path to open the file |
+| Diff review | Planned (S7) | `edit` shows the unified patch; `write` shows per-call before/after snapshots |
+| Tool approval | Planned (S8) | Optional confirmation gate (default `off`, matching the pi CLI), plus `mutating` / `all` |
+| Extensions & packages | Planned (S9) | Loads user pi TypeScript extensions; installs local / git / `npm:` package sources |
 
 ### Requirements
 
@@ -206,9 +220,13 @@ Use **`Pi: Open Settings File`** to edit pi's `settings.json` for default model,
 ### Usage
 
 1. Open the Pi panel in the activity bar (command `Pi: Focus Chat`).
-2. Send a message; the reply streams in, tool calls appear as collapsible cards.
-3. You can keep typing while the agent is streaming — messages are queued (steer / follow-up) — or click abort.
-4. Switch model and thinking level from the panel's selectors; the status bar shows the model and context usage.
+2. Type a message and press `Enter`; the reply streams in and is rendered as markdown when it finishes.
+3. **While the agent is streaming** the input box stays enabled. You then have four options:
+   - `Enter` = **steer**: wait for the current response to finish and inject the new instruction before the next model call (**it does not cut off the text being generated**);
+   - "**Follow-up**" = send it as a new turn after the whole task completes;
+   - "**Edit queued**" = put every queued message back into the composer so you can rewrite it;
+   - "**Abort**" = stop immediately (queued messages are returned to the composer as well).
+4. The status line shows the current model and whether the agent is busy. It deliberately **stays** "busy" after a single response if the queue is not empty.
 
 ### Build from source
 
@@ -258,6 +276,10 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full notices and lice
 - **Write history**: `edit` diffs are persisted with the session, but `write` before/after snapshots live only for the current process and disappear after a VS Code restart.
 - **Session persistence** (pi behavior): a session is written to disk only after at least one assistant reply.
 - **Project-level settings are not trusted by default**: the pi CLI resolves trust and asks the user, whereas jerrypi always initialises sessions with `projectTrusted: false`. Project-scoped resources such as `.pi/settings.json` and `SYSTEM.md` are therefore not loaded, and **nothing tells you so**. This is a deliberate safe default (project settings can override `shellPath` and the default tool set); the trust flow lands in S6. Until then, put such configuration in the global `settings.json`.
+- **Remote images are not loaded**: a markdown `![](https://…)` is downgraded to its alt text. Allowing remote images would turn a model-controlled URL into an outbound channel (a 1×1 pixel can encode content in its query string), so **only `data:image/...` is rendered**.
+- **pi extensions that rely on `ctx.ui.custom()` do not work in the panel**: that API renders a full-screen TUI component and needs a real TUI instance, which an extension host cannot provide. Such commands show an **explicit error** (rather than failing silently); everything else about the extension keeps working.
+- **Reloading the window starts a new session**: history is still on disk under `~/.pi/agent/sessions/`, but S2 has no "resume recent session" entry point yet (S5 adds it). Reloading only the webview (`Developer: Reload Webviews`) replays the whole session, **including the message currently streaming**.
+- **The queue can only be emptied as a whole**: pi exposes `clearQueue()` and nothing per-item, so "Edit queued" returns everything.
 - **Uninstalling the extension does not revert** workspace file changes, nor does it clean up sessions, config or installed packages under `~/.pi/agent`.
 
 ### License
