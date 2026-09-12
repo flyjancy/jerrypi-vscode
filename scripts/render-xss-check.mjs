@@ -49,7 +49,15 @@ const BAD_URL = /(href|src)\s*=\s*"(?:\s*(?:javascript|data|vbscript|file):)/i;
 function audit(html) {
   if (FORBIDDEN_TAG.test(html)) return `出现被禁标签: ${html.match(FORBIDDEN_TAG)[0]}`;
   for (const tag of html.match(/<[^>]*>/g) ?? []) {
-    if (BAD_ATTR.test(tag)) return `标签带事件属性: ${tag}`;
+    // **先把属性值整段删掉再查**：值里的引号已经被 escapeHtml 转成 `&quot;`，
+    // 所以 `="[^"]*"` 能准确圈出属性值，而值里的内容（比如 `data-open-path` 存的
+    // 一个含 `"` 的路径）不可能是真的事件属性。不这么做的话，
+    // `data-open-path="/w/x&quot; onmouseover=&quot;alert(1)"` 会被误报成注入
+    // —— 它其实是一个安全的属性值（浏览器解析到的 onmouseover 在引号里）。
+    // 事件属性检查要忽略属性值，URL 检查**必须**看属性值（就藏在值里）——
+    // 两个检查用的形态不同，别合并。
+    const withoutValues = tag.replace(/="[^"]*"/g, "=");
+    if (BAD_ATTR.test(withoutValues)) return `标签带事件属性: ${tag}`;
     if (BAD_URL.test(tag)) return `标签带危险 URL: ${tag}`;
   }
   return null;
@@ -214,6 +222,91 @@ async function main() {
           `rendered=${rendered}`);
       }
     }
+      // 「检查检查本身」：上面刚把 audit 放宽（先删属性值再查），
+      // 所以必须自证它还认得真正的注入 —— 否则这次放宽等于把安全检查关掉了。
+      check("audit 抓得住真实的 script 标签", audit("<div><script>alert(1)</script></div>") !== null);
+      check("audit 抓得住真实的事件属性", audit('<img src="x" onerror="alert(1)">') !== null);
+      check("audit 抓得住真实的危险 URL", audit('<a href="javascript:alert(1)">x</a>') !== null);
+      check("audit 抓得住未加引号的事件属性", audit("<img src=x onerror=alert(1)>") !== null);
+      check("audit 不误报：转义后的引号留在属性值内", audit('<a data-x="/w/x&quot; onmouseover=&quot;alert(1)">y</a>') === null);
+
+      // ------------------------------------------------ S3：工具卡片
+      //
+      // 工具卡片的正文是**最容易漏掉转义**的地方：它是唯一"内容由命令输出决定"的区域，
+      // 而且 S3 之后它会随着流式输出每 200ms 重绘一次。
+      const LONG = Array.from({ length: 9 }, (_, i) => `第 ${i + 1} 行`).join("\n");
+      const toolItem = (extra) => ({
+        kind: "tool",
+        id: "tool-1",
+        toolCallId: "c1",
+        toolName: "bash",
+        summary: '{"command":"echo hi"}',
+        isError: false,
+        ...extra,
+      });
+
+      // 折叠/展开的内容规则（照 pi：bash 折叠给最后 5 行）
+      const collapsed = render.renderToolCard(toolItem({ text: LONG }), false);
+      const expanded = render.renderToolCard(toolItem({ text: LONG }), true);
+      check("bash 折叠时只渲染最后 5 行", collapsed.includes("第 5 行") && !collapsed.includes("第 4 行"), collapsed.slice(0, 120));
+      check("bash 折叠态的 HTML 里不含被折叠掉的内容", !collapsed.includes("第 1 行"));
+      check("展开时渲染全部内容", expanded.includes("第 1 行") && expanded.includes("第 9 行"));
+      check("展开态带 aria-expanded=true", expanded.includes('aria-expanded="true"'));
+      check("折叠态带 aria-expanded=false", collapsed.includes('aria-expanded="false"'));
+
+      const readCollapsed = render.renderToolCard(toolItem({ toolName: "read", text: LONG }), false);
+      check("read 折叠时不显示正文", !readCollapsed.includes("第 1 行") && readCollapsed.includes("tool-body"));
+      check("read 展开时显示正文", render.renderToolCard(toolItem({ toolName: "read", text: LONG }), true).includes("第 9 行"));
+
+      const empty = render.renderToolCard(toolItem({ text: undefined }), true);
+      check("空正文给占位（无输出）", empty.includes("（无输出）"), empty.slice(0, 120));
+      const waiting = render.renderToolCard(toolItem({ pending: true }), true);
+      check("进行中的空正文给占位（等待输出…）", waiting.includes("（等待输出…）"));
+
+      // 正文里的 HTML/脚本必须被转义（这是"命令输出可控"的那条路径）
+      for (const evil of [
+        '<img src=x onerror="alert(1)">',
+        "</pre><script>alert(1)</script>",
+        '<iframe src="javascript:alert(1)"></iframe>',
+        '<a href="javascript:alert(1)">x</a>',
+      ]) {
+        const html = render.renderToolCard(toolItem({ text: evil }), true);
+        check(`工具正文转义 ${JSON.stringify(evil).slice(0, 40)}`, audit(html) === null, String(audit(html)));
+        check(`工具正文里的 ${JSON.stringify(evil).slice(0, 24)} 不生成真实标签`, !html.includes("<img") && !html.includes("<iframe") && !html.includes("<script"));
+      }
+
+      // 工具名与参数摘要也是模型可控的
+      const evilHead = render.renderToolCard({ ...toolItem({ text: "x" }), toolName: "<script>a</script>", summary: '"><img src=x onerror=alert(1)>' }, true);
+      check("工具名与参数摘要被转义", audit(evilHead) === null && !evilHead.includes("<script"), String(audit(evilHead)));
+
+      // 路径：只有登记过的才渲染成可点的 `<a>`
+      const pathItem = toolItem({ text: "ok", openablePaths: ["/work/a.ts"] });
+      const linked = render.renderPathLink("/work/a.ts", pathItem);
+      check("登记过的路径渲染成可点元素", linked.includes("<a ") && linked.includes('data-open-path="/work/a.ts"'), linked);
+      const unregistered = render.renderPathLink("/etc/passwd", pathItem);
+      check("未登记的路径只是文字（不可点）", !unregistered.includes("<a "), unregistered);
+      const evilPath = render.renderPathLink('/w/x" onmouseover="alert(1)', toolItem({ text: "ok", openablePaths: ['/w/x" onmouseover="alert(1)'] }));
+      check("路径里的引号被转义（不会造出事件属性）", audit(evilPath) === null, String(audit(evilPath)));
+
+      // 耗时：进行中用 Elapsed、结束用 Took；没有 startedAt 就不显示
+      const running = render.renderToolHead(toolItem({ pending: true, startedAt: 1000 }));
+      const done = render.renderToolHead(toolItem({ startedAt: 1000, endedAt: 3400 }));
+      check("进行中的耗时是 Elapsed", running.includes("Elapsed"), running);
+      check("结束后的耗时是 Took", done.includes("Took 2.4s"), done);
+      check("没有 startedAt 时不显示耗时", !render.renderToolHead(toolItem({})).includes("Took"));
+
+      // pi 的截断摘要与完整输出路径
+      const truncated = render.renderToolCard(
+        toolItem({ text: "tail", truncation: { truncatedBy: "bytes", totalLines: 4000, outputLines: 100 }, fullOutputPath: "/tmp/pi-x.log", openablePaths: ["/tmp/pi-x.log"] }),
+        true,
+      );
+      check("截断摘要被渲染", truncated.includes("已截断"), truncated.slice(0, 200));
+      check("完整输出路径被渲染成可点链接", truncated.includes('data-open-path="/tmp/pi-x.log"'), truncated.slice(0, 300));
+
+      // 我们自己的裁剪：文案与 pi 的脚注不同（来源不同，长得一样会让人以为 pi 又裁了一次）
+      const clipped = render.renderToolCard(toolItem({ text: "abc", textTruncated: true }), true);
+      check("我们自己的裁剪有独立文案", clipped.includes("开头已省略") && !clipped.includes("已截断"), clipped.slice(0, 200));
+
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
