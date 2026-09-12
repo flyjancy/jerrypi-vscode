@@ -375,6 +375,30 @@ function checkWebviewElementIds() {
     !/打断当前回复/.test(mainCode) && /转向（写完这段就注入）/.test(mainCode));
   check("队列条用词对齐 pi（转向 / 追加 / 取回编辑）",
     /转向：/.test(mainCode) && /追加：/.test(mainCode) && /取回编辑/.test(mainCode));
+  // ---- S3：工具卡片的就地更新、滚动策略、展开态 ----
+  // 这几条都是"看着正常但会一直折磨用户"的类型：每 200ms 重写 innerHTML 会
+  // 重置展开态与滚动位置，无条件滚底会把正在翻历史的用户拽回底部。
+  check("工具卡片就地更新（不再整块 setHtml）",
+    /renderToolBody\(/.test(mainCode) && !/setHtml\(node, renderToolLine\(item\)\)/.test(mainCode));
+  check("展开态存在 webview 侧（不进协议）",
+    /const expanded = new Set<string>\(\)/.test(mainCode) && !/expanded/.test(
+      fs.readFileSync(path.join(REPO_ROOT, "src/shared/protocol.ts"), "utf8"),
+    ));
+  check("正文重写前保存/恢复正文容器的滚动位置",
+    /keepScroll/.test(mainCode) && /view\.body\.scrollTop = keepScroll/.test(mainCode));
+  check("自动滚动只在用户本来就在底部时发生",
+    /function isAtBottom/.test(mainCode) && /scrollIfFollowing\(\)/.test(mainCode) &&
+      !/case "item":\s*renderItem\(message\.item\);\s*scrollToBottom\(\);/.test(mainCode));
+  check("耗时定时器有停止条件", /hasRunning/.test(mainCode) && /clearInterval\(durationTimer\)/.test(mainCode));
+  const toolBodyRule = css.match(/\.tool-body\s*\{[^}]*\}/)?.[0] ?? "";
+  const toolTextRule = css.match(/\.tool-text\s*\{[^}]*\}/)?.[0] ?? "";
+  check("正文限高且可滚动", /max-height/.test(toolTextRule) && /overflow:\s*auto/.test(toolTextRule), toolTextRule.trim());
+  const headTextRule = css.match(/\.tool-head-text\s*\{[^}]*\}/)?.[0] ?? "";
+  check("标题内容不可收缩（同类挤压错误的第四处）",
+    /flex:\s*1 1 auto/.test(headTextRule) && /flex-wrap:\s*wrap/.test(headTextRule), headTextRule.trim());
+  check("工具卡片有可点路径的样式", /\.tool-path-open\s*\{/.test(css));
+  void toolBodyRule;
+
   check("发送后立即清空输入框（不再比对 sentText）",
     /input\.value = ""/.test(mainCode) && !/sentText/.test(mainCode));
   // 协议版本只能有一处来源：两边硬编码成两个数字是最容易漏的漂移。

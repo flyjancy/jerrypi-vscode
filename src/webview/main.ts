@@ -12,7 +12,8 @@ import {
   renderAssistant,
   renderMarkdown,
   renderNotice,
-  renderToolLine,
+  renderToolBody,
+  renderToolHead,
 } from "./render";
 import { PROTOCOL_VERSION, type ChatItem, type ClientMessage, type ServerMessage } from "../shared/protocol";
 
@@ -40,7 +41,33 @@ interface LiveRegion {
 
 const nodes = new Map<string, HTMLElement>();
 const live = new Map<string, LiveRegion>();
+/** 工具卡片的三个可独立更新的部分（**就地更新**，见下面 renderTool 的注释）。 */
+interface ToolView {
+  head: HTMLButtonElement;
+  body: HTMLDivElement;
+  caret: HTMLElement;
+}
+const tools = new Map<string, ToolView>();
+/**
+ * 最近一次收到的 item（按 id）。
+ *
+ * 为什么前端要留一份：展开/折叠时要**重新渲染正文**，而正文来自 item；
+ * 再从 DOM 里把文本抠出来（塞 `data-*`）既浪费又容易出错。
+ */
+const itemById = new Map<string, ChatItem>();
+/**
+ * 展开的工具卡片 id。
+ *
+ * 为什么不进协议、也不进 item：展开是**纯 UI 状态**，而流式输出每 200ms 会
+ * upsert 一次同一条 item —— 状态一旦跟着 item 走，用户展开的卡片会在下一次
+ * 更新时被折叠回去（S3-plan D10）。
+ */
+const expanded = new Set<string>();
+/** 上一次的正文串（用来判断"这一帧真的变了没有"，避免无意义重排）。 */
+const toolTextSeen = new Map<string, string>();
 const order: string[] = [];
+/** 耗时 tick（每秒一次，只改进行中卡片的那个 span）。 */
+let durationTimer: ReturnType<typeof setInterval> | undefined;
 let busy = false;
 let model = "";
 /**
@@ -64,6 +91,11 @@ function removeNode(id: string): void {
   nodes.get(id)?.remove();
   nodes.delete(id);
   live.delete(id);
+  // 工具卡片的三份附带状态要一起清：漏掉任何一个都会在长会话里慢慢堆积。
+  tools.delete(id);
+  itemById.delete(id);
+  toolTextSeen.delete(id);
+  expanded.delete(id);
   const index = order.indexOf(id);
   if (index >= 0) order.splice(index, 1);
 }
@@ -87,6 +119,7 @@ function setHtml(node: HTMLElement, html: string): void {
 // ------------------------------------------------------------------ 渲染
 
 function renderItem(item: ChatItem): void {
+  itemById.set(item.id, item);
   if (item.kind === "user") {
     const node = ensureNode(item.id, "msg-user");
     setHtml(node, `<div class="markdown">${renderMarkdown(item.text)}</div>`);
@@ -110,8 +143,7 @@ function renderItem(item: ChatItem): void {
     return;
   }
   if (item.kind === "tool") {
-    const node = ensureNode(item.id, "msg-tool");
-    setHtml(node, renderToolLine(item));
+    renderTool(item);
     return;
   }
   const node = ensureNode(item.id, "msg-notice");
@@ -177,9 +209,142 @@ function renderStatus(): void {
   scrollToBottom();
 }
 
+/**
+ * 工具卡片：**就地更新**，不重建节点。
+ *
+ * 为什么不能像其它 item 那样 `setHtml(整块)`：bash 每 200ms upsert 一次，
+ * 整体重写会（a）把 `<details>`/展开态重置、（b）清掉正文容器的 `scrollTop`
+ * —— 用户正展开着读输出时会被一直拽回顶部（S3-plan 评审第 3 轮第 2 条）。
+ * 所以这里只改两处：标题行、正文；节点本身复用。
+ */
+function renderTool(item: Extract<ChatItem, { kind: "tool" }>): void {
+  const node = ensureNode(item.id, "msg-tool");
+  let view = tools.get(item.id);
+  if (view === undefined) {
+    view = createToolView(item);
+    node.replaceChildren(view.head, view.body);
+    tools.set(item.id, view);
+  }
+
+  const isOpen = expanded.has(item.id);
+  const bodyHtml = renderToolBody(item, isOpen);
+  const text = item.text ?? "";
+
+  setHtml(view.head, `<span class="tool-head-text">${renderToolHead(item)}</span>`);
+  view.head.className = `tool-head tool-${item.pending === true ? "running" : item.isError ? "error" : "ok"}`;
+  view.head.setAttribute("aria-expanded", isOpen && bodyHtml !== "" ? "true" : "false");
+
+  // 正文只在内容真的变了时重写：否则每帧都会把用户的选中与滚动位置清掉。
+  const signature = `${isOpen}\u0000${text}\u0000${item.truncation === undefined ? "" : JSON.stringify(item.truncation)}\u0000${item.fullOutputPath ?? ""}\u0000${item.textTruncated === true}`;
+  if (toolTextSeen.get(item.id) !== signature) {
+    toolTextSeen.set(item.id, signature);
+    const keepScroll = view.body.scrollTop;
+    setHtml(view.body, bodyHtml);
+    // 恢复正文内部的滚动位置（大输出展开时用户会自己往下滚）。
+    view.body.scrollTop = keepScroll;
+    view.body.hidden = bodyHtml === "";
+  }
+
+  ensureDurationTimer();
+}
+
+function createToolView(item: Extract<ChatItem, { kind: "tool" }>): ToolView {
+  const head = document.createElement("button");
+  head.className = "tool-head";
+  head.type = "button";
+  const caret = element("span", "tool-caret");
+  caret.setAttribute("aria-hidden", "true");
+  const body = element("div", "tool-body") as HTMLDivElement;
+  body.hidden = true;
+  head.addEventListener("click", (event) => {
+    const path = (event.target as HTMLElement).dataset?.openPath;
+    if (path !== undefined && path !== "") {
+      // 点路径不展开卡片：用户的意图是打开文件。
+      event.stopPropagation();
+      vscode.postMessage({ type: "openFile", path });
+      return;
+    }
+    toggleTool(item.id);
+  });
+  head.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      toggleTool(item.id);
+    }
+  });
+  void caret;
+  return { head, body, caret };
+}
+
+/** 展开/折叠。重渲染正文时**保留滚动位置**。 */
+function toggleTool(id: string): void {
+  const item = itemById.get(id);
+  const view = tools.get(id);
+  if (item === undefined || item.kind !== "tool" || view === undefined) return;
+  if (expanded.has(id)) expanded.delete(id);
+  else expanded.add(id);
+  toolTextSeen.delete(id);
+  renderTool(item);
+}
+
+/**
+ * 耗时 tick：只更新"进行中"卡片里的那个 span。
+ *
+ * 不进协议的第二个理由：每秒重发一条 item 会让整个卡片重绘。
+ * 停表条件：没有进行中的卡片时清掉定时器（否则一个常驻的 1s 定时器会一直跑）。
+ */
+function ensureDurationTimer(): void {
+  const hasRunning = [...tools.keys()].some((id) => {
+    const item = itemById.get(id);
+    return item?.kind === "tool" && item.pending === true;
+  });
+  if (!hasRunning) {
+    if (durationTimer !== undefined) {
+      clearInterval(durationTimer);
+      durationTimer = undefined;
+    }
+    return;
+  }
+  durationTimer ??= setInterval(() => {
+    for (const [id, view] of tools) {
+      const item = itemById.get(id);
+      if (item?.kind !== "tool" || item.pending !== true) continue;
+      const span = view.head.querySelector(".tool-duration") as HTMLElement | null;
+      if (span === null || item.startedAt === undefined) continue;
+      const seconds = Math.max(0, (Date.now() - item.startedAt) / 1000).toFixed(1);
+      span.textContent = `Elapsed ${seconds}s`;
+    }
+    ensureDurationTimer();
+  }, 1000);
+}
+
+/**
+ * 自动滚动：**只在用户本来就在底部附近**时跟随。
+ *
+ * 原来是无条件 `scrollTop = scrollHeight`：流式输出（尤其工具卡片每 200ms 一次）
+ * 会把正在往上翻历史的用户一直拽回底部（S3-plan 约束 #6）。
+ */
+const STICK_THRESHOLD_PX = 40;
+
+function isAtBottom(): boolean {
+  return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= STICK_THRESHOLD_PX;
+}
+
 function scrollToBottom(): void {
   transcript.scrollTop = transcript.scrollHeight;
 }
+
+/** 跟随时才滚（流式与工具更新走这个）。 */
+function scrollIfFollowing(): void {
+  if (following) scrollToBottom();
+}
+
+/** 用户是不是跟着最新内容（滚动时更新；发送时强制跟随）。 */
+let following = true;
+
+transcript.addEventListener("scroll", () => {
+  following = isAtBottom();
+});
 
 /**
  * user 消息回显了 → 这条发送已经落地，不用再留恢复用的副本。
@@ -210,6 +375,14 @@ function applyState(message: Extract<ServerMessage, { type: "state" }>): void {
 
 }
 
+// webview 被销毁时停掉耗时定时器（页面隐藏/卸载之后让它空转没有意义）。
+window.addEventListener("pagehide", () => {
+  if (durationTimer !== undefined) {
+    clearInterval(durationTimer);
+    durationTimer = undefined;
+  }
+});
+
 window.addEventListener("message", (event: MessageEvent<ServerMessage>) => {
   const message = event.data;
   switch (message.type) {
@@ -218,7 +391,7 @@ window.addEventListener("message", (event: MessageEvent<ServerMessage>) => {
       return;
     case "item":
       renderItem(message.item);
-      scrollToBottom();
+      scrollIfFollowing();
       return;
     case "delta":
       appendDelta(message.id, message.kind, message.delta);

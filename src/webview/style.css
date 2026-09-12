@@ -63,7 +63,91 @@ body {
   padding: 2px 8px;
 }
 
-/* ------------------------------------------------------------------ 工具行 */
+/* ------------------------------------------------------------------ 工具卡片 */
+
+/* 标题行是 <button>：既要有可点的感觉，又不能抢走正文的视觉重量。 */
+.tool-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  align-items: baseline;
+  width: 100%;
+  margin: 0;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.9em;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tool-head:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.tool-head:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+/* 标题内容自己撑满，把 caret 顶到最右；**不可收缩**，否则会被压成竖排。 */
+.tool-head-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  align-items: baseline;
+}
+
+.tool-caret {
+  flex: 0 0 auto;
+  opacity: 0.6;
+}
+
+/* 正文：等宽、保留换行、**限高**（一条 ls -R 不该把整屏吃掉）。 */
+.tool-body {
+  padding: 4px 8px 4px 14px;
+}
+
+.tool-text {
+  margin: 0;
+  max-height: 40vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.88em;
+  color: var(--vscode-editor-foreground, var(--vscode-foreground));
+}
+
+.tool-empty,
+.tool-note {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.85em;
+  padding: 2px 0;
+}
+
+.tool-pending,
+.tool-duration {
+  flex: 0 0 auto;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+/* 可点路径：下划线 + 手型，与普通正文明确区分（不可点的路径不带这个类）。 */
+.tool-path-open {
+  color: var(--vscode-textLink-foreground);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.tool-path {
+  overflow-wrap: anywhere;
+}
 
 .tool-line {
   display: flex;
