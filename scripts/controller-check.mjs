@@ -213,9 +213,15 @@ async function main() {
       mid.items.filter((item) => item.kind === "tool" && item.pending === true).length === 1,
       JSON.stringify(mid.items.map((i) => i.id)));
     check("执行中快照 busy=true", mid.busy === true);
+    messages.length = 0;
     void controller.prompt("排队一", "followUp");
     void controller.prompt("排队二", "steer");
     await new Promise((resolve) => setTimeout(resolve, 600));
+    // 关键回归：入队也必须回一个"已接受"，否则前端会把用户的下一条消息卡住
+    // （实测现象：队列里有一条时，第二条点「排队」毫无反应）。
+    check("steer/followUp 入队后收到 promptAccepted",
+      messages.filter((m) => m.type === "promptAccepted").length >= 2,
+      String(messages.filter((m) => m.type === "promptAccepted").length));
     const queued = controller.snapshot().queue;
     check("排队后快照里能看到两条（steering + followUp）",
       queued.steering.length === 1 && queued.followUp.length === 1, JSON.stringify(queued));

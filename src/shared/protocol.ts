@@ -72,6 +72,16 @@ export type ServerMessage =
   | { type: "delta"; id: string; kind: "text" | "thinking"; delta: string }
   | { type: "queue"; steering: string[]; followUp: string[] }
   | { type: "busy"; busy: boolean; errorMessage?: string }
+  /**
+   * 这条消息**已被 pi 接受**（入队或开始处理）。
+   *
+   * 为什么需要它：pi 的 `prompt()` 要到**整轮结束**才 resolve，而 steer/followUp
+   * 可能在队列里躺很久 —— 光靠"回显"或"promise settle"判断"发出去了没有"都会把
+   * 用户的下一条消息卡住（实测：队列里有一条时，第二条点「排队」毫无反应）。
+   * 这个信号来自 pi 的 `preflightResult` 回调，是所有接受路径（扩展命令 / 入队 /
+   * 正常发起）都会走的同一个点。
+   */
+  | { type: "promptAccepted" }
   /** 失败提示：输入框下方的红字。 */
   | { type: "composerError"; text: string }
   /** 把文本**退回**输入框（中止时清队列的产物；不是错误）。 */

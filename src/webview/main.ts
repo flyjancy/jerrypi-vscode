@@ -222,6 +222,11 @@ window.addEventListener("message", (event: MessageEvent<ServerMessage>) => {
       busy = message.busy;
       renderStatus();
       return;
+    case "promptAccepted":
+      // 服务器已接受（可能只是入队）：可以发下一条了。
+      pendingText = undefined;
+      renderStatus();
+      return;
     case "composerError":
       errorBox.textContent = message.text;
       errorBox.hidden = false;

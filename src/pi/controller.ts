@@ -83,7 +83,14 @@ interface SessionView {
     pendingToolCalls: ReadonlySet<string>;
     errorMessage?: string;
   };
-  prompt(text: string, options?: { streamingBehavior?: "steer" | "followUp" }): Promise<void>;
+  prompt(
+    text: string,
+    options?: {
+      streamingBehavior?: "steer" | "followUp";
+      /** pi 在**接受**这条 prompt 时回调 true（见协议里 `promptAccepted` 的说明）。 */
+      preflightResult?: (success: boolean) => void;
+    },
+  ): Promise<void>;
   abort(): Promise<void>;
   clearQueue(): { steering: string[]; followUp: string[] };
   getSteeringMessages(): readonly string[];
@@ -208,16 +215,21 @@ export class SessionHostController {
 
   private async sendPrompt(session: SessionView, text: string, behavior: PromptBehavior): Promise<void> {
     const streamingBehavior = behavior === "followUp" ? "followUp" : "steer";
+    // 用同一个回调覆盖所有路径：pi 在**接受**（入队或开始处理）时回调 true。
+    // 不能等 `prompt()` 的 promise —— 它要到整轮结束才 resolve，队列里的消息更久。
+    const preflightResult = (success: boolean): void => {
+      if (success) this.emit({ type: "promptAccepted" });
+    };
     if (session.isStreaming) {
-      await session.prompt(text, { streamingBehavior });
+      await session.prompt(text, { streamingBehavior, preflightResult });
       return;
     }
     try {
-      await session.prompt(text);
+      await session.prompt(text, { preflightResult });
     } catch (error) {
       // 检查与调用之间可能已经开始流式（竞态）；只有这一种错误值得重试一次。
       if (!isAlreadyProcessing(error)) throw error;
-      await session.prompt(text, { streamingBehavior: "steer" });
+      await session.prompt(text, { streamingBehavior: "steer", preflightResult });
     }
   }
 
