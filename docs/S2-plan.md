@@ -2,7 +2,7 @@
 
 > 依据：`docs/PLAN.md` 第 6 节 "S2 协议与基础聊天"、5.1/5.2/5.3/5.4、R9、D7-S1、D7-S2、D10-S1。
 > 前置：S1 已关闭（Mac 与受限 Windows 机双端 `GATE PASS`，见 `docs/S1-plan.md` 第 12 节）。
-> **本版已吸收第一轮外部评审（Claude Opus 5，编号 `S2-CL-*`），处置见 §10。**
+> **本版已吸收两轮外部评审（Claude Opus 5）：第一轮 `S2-CL-*`、第二轮 `S2-CL2-*`，处置见 §10。**
 
 ## 0. 本计划已核实的事实（都带证据，不靠记忆）
 
@@ -50,8 +50,35 @@ toolcall_start | toolcall_delta | toolcall_end`（`pi-ai/dist/types.d.ts`）。
 | --- | --- |
 | `session.messages` | **"All messages including custom types like BashExecutionMessage"** —— 重放的唯一数据源 |
 | `session.state.streamingMessage?` | 进行中的半截 assistant 消息（面板在流式中重开时用它补齐） |
-| `session.state.isStreaming` / `session.isStreaming` | 空闲判定 |
+| `session.state.isStreaming` / `session.isStreaming` | 是否有一轮 agent run 在跑 |
+| **`session.isIdle`** | 实现是 `!_isAgentRunActive && !isCompacting`（`agent-session.js:620`）。**不能用它判 UI 空闲**（它不看队列），但它是"发送对账"的唯一正确口径（§4.3.1，`S2-CL2-N2`） |
 | `session.state.errorMessage?` | 最近一次失败/中止的错误文本 |
+
+#### 0.1.1 `message_end` 那一刻的下标（`S2-CL2-N3`，全局最脆的一环）
+
+id 规则要用到"这条消息在 `session.messages` 里的下标"，而**只有一种算法是对的**：
+
+- `session.messages` 就是 `agent.state.messages`（`agent-session.js:681-683`）；
+- `Agent.processEvents` 收到 `message_end` 时**先** `_state.messages.push(event.message)`（`agent.js:389`），
+  **之后**才 `for (const listener of this.listeners) await listener(...)`（`agent.js:416-419`）。
+
+→ **在 `message_end` 监听器里，下标恒等于 `session.messages.length - 1`。**
+
+⚠️ 同一份代码里有**两个陷阱**，实现的人极容易踩：
+
+1. **`message_start` 时消息还不在数组里**（那时只设了 `_state.streamingMessage`，`agent.js:384-385`）。
+   想在 `message_start` 时算下标一定是错的 —— 所以进行中的那条 assistant 只能用 controller
+   铸造并持有的 id（§4.1）。
+2. **读 `agent-loop.js` 会得出相反结论**：那边 toolResult 是在整批工具跑完后才
+   `currentContext.messages.push(result)`（`agent-loop.js:142-144`），而 `emitToolResultMessage()`
+   在 277/318/376 行就发出去了。**`agent-loop` 那份数组是 `createContextSnapshot()` 的副本，
+   不是 `state.messages`** —— 两份数组的时序相反。
+
+并行工具调用下踩中陷阱 2 的后果很具体：N 个 toolResult 会算出**同一个下标**，N 条工具行塌成 1 条；
+重开面板重放时又变回 N 条。
+
+**因此 S2 的工具行 id 刻意不走下标**（改用 `toolCallId`，`S2-CL2-N4`），
+下标只用于历史消息的**批量重放**——那时全部消息已经落定，没有时序问题。
 
 ### 0.2 发送语义（本次核实，纠正了旧计划的写法）
 
@@ -107,7 +134,16 @@ pi 自带的 `dist/core/export-html/vendor/marked.min.js` 是 **marked v18.0.5**
 | `[x](JaVaScRiPt:alert(1))` | `<p>x</p>` |
 | `[x](java\x01script:alert(1))` | 不成链接，原样文本 |
 | `[x](data:text/html;base64,…)` | `<p>x</p>` |
-| 正常链接 / 正常图片 / 行内代码 / 粗体删除线 | 正常渲染，URL 未被误杀 |
+| 正常链接 / 行内代码 / 粗体删除线 | 正常渲染，URL 未被误杀 |
+| 正常图片 `![](https://…)` | **用 pi 的原始配置**会渲染成 `<img src="https://…">`；但 **S2 必须降级为 alt 文本**（D1），见下 |
+
+⚠️ 上面这张表是**用 pi 的原始配置**跑出来的（12 条）。S2 在 `image` 上比 pi 更严（D1：只允许 `data:image/`），
+所以 **CI 语料必须把图片这条单独断言**（`S2-CL2-N6`：原表里"正常图片→正常渲染"与 D1 自相矛盾）：
+
+| 第 13 条 | 期望 |
+| --- | --- |
+| `![alt](https://example.com/a.png)` | 降级为纯文本 `alt`，**不产生 `<img>`** |
+| `![alt](data:image/png;base64,iVBORw0KGgo=)` | 正常渲染成 `<img src="data:image/png;base64,…">` |
 
 判据（写进 CI 脚本）：转义后的文本里不会出现裸 `<`，因此输出中**所有** `<…>` 都是 marked
 自己生成的标签；逐个检查这些标签，禁止出现被禁标签、`on*=`/`srcdoc=` 属性、
@@ -120,7 +156,7 @@ pi 自带的 `dist/core/export-html/vendor/marked.min.js` 是 **marked v18.0.5**
 
 | 事实 | 位置 |
 | --- | --- |
-| `WebviewOptions` 只有 4 个成员：`enableScripts` / `enableForms` / `enableCommandUris` / `localResourceRoots` | 9902 起 |
+| `WebviewOptions` 共 **5** 个成员：`enableScripts` / `enableForms` / `enableCommandUris` / `localResourceRoots` / `portMapping` | 9902–9950 |
 | `retainContextWhenHidden` 声明在 `WebviewPanelOptions` 里 | 10058 / 10082 |
 | `WebviewView.webview` 的类型是 `Webview`，其 `options` 是 `WebviewOptions` —— **不含该开关** | 10236 |
 | **该开关对视图的正确入口是 `registerWebviewViewProvider` 的第三参数**：`{ webviewOptions: { retainContextWhenHidden?: boolean } }` | 11754–11776 |
@@ -239,10 +275,13 @@ form-action 'none';
 8. 新增 `commands` 必须保持 S1 自测 T3 的命令标记检查。
 9. 扩展产物**不静态 import pi**（沿用 S1 的 `loader.ts` 约束）。
 10. `.vsix` 体积门禁仍是 30 MB；`check-vsix.mjs` 必须继续通过。
-11. **id 只有一个权威来源：controller。** webview 不得自己造 id，也不得在重放时看到与实时不同的 id
-    （`S2-CL-C1`，见 §4.1）。
+11. **id 只有一个权威来源：controller；同一实体的 id 在它的整个生命周期里不得改变。**
+    进行中的 assistant 用 `activeAssistantId`，**`message_end` 时必须继续用它**（`S2-CL2-N1`）；
+    工具行用 `tool-<toolCallId>`（`S2-CL2-N4`）。webview 不得自己造 id。
 12. **实时路径与重放路径必须产出同一种 `ChatItem`。** 任何"实时简化、重放完整"的设计都算缺陷
     （`S2-CL-C3`），因为用户重开一次面板就会看到两个样子。
+    （允许的例外只有一种：实时可以**先**给一个"进行中"的中间态，而重放只产出最终态 ——
+    前提是两者用**同一个 id** upsert，例如工具行的 `运行中…` → `✓`。）
 
 ---
 
@@ -279,16 +318,19 @@ export type ServerMessage =
   | { type: "delta"; id: string; kind: "text" | "thinking"; delta: string }
   | { type: "queue"; steering: string[]; followUp: string[] }
   | { type: "busy"; busy: boolean; errorMessage?: string }
-  | { type: "composerError"; text: string };
+  | { type: "composerError"; text: string }        // 输入框下方的红字（发送失败等）
+  | { type: "restoreComposer"; text: string };     // 把文本**退回输入框**（不是错误，见 N5）
 ```
 
-**id 规则（唯一权威 = controller，`S2-CL-C1`）**
+**id 规则（唯一权威 = controller，`S2-CL-C1` / `S2-CL2-N1` / `S2-CL2-N4`）**
 
 | 对象 | id | 理由 |
 | --- | --- | --- |
-| 历史消息（重放） | `msg-<在 session.messages 里的下标>` | 确定性；重放两次得到同样的 id，webview 按 id upsert 不会重复 |
-| 进行中的 assistant | `controller.activeAssistantId`，在 `message_start` 时铸造一次并**持有到 `message_end`** | 流式中重开面板时，`snapshot()` **复用它**；否则重开后 delta 会打向一个 webview 不认识的 id，回复的后半截全部丢字 |
-| 运行时提示（notice / tool 行） | `msg-<下标>`（与历史一致）或 `notice-<递增序号>` | 同上，保证重放稳定 |
+| 进行中的 assistant | `controller.activeAssistantId`：`message_start` 时铸造一次，**持有到 `message_end`** | 流式中重开面板时 `snapshot()` **复用它**；否则重开后 delta 打向 webview 不认识的 id，后半截全丢（C1） |
+| **同一条 assistant 的最终 item** | **强制复用 `activeAssistantId`**，发出后再清空 | 否则 `message_start` 建的节点（`activeAssistantId`）与 `message_end` 产的节点（`msg-<下标>`）**id 不同 → upsert 找不到 → 每条回复都多出一个空壳节点**（N1） |
+| 工具行 | `tool-<toolCallId>` | toolResult 消息自带 `toolCallId`（`agent-loop.js:535-554`）。**构造上实时=重放**，不依赖 §0.1.1 那条脆弱的时序规则；且 `tool_execution_start` 与随后的 `message_end` 能 upsert 成同一行（N4） |
+| 历史消息（批量重放） | `msg-<在 session.messages 里的下标>` | 批量重放时全部消息已落定，下标稳定；重放两次 id 相同，按 id upsert 不会重复 |
+| 运行时提示 notice | `msg-<下标>` 或 `notice-<递增序号>` | 同上 |
 
 **`item` 是 upsert 语义**（`S2-CL-C2`）：webview 找不到该 id 就**新建**节点。
 这样即使某条消息只发了 `message_end`（例如 toolResult），也不会丢。
@@ -296,14 +338,15 @@ export type ServerMessage =
 ### 4.2 `src/pi/serialize.ts`
 
 `serializeMessage(message, index, toolCallIndex) → ChatItem | undefined`。
-`toolCallIndex: Map<toolCallId, {name, argsText}>` 由调用方**按顺序增量维护**：
-遇到 assistant 消息就把它的 toolCall 块登记进去，遇到 toolResult 就从里面取参数摘要。
+`toolCallIndex: Map<toolCallId, {name, argsText}>` 由调用方**按顺序增量维护**：遇到 assistant 消息就把它的
+toolCall 块登记进去，遇到 toolResult 就用 `toolCallId` 取参数摘要。
+（`toolName` 与 `toolCallId` 在 toolResult 消息上**本来就有**，不必依赖索引；索引只用来补参数摘要。）
 
 | pi 消息 | 产物 |
 | --- | --- |
 | `role: "user"` | `{kind:"user"}`，content 里的 text 块拼接；图片块 → 追加 `[图片]` 占位（附件功能未做） |
 | `role: "assistant"` | `{kind:"assistant"}`：text 块拼接、thinking 块拼接；带 `stopReason`/`errorMessage`。**不带 toolCalls 字段**（S2 的卡片范围只在 §1.2） |
-| `role: "toolResult"` | `{kind:"tool"}`：`toolName` + **参数摘要**（来自 `toolCallIndex`，取不到时留空）+ `isError`。**不显示结果正文**（`S2-CL-C3`：S2 不含工具卡片，正文是 S3 的范围；否则重放一次就把"不做的功能"冒出来了） |
+| `role: "toolResult"` | `{kind:"tool"}`，**id = `tool-<toolCallId>`**：`toolName` + **参数摘要**（来自 `toolCallIndex`，取不到时留空）+ `isError`。**不显示结果正文**（`S2-CL-C3`：S2 不含工具卡片，正文是 S3 的范围；否则重放一次就把"不做的功能"冒出来了） |
 | `role: "custom"` / `"bashExecution"` | `{kind:"notice"}`（内容为文本摘要） |
 | `role: "compactionSummary"` / `"branchSummary"` | `{kind:"notice"}`（"上下文已压缩"等） |
 | 其它未知 role | `{kind:"notice", level:"warn"}` + 原样 `role` —— **不静默丢弃** |
@@ -356,7 +399,12 @@ catch (e):
   路由层必须立刻返回，错误经 `.catch` 走 `composerError`。
 - **乐观 busy**（`S2-CL-S3`）：消息被接受的那一刻就发 `busy:true`，由 `agent_settled` 解除；
   否则冷启动建连的那几秒里状态行显示"空闲"，用户会重复发送。
-- 扩展命令（`/smoke`）由 pi 在 `prompt()` 内处理，S2 不特殊对待。
+- ⚠️ **但 `agent_settled` 不是万能解除条件**（`S2-CL2-N2`）：扩展命令（`/smoke`）是 pi 在
+  `prompt()` 内部**直接执行**的，**不启动 agent run**，因此既没有 `agent_start` 也没有 `agent_settled` ——
+  只靠 `agent_settled` 解除，用户敲一次 `/smoke` 就会把状态行**永久卡在"生成中…"**。
+  **必须补一次对账**：`prompt()` 的 promise settle（resolve 或 reject）之后检查
+  `session.isIdle`，为真就发 `busy:false`。
+  （`isIdle` 不能用来判 UI 空闲——它不看队列；但用它做这次对账口径是唯一正确的，见 §0.1。）
 
 #### 4.3.2 delta 合帧（`S2-CL-S4`，推翻第一版的 D5）
 
@@ -366,9 +414,13 @@ catch (e):
 
 #### 4.3.3 `abort()` 同时清队列（`S2-CL-S1`，见决策 D9）
 
-`await session.abort()` 之后调 `clearQueue()`，把返回的文本原样交给 webview 填回输入框。
+`await session.abort()` 之后调 `clearQueue()`，把返回的文本交回 webview 填进输入框。
 理由：用户点"中止"的语义是"停下来"，留着 followUp 让它在用户以为已经停下之后继续发出去，
 属于违背意图；pi 自己的 `clearQueue()` 注释也把"用户中止时还原到编辑器"列为用途。
+
+**退回通道是 `restoreComposer`，不是 `composerError`**（`S2-CL2-N5`）：`composerError` 在 §4.6 里是
+"输入框下方红字"，把用户自己写的话当错误红字塞回去语义错了。多条被退回的消息**用单个换行拼接**，
+顺序为 `steering` 在前、`followUp` 在后（与投递顺序一致）；拼接结果**非空时**才发 `restoreComposer`。
 
 ### 4.4 `src/host/chatView.ts`
 
@@ -384,7 +436,7 @@ catch (e):
 | --- | --- |
 | `ready` / `requestState` | `controller.ensure()` → `post(state)`；失败 post `notice(error)` + `busy:false` |
 | `prompt` | 乐观 `busy:true` → `ensure()` → `controller.prompt(text, behavior)`；失败 post `composerError` + `busy:false` |
-| `abort` | `controller.abort()` → `queue` 消息清空队列条 + `composerError` 回填被退回的文本 |
+| `abort` | `controller.abort()` → `queue` 消息清空队列条 + `restoreComposer` 退回文本（见 §4.3.3） |
 | `clearQueue` | `controller.clearQueue()` → 以随后的 `queue_update` 为准刷新 |
 | `openExternal` | 校验 scheme ∈ `urlPolicy.EXTERNAL_SCHEMES` 后 `vscode.env.openExternal`；否则忽略并记 Output |
 
@@ -393,22 +445,38 @@ catch (e):
 
 | pi 事件 | 协议消息 |
 | --- | --- |
-| `message_start`（assistant） | `item`（空 assistant，`streaming:true`，id = 新铸造并持有） |
+| `message_start`（assistant） | `item`（空 assistant，`streaming:true`，id = 新铸造并持有 `activeAssistantId`） |
 | `message_update.text_delta` | 合帧后 `delta {kind:"text"}` |
 | `message_update.thinking_delta` | 合帧后 `delta {kind:"thinking"}` |
-| `message_end`（**任意 role**，含 toolResult / user / custom） | `item`（同一序列化器产出；upsert 语义；assistant 同时清 `activeAssistantId`） |
-| `tool_execution_start` | 只记 `toolCallIndex` 的补充信息（**不发 UI 消息**：UI 由 toolResult 的 `message_end` 驱动，保证与重放一致） |
-| `tool_execution_end` | 同上（不发 UI 消息） |
+| `message_end`（**任意 role**，含 toolResult / user / custom） | `item`（同一序列化器产出；**id 按下面的硬规则**） |
+| `tool_execution_start` | `item`（`{kind:"tool", id:"tool-<toolCallId>", toolName, summary:"运行中…"}`） |
+| `tool_execution_update` | 不发（bash 输出流式是 S3 的范围） |
+| `tool_execution_end` | 不发 —— 等 toolResult 的 `message_end` 用**同一个 id** upsert 成最终态 |
 | `queue_update` | `queue` |
-| `agent_start` / `agent_settled` | `busy {busy:true/false}`（**空闲只认 `agent_settled`**） |
+| `agent_start` | `busy {busy:true}` |
+| `agent_settled` | `busy {busy:false}` + **把仍处于"运行中"的 tool item 标记为"已中止"**（中止或异常路径下 toolResult 可能永远不来） |
 | `agent_end` | 仅在有 `willRetry` 时发 `notice` |
 | `compaction_start/end`、`auto_retry_*` | `notice` |
 | `session_info_changed` / `thinking_level_changed` | S4 再用，S2 忽略 |
 
-- **`tool_execution_start/update/end` 为何不直接驱动 UI**：实时用它们建节点、重放用 `session.messages`
-  建节点，就是第一版"两种呈现"的来源（`S2-CL-C3/C4`）。统一走 `message_end` 后，实时与重放的
-  代码路径**是同一段**。代价是工具行要等该次调用结束才出现（S2 的"一行摘要"本来也只有结束时才有结论），
-  S3 做卡片时再为"执行中"状态单独引入 `toolPhase` 消息。
+**`message_end` 的 id 硬规则**（`S2-CL2-N1`）：
+
+```
+role === "assistant" 且 activeAssistantId 非空 → 强制用它，发完清空
+role === "toolResult"                          → `tool-${toolCallId}`
+其它（user / custom / bashExecution / …）       → `msg-${session.messages.length - 1}`
+```
+
+第一条是 C1 的**收尾端**对应修复：`message_start` 用 `activeAssistantId` 建节点，`message_end`
+若改用下标命名，两条 id 不同 → upsert 新建出第二个节点 → 每条回复都留一个空壳。
+第三条依赖 §0.1.1 核实过的时序（`message_end` 时消息已在数组里）。
+
+- **为什么工具行能既实时又一致**（`S2-CL2-N4`，推翻了第一版"tool_execution_* 不发 UI"的取舍）：
+  第一版为了让实时与重放完全一致，规定工具行只在 toolResult 的 `message_end` 时出现 ——
+  代价是**一条 `bash sleep 30` 在 30 秒里面板毫无迹象，看起来像卡死**。
+  用 `toolCallId` 当 id 之后这个取舍不必付：`tool_execution_start` 发一条 `运行中…` 的中间态，
+  toolResult 的 `message_end` 用**同一个 id** upsert 成最终态；而**重放只会产出最终态那一条**。
+  约束 12 依然成立（例外只允许"同 id 的中间态 → 最终态"）。
 
 ### 4.5 `src/webview/render.ts`
 
@@ -432,7 +500,7 @@ catch (e):
   - `delta` → 追加到对应 id 的流式区（`textContent`），流式期间用 `white-space: pre-wrap` 呈现纯文本
   - 流式结束（收到该 id 的最终 `item`）→ 用 `renderMarkdown` 结果替换纯文本区（S2-D4）
   - `queue` → 渲染待处理条（steering 标"将打断"、followUp 标"排队"）+ "清空队列"按钮
-  - `busy` → 按钮/输入框状态；`composerError` → 输入框下方红字，**保留用户输入不清空**
+  - `busy` → 按钮/输入框状态；`composerError` → 输入框下方红字，**保留用户输入不清空**；`restoreComposer` → 把文本**填回**输入框（非错误，不清红字）
 - 输入语义（PLAN 5.2 第 5 条）：
   - 空闲：`Enter` → `prompt auto`（`Shift+Enter` 换行）
   - 流式中：`Enter` → `prompt steer`（按钮文案与提示条写明"将打断当前回复"）；
@@ -472,8 +540,13 @@ entryPoints: { extension: "src/extension.ts", webview: "src/webview/main.ts", st
 ### 4.9 `scripts/render-xss-check.mjs`（CI）
 
 用 `esbuild` 把 `src/webview/render.ts` 打成 CJS（`platform: node`）后在 Node 里跑 §0.4 的
-**12 个载荷**，按 §0.4 的判据断言；任一不通过即退出非零。另断言：
-`SUMMARY_MAX` 截断、未知 role 的降级不为空、`urlPolicy` 里 render 与 external 用的是同一份白名单。
+**12 个载荷 + 第 13 条（图片两例）**，按 §0.4 的判据断言；任一不通过即退出非零。另断言：
+`SUMMARY_MAX` 截断、未知 role 的降级不为空。
+
+**白名单一致性用行为断言，不能用"常量等于它自己"**（`S2-CL2-N8`）：给 `renderMarkdown` 喂
+`[x](tel:123)` 与 `[x](ftp://…)`，断言渲染结果与 `urlPolicy` 的判定**一致（要么都放行、要么都降级）**
+—— 这才是"render 与 openExternal 不会各说各话"的验证点。
+
 由 `npm run check:render` 触发，并加入 `scripts/self-test.mjs` 的 case 与 CI。
 
 ---
@@ -485,7 +558,7 @@ entryPoints: { extension: "src/extension.ts", webview: "src/webview/main.ts", st
 | 切到别的视图再切回 | 视图级 `webviewOptions.retainContextWhenHidden: true` → DOM 保留 | 不重放（页内状态原样） |
 | 右键隐藏视图 / 面板被 dispose | 触发 `onDidDispose`，再拉开时重新 `resolveWebviewView` | 新 webview 发 `ready` → 全量 `state` |
 | 窗口重载 / 扩展重载 | 一切重来 | S2：**新建会话**（历史恢复属 S5 的 `continueRecent`） |
-| **流式中重开** | 同上 | `state` 带上进行中 assistant 的 item（来自 `state.streamingMessage`），**id 复用 controller 持有的 `activeAssistantId`**，后续 delta 才能接上（`S2-CL-C1`） |
+| **流式中重开** | 同上 | `state` 带上进行中 assistant 的 item（来自 `state.streamingMessage`），**id 复用 controller 持有的 `activeAssistantId`**，后续 delta 才能接上（C1）；该条**结束时也必须沿用同一个 id**（N1） |
 
 **唯一数据源是 `session.messages`**（扩展侧不另存一份转录），避免与 pi 的真实历史漂移。
 
@@ -508,16 +581,17 @@ entryPoints: { extension: "src/extension.ts", webview: "src/webview/main.ts", st
 | 编号 | 步骤 | 期望 |
 | --- | --- | --- |
 | M0 | 打开面板 | 面板**有样式**（说明 CSP 的 `style-src` 对了）、脚本执行（说明 nonce 与 `localResourceRoots` 对了） |
-| M1 | 发"你好，用一句话自我介绍" | 流式出现文字；结束后 markdown 渲染；状态行回到空闲 |
+| M1 | 发"你好，用一句话自我介绍" | 流式出现文字；结束后 markdown 渲染；状态行回到空闲；**transcript 里该回复只有一个节点**（不出现空壳，`S2-CL2-N1`） |
 | M2 | 连发三轮（其中一轮要求它写一段带代码块的中文） | 多轮上下文正确；代码块等宽显示 |
 | M3 | 中途点"中止" | 立刻停止；**队列被清空且文本退回输入框**；状态行回到空闲；可继续对话 |
 | M4 | 流式中先按 `Enter`（steer）再按"排队"（followUp） | 两条都进队列条且标注不同；不出现 "Agent is already processing"；steer 生效于本轮、followUp 在本轮结束后被处理 |
 | M5 | 队列非空时等 `agent_end` | 输入态**仍显示生成中**，直到 followUp 被处理完（`agent_settled`）才解除 |
-| M6 | 把面板拉到别处再拉回 | 历史原样，**且不触发整页重放**（DOM 未重建 → 说明 `retainContextWhenHidden` 生效） |
-| **M6b** | **流式进行中**右键隐藏视图，再拉开 | 文字**继续增长到结束**（这是 `S2-CL-C1` 的回归点；不是流式中段做的话测不出来） |
+| M6 | **折叠再展开**视图（⚠️ **不要**把视图拖到别的容器：拖到另一个容器 VS Code 会重建 webview，`retainContextWhenHidden` 管不到，会假失败，`S2-CL2-N7`） | 历史原样，**且不触发整页重放**。判据要可观测：`chatView` 每收到一次 `ready` 就往 Output 写一行 `[webview] ready`，本步断言 **Output 里没有新增该行** |
+| **M6b** | **流式进行中**右键隐藏视图，再拉开 | 文字**继续增长到结束**（C1 的回归点；不是流式中段做的话测不出来）。断言 Output 里**有且仅有一行**新增的 `[webview] ready` |
 | M7 | **XSS（三条）**：把三个载荷**直接粘进输入框发送** | 不弹任何对话框；`<img …>`/`<script>` 以**文字**显示；`[x](javascript:alert(1))` 只显示 `x` 且不可点 |
 | M8 | 让模型读一个内容含 `![x](https://…)` 与 `[a](https://example.com)` 的文件 | 远程图片不加载（显示为文本）；https 链接可点且用系统浏览器打开 |
-| M9 | 发一条会触发工具调用的指令（例如让它读一个文件） | 工具行以**一行**出现（名字 + 参数摘要 + ✓）；**隐藏再重新打开面板后，同一行以同样形态重放出来**（`S2-CL-C3` 的回归点） |
+| M9 | 发一条会触发**耗时**工具调用的指令（例如"运行 `sleep 20` 然后告诉我结束时间"） | (a) 调用**进行中**就已出现一行 `运行中…`（不是 20 秒毫无迹象，`S2-CL2-N4`）；(b) 结束后**同一行**变成最终摘要（名字 + 参数 + ✓），**不新增第二行**；(c) 隐藏再重新打开面板后，重放出来的是**最终形态且只有一行**（C3 的回归点） |
+| **M10** | 输入一个已注册的扩展命令（如 `/smoke`）并回车 | 命令被执行；**状态行不会永久停在"生成中…"**（`S2-CL2-N2` 的回归点：扩展命令不启动 agent run，没有 `agent_settled`，靠 `prompt()` settle 后与 `isIdle` 对账解除 busy） |
 
 ### 6.3 受限 Windows 机（人工，从 Marketplace 更新后）
 
@@ -561,7 +635,7 @@ entryPoints: { extension: "src/extension.ts", webview: "src/webview/main.ts", st
 | D4 | 流式期间是否实时渲染 markdown | **否**，纯文本流式 + 结束转 markdown | 半截 markdown 会闪烁；实现简单 |
 | D5 | 是否对 delta 合帧 | **是，~16 ms**（**推翻第一版的"不节流"**，`S2-CL-S4`） | 合并不改变内容与顺序，不是正确性取舍；否则一条长回复几千次 IPC |
 | D6 | 版本号与通道 | **0.1.4 预发布** | PLAN 5.4 把正式版放 S10；预发布更新链路已在受限机验证可用 |
-| D7 | 工具卡片 | S2 只显示一行"工具名 + 参数摘要 + ✓/✗"，**实时与重放一致** | 完整卡片是 S3 |
+| D7 | 工具卡片 | S2 只显示一行"工具名 + 参数摘要 + ✓/✗"，**实时与重放一致**；但执行中先给一个同 id 的 `运行中…` 中间态（`S2-CL2-N4`） | 完整卡片是 S3；中间态避免"长命令 30 秒毫无迹象像卡死" |
 | D8 | 是否新增 `Pi: New Session` 命令 | **是** | 面板需要清空入口；S5 再扩展成完整会话管理 |
 | D9 | 中止时是否清队列 | **清空并把文本退回输入框**（`S2-CL-S1`） | "中止"的语义是停下来；否则队列里的 followUp 会在用户以为已停止后继续发出去 |
 
@@ -580,7 +654,9 @@ entryPoints: { extension: "src/extension.ts", webview: "src/webview/main.ts", st
 | S2-R7 | 面板重开后状态与 pi 不一致 | 重放只读 `session.messages`，不维护第二份转录 |
 | S2-R8 | **提取 `model-choice.ts` 破坏 S1 已验证的受限机路径** | 单独 commit + W0 先重跑自测 |
 | S2-R9 | 受限机上 Electron/Chromium 版本差异导致 webview 行为不同 | W1–W3 在受限机实测；CSP 只用标准指令 |
-| S2-R10 | 视图 dispose 时机与 `retainContextWhenHidden` 组合出未预期行为 | M6/M6b 覆盖两种重开路径 |
+| S2-R10 | 视图 dispose 时机与 `retainContextWhenHidden` 组合出未预期行为 | M6/M6b 覆盖两种重开路径；`ready` 行写 Output 使其可观测 |
+| S2-R11 | **id 不一致导致节点重复或丢字**（C1 与 N1 是同一个坑的两端） | §4.1 的 id 表 + §3 约束 11；M1 断言"只有一个节点"、M6b 断言流式不丢字、M9 断言工具行不重复 |
+| S2-R12 | **扩展命令让 busy 永久卡住** | §4.3.1 的 `prompt()` settle 后与 `isIdle` 对账；M10 专项回归 |
 
 ---
 
@@ -616,3 +692,27 @@ VERDICT: BLOCKING（3 条）。**已全部处置完毕，逐条如下。**
 已采纳：§0.5 改为逐行核对表并标注第一版的错误来源，§6.2 的 M0 就是这一节的实测点。
 
 ⚠️ **本轮之后的所有改动（即上表全部 17 条）都未经第二轮复核。**
+
+### 第 2 轮（Claude Opus 5，只读；结论：**无 BLOCKING** / 2 条新缺陷 / 1 条必补依据 / 6 条建议）
+
+VERDICT: **NON_BLOCKING**。评审者逐条复核了上一轮 17 条的落实（确认"改对了位置、不是改了字面"），
+并**主动撤回**了上一轮的 P2。本轮 8 条全部处置如下。
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+| --- | --- | --- | --- |
+| S2-CL2-N1【缺陷】 | 同一条 assistant 经历 `message_start`（id=`activeAssistantId`）与 `message_end`（id=`msg-<下标>`）两次 upsert，**id 不同 → 每条回复多留一个空壳节点** | **ACCEPT** | 属实，是上一轮 C1 的**收尾端**对应错误。§4.4 新增"`message_end` 的 id 硬规则"；§3 约束 11 收紧为"同一实体 id 全程不变"；M1 加断言 |
+| S2-CL2-N2【缺陷】 | 乐观 busy 只由 `agent_settled` 解除，而**扩展命令不启动 agent run**（无 `agent_start`/`agent_settled`）→ 敲一次 `/smoke` 状态行永久卡在"生成中" | **ACCEPT** | 属实，是上一轮 S3 修复引入的新 bug。§4.3.1 补"`prompt()` settle 后与 `session.isIdle` 对账"；§0.1 把 `isIdle` 加回并注明正确用途（上一轮误删）；新增 M10 |
+| S2-CL2-N3【依据缺失】 | 实时路径怎么算 `msg-<下标>` 没写，而这是全局最脆的一环；并指出 `agent.js`（先 push 后 notify）与 `agent-loop.js`（先 emit 后 push）**时序相反**的陷阱 | **ACCEPT** | 已逐行核实：`agent.js:389` push / `416-419` notify；`agent-session.js:681-683` 的 `session.messages === agent.state.messages`；`agent-loop.js:142-144` 与 277/318/376 的确相反。新增 §0.1.1 全文写入行号，并在 §4.4 写明硬规则 |
+| S2-CL2-N4【建议，采纳】 | 工具行改用 `toolCallId` 当 id：构造上实时=重放，且能顺便把"执行中"的可见性买回来 | **ACCEPT** | 已核实 toolResult 消息自带 `toolCallId`/`toolName`（`agent-loop.js:535-554`）。§4.1 id 表加一行；§4.4 事件表把 `tool_execution_start` 改为发同 id 的 `运行中…` 中间态；§3 约束 12 写明这条唯一允许的例外；D7 更新；M9 重写为三段断言 |
+| S2-CL2-N5【协议缺口】 | 用 `composerError` 回填中止退回的文本语义不对（那是错误红字通道），且多条拼接规则未定义 | **ACCEPT** | §4.1 新增 `restoreComposer` 消息；§4.3.3 写明"steering 在前、followUp 在后，单换行拼接，非空才发"；§4.4 路由表改；§4.6 区分两个通道 |
+| S2-CL2-N6【自相矛盾】 | §0.4 的 12 载荷里"正常图片→正常渲染"与 D1（只允许 `data:image/`）打架，CI 一跑就红 | **ACCEPT** | 属实：那张表是**用 pi 的原始配置**跑的。§0.4 加说明并补**第 13 条**（https 图片必须降级为 alt 文本 / `data:image/png;base64,…` 正常渲染）；§4.9 的语料改为 12+1 |
+| S2-CL2-N7【假失败】 | M6"把面板拉到别处再拉回"会**重建** webview，此步必然假失败；且"DOM 未重建"人工看不见 | **ACCEPT** | 属实。M6 改为"折叠再展开"并加⚠️说明；判据改为可观测的 Output `[webview] ready` 行计数（`chatView` 每次 `ready` 写一行）；M6b 同步改 |
+| S2-CL2-N8【弱断言】 | "断言 `urlPolicy` 里 render 与 external 用的是同一份白名单"等于断言常量等于它自己 | **ACCEPT** | §4.9 改为**行为断言**：喂 `tel:`/`ftp:` 链接，断言渲染结果与 `urlPolicy` 判定一致（都放行或都降级） |
+| §0.5 数字 | 表格写"`WebviewOptions` 只有 4 个成员"，实际 **5** 个（漏 `portMapping`） | **ACCEPT** | 属实：接口范围 9902–9950，第 5 个成员是 `portMapping`。已改 |
+| S2-CL-P2 | **评审者主动撤回**上一轮"升级 `@types/vscode` 到 1.123"的建议，确认作者的 REJECT 正确 | 记录 | 撤回理由是它自己查了 npm（该区间只有 1.118/1.120/1.125，无 1.123.x），与作者一致 |
+
+本轮评审对上一轮的复核结论（原文要点）：3 条 BLOCKING"改对了位置，不是改了字面"，
+C1/C2/C3 的修法"改到了根因而不是打补丁"，§3 新增的约束 11/12"把纪律上升了一级，是正确做法"。
+
+⚠️ **本轮之后的全部改动（即上表 10 条）同样未经第三轮复核。** 其中 N1/N2 是**代码级**影响的改动，
+N4 改变了 §4.4 的事件映射，实现时要格外小心。
