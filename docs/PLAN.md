@@ -210,6 +210,7 @@ jerrypi-vscode/
   **闸门规则：除 T5c 外的全部 required 项（T1–T9）在受限 Windows 机上任一非 PASS，即 GATE BLOCKED，不进入 S2，回到第 4 节重新决策。** T5a/T5b 失败意味着 A3 不成立，需用户决定是否接受"只读 agent"。
 - **S2 协议与基础聊天**：`protocol.ts`、`chatView.ts`、webview 输入框 + 流式文本 + 思考块 + 中止按钮 + 流式期间的 steer/followUp 发送 + 队列条 + 面板重开时的状态重放。（验收：多轮对话；折叠再展开面板不丢历史；流式期间发送不出现 "Agent is already processing" 错误，消息进入队列条；队列非空时 `agent_end` 后输入仍禁用，直到 `agent_settled`；喂入 `<img src=x onerror=…>`、`<script>…</script>`、`[x](javascript:alert(1))` 三种内容，断言不执行、标签以文本显示、链接被降级为纯文本。）
 - **S3 工具调用卡片**：bash / read / edit / write 的调用参数与结果展示，可折叠，bash 输出流式更新，点击文件路径打开文件。（让 agent 列目录并改一个文件，G2。）
+  **状态：已实现（0.1.5）**。实现记录与验收清单见 [`S3-plan.md`](S3-plan.md)；diff 渲染（`edit` 的 patch）与工具审批按原计划留给 S7/S8。
 - **S4 模型与思考等级**：模型选择器（QuickPick）、思考等级切换、状态栏显示模型与上下文用量。（G4。）
 - **S5 会话管理**：新建（`runtime.newSession()`）、列表（`SessionManager.list(cwd, sessionDir)`，`sessionDir` 从生效的 agentDir 推导为 `<agentDir>/sessions`，否则自定义 `jerrypi.agentDir` 时列不出）、恢复（`runtime.switchSession(path)`）、显示会话名；每次替换后 rebind；VS Code 重启后自动 `continueRecent(cwd, sessionDir)`。（G3。）
 - **S6 设置与密钥**：三项 VS Code 设置、`Pi: Clear Stored API Keys`，并把 S1 的最小版 `Pi: Set API Key` / `Pi: Open Settings File` 补完整（provider 选择、校验）。（清空 `models.json` 里的 key 只靠 SecretStorage 也能完成对话。）

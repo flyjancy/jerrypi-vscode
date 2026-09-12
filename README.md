@@ -33,7 +33,7 @@
 | --- | --- | --- |
 | 聊天面板 | **已实现** | 侧边栏 Webview：流式文本、思考块折叠、中止、排队、面板重开/重载后不丢历史 |
 | 排队语义 | **已实现** | 与 pi CLI 一致：`Enter` = **转向**（写完当前这段就注入），「追加」= 等整轮结束再发，「取回编辑」= 把排队消息放回输入框 |
-| 工具行 | **已实现**（一行） | 工具调用以一行显示：名字 + 参数摘要 + `✓`/`✗`；执行中先显示「运行中…」 |
+| 工具卡片 | **已实现** | 标题行（名字 + 参数摘要 + `✓`/`✗` + 耗时）可展开看正文；**bash 输出流式回显**（折叠时显示最后 5 行）；输出被 pi 截断时给出摘要与完整输出文件的链接；卡片里的文件路径**可点开**（用编辑器打开） |
 | 内置工具 | **已实现** | `read` / `bash` / `edit` / `write`（bash 可中止） |
 | 密钥管理 | **已实现** | API key 存入 VS Code SecretStorage，优先于 `models.json` 中的 key；可在面板里设置 |
 | 模型选择 | **部分** | 面板**不覆盖**你在 pi 里选定的模型（没选过时才由扩展兜底避开不可用 provider）；面板内切换选择器见 S4 |
@@ -158,6 +158,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 - **会话落盘条件**（pi 行为）：只有完成过至少一轮 assistant 回复的会话才会写入磁盘。
 - **项目级设置默认不被信任**：pi CLI 会解析信任并询问用户，而 jerrypi 固定以 `projectTrusted: false` 初始化会话，因此工作区里的 `.pi/settings.json`、`SYSTEM.md` 等项目级资源不会被加载，也**不会有任何提示**。这是刻意的安全默认值（项目级设置能改 `shellPath` 与默认工具），信任流程待 S6 补上；在此之前如需使用项目级配置，请改用全局 `settings.json`。
 - **远程图片不加载**：markdown 里的 `![](https://…)` 会被降级成 alt 文字。放行远程图片等于让模型可控的 URL 变成一条出网信道（一张 1×1 像素就能把内容编码进 query 发出去），因此消息里的图片**只允许 `data:image/...`**（CSP 里写的是 `img-src <扩展自身资源> data:`，另外放行扩展自己的图标），任何远程 URL 都不会发起请求。
+- **图片内容不显示**：`read` 到图片时只显示一行 `[Image: image/png]` 提示。把图片画出来需要把 base64 塞进协议（一张图可达数 MB），会顶爆重放预算；这也正是 pi 在没有图片能力的终端下的降级行为。
 - **依赖 `ctx.ui.custom()` 的 pi 扩展在面板里不可用**：那是终端 TUI 专有的全屏自定义渲染入口（需要真实的 TUI 实例），扩展宿主里无法实现。这类命令会**显示一条明确的错误**（而不是静默失败），其余功能不受影响。
 - **窗口重载（`Reload Window`）会开始新会话**：历史保存在 `~/.pi/agent/sessions/` 里没有丢，但 S2 还没有"恢复最近会话"的入口（S5 补）。面板被单独重载（`Developer: Reload Webviews`）则会完整重放当前会话，**包括正在流式接收的那一条**。
 - **队列只能整体取回**：pi 只提供 `clearQueue()`，没有按条移除/编辑的 API，所以「取回编辑」是全部取回。
@@ -196,7 +197,7 @@ To make that possible, the extension **ships pi's official pre-bundled SDK** ins
 | --- | --- | --- |
 | Chat panel | **Implemented** | Sidebar webview: streaming text, collapsible thinking blocks, abort, queueing, history survives panel reload |
 | Queue semantics | **Implemented** | Same as the pi CLI: `Enter` = **steer** (injected once the current response finishes), "Follow-up" = wait for the whole turn, "Edit queued" = put queued messages back in the composer |
-| Tool rows | **Implemented** (one line) | Each tool call is one line: name + argument summary + `✓`/`✗`; shows "running…" while in flight |
+| Tool cards | **Implemented** | A header line (name + argument summary + `✓`/`✗` + duration) expands to the result; **bash output streams in** (collapsed shows the last 5 lines); truncated output gets a summary and a link to the full output file; file paths inside a card are **clickable** and open in the editor |
 | Built-in tools | **Implemented** | `read` / `bash` / `edit` / `write` (bash can be aborted) |
 | API keys | **Implemented** | Stored in VS Code SecretStorage, taking precedence over keys in `models.json` |
 | Model selection | **Partial** | The panel **never overrides** the model you picked in pi; it only falls back (to a credentialed provider) when nothing is configured. An in-panel model picker lands in S4 |
@@ -309,6 +310,7 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full notices and lice
 - **Session persistence** (pi behavior): a session is written to disk only after at least one assistant reply.
 - **Project-level settings are not trusted by default**: the pi CLI resolves trust and asks the user, whereas jerrypi always initialises sessions with `projectTrusted: false`. Project-scoped resources such as `.pi/settings.json` and `SYSTEM.md` are therefore not loaded, and **nothing tells you so**. This is a deliberate safe default (project settings can override `shellPath` and the default tool set); the trust flow lands in S6. Until then, put such configuration in the global `settings.json`.
 - **Remote images are not loaded**: a markdown `![](https://…)` is downgraded to its alt text. Allowing remote images would turn a model-controlled URL into an outbound channel (a 1×1 pixel can encode content in its query string), so inside messages **only `data:image/...` is allowed** (the CSP reads `img-src <extension's own resources> data:` and also allows the extension's own icons); no remote URL is ever fetched.
+- **Images are not displayed**: reading an image shows a single `[Image: image/png]` line. Rendering it would mean pushing base64 through the protocol (a single image can be several MB) and blowing the replay budget; this is also exactly how pi degrades on a terminal without image support.
 - **pi extensions that rely on `ctx.ui.custom()` do not work in the panel**: that API renders a full-screen TUI component and needs a real TUI instance, which an extension host cannot provide. Such commands show an **explicit error** (rather than failing silently); everything else about the extension keeps working.
 - **Reloading the window starts a new session**: history is still on disk under `~/.pi/agent/sessions/`, but S2 has no "resume recent session" entry point yet (S5 adds it). Reloading only the webview (`Developer: Reload Webviews`) replays the whole session, **including the message currently streaming**.
 - **The queue can only be emptied as a whole**: pi exposes `clearQueue()` and nothing per-item, so "Edit queued" returns everything.

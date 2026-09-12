@@ -638,3 +638,57 @@ S2 的 `settlePendingTools` 兜底也是对的，但两者一合并就产生"中
 依据是 S1 的 T5c 注释（"实测正常 abort 仍会发出 toolResult"）—— 我自己在 S1 就实测过它，
 却在写 S3 时又把它当成"通常不会"。**同一条事实在四份计划里被引用过三次，第三次写反了。**
 补探针 H 的成本是 4 个模型调用，而它挡住的是一次会让"中止吃掉输出"的错误修复方向。
+
+
+---
+
+## 12. 实施记录
+
+### 12.1 落地清单（6 个提交）
+
+| 提交 | 内容 |
+| --- | --- |
+| `8bcd24b` | `src/shared/toolText.ts` + `scripts/tool-text-check.mjs`（56 条）+ self-test 用例 6 挂载 |
+| `4737015` | 协议（`PROTOCOL_VERSION` 1→2）、`serialize.ts` 的正文/元信息/路径铸造、protocol-check 63→84 |
+| `aca376e` | 控制器的流式 upsert、partial 缓存、过期帧拦截、白名单；controller-check 27→53 |
+| `b889ec3` | `render.ts` 的工具卡片（标题/正文/路径/耗时）；render-xss-check 42→74 |
+| `319ae98` | `main.ts` 的就地更新、粘底滚动、展开态、耗时 tick；样式；protocol-check →92 |
+| 第 6 个 | `chatView.ts` 的 `openFile` |
+
+### 12.2 实施中发现的问题（计划里没预料到的）
+
+1. **`sanitizeBinaryOutput` 里 pi 有一处疏漏**：它的注释写"孤立代理项已被 `Array.from` 过滤"，
+   但 `Array.from` 按**码点**迭代，而孤立代理项本身就是码点 `0xD800-0xDFFF` —— 过滤不掉。
+   我们显式滤掉这一段（孤立代理项会让字符串结构不完整，JSON 往返后变成 U+FFFD）。
+   由 `tool-text-check` 固定，模块注释里写明这是**与 pi 的刻意差异**。
+2. **`render-xss-check` 的 `audit()` 太天真**：它直接对整段标签查 `on\w+=`，
+   于是把 `data-open-path="/w/x&quot; onmouseover=&quot;alert(1)"`（转义之后的属性值）
+   误报成注入。改成"事件属性检查先删属性值，URL 检查必须看属性值"，并补了 5 条
+   **"检查检查本身"**的断言（放宽之后必须仍抓得住 `script` / `onerror=` / `javascript:`）。
+   顺带踩到一次反向的坑：第一版把两个检查都改成"删属性值之后查"，
+   结果 `audit('<a href="javascript:alert(1)">')` 变成漏报 —— 被自己新加的断言当场抓住。
+3. **量测结果比估算乐观**（R4 的"先量再优化"）：
+   - 大输出（每次快照都是满 50KB）：**13 帧 / 549.4 KB / 5630ms ≈ 98 KB/s**；
+   - `snapshot()`：24 条 / 107.3 KB / 5ms。
+   结论：98 KB/s 没有越过"结构化克隆会卡"的界限，S3 **不做前缀增量**（D5 成立），
+   4MB 的重放预算相对实测有 ~40 倍余量。
+4. **`controller-check` 里我自己踩的一次坑**：新加的独立控制器忘了把消息推进
+   同一个 `messages` 数组，于是所有"从视图里取工具行"的断言都拿到 `undefined`
+   —— 一次 11 条 FAIL 的假警报。修好后 53/53。
+
+### 12.3 最终检查
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck`（两个 tsconfig） | OK |
+| `npm run self-test` | **6/6** |
+| `npm run check:protocol` | **92 条** |
+| `npm run check:render` | **74 条** |
+| `tool-text-check` | **56 条** |
+| `npm run check:controller` | **53/53**（含两项实测打印） |
+| `npm run package` + `check-vsix` | OK（8 个必需文件、5.73 MB / 30 MB） |
+
+### 12.4 待人工验收
+
+- macOS（F5）：**M1–M14**（§6.2）
+- 受限 Windows 机（0.1.5 发布后）：**W0–W6**（§6.3）
