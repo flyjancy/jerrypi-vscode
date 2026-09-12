@@ -1,6 +1,6 @@
 # S1 实施计划：可行性闸门
 
-> 状态：**已吸收 Claude Opus 5 三轮评审**（2026-09-12），待实施。
+> 状态：**已吸收 Claude Opus 5 四轮评审**（2026-09-12）。第四轮结论：**"计划可以开工了"**，待实施。
 > 依据 [`PLAN.md`](PLAN.md) 第 6 节 S1、5.3、5.4；已落地事实见 [`S0-plan.md`](S0-plan.md) §10。
 >
 > S1 不建 UI。它只回答一个问题：**pi 能不能在 VS Code 扩展宿主里、从 `pi-runtime/` 里真正跑起来，
@@ -65,6 +65,18 @@
 | 5 | 非阻断 | `projectTrusted: false` 与 pi CLI 行为刻意分歧，需让用户知道 | §1.1 新增第 7 项：写进 README 已知限制 |
 
 第三轮同时确认了两件我们担心过的事：**`projectTrusted: false` 不影响 T3**（`additionalExtensionPaths` 走 CLI/temporary 分支，无条件合入，不受信任门控）；**覆盖 `operations` 不会丢掉文件互斥队列**（`withFileMutationQueue` 在 `createWriteToolDefinition` 的 execute 内部，不在默认 operations 里）。
+
+### 0.4 第四轮评审吸收（Claude Opus 5；结论：**可以开工**）
+
+| # | 级别 | 意见 | 处置 |
+| --- | --- | --- | --- |
+| 1 | 建议 | T5a 的失败归因没分层：“没装 Git Bash”（配置问题，5 分钟可修）与“策略禁止 spawn”（能力问题）现在都只输出一个 `T5a FAIL` | §4.6：T5a 拆**四个错误码** + 成功时记录实际 shell 路径 |
+| 2 | 建议 | R6 的降级其实是**三档**（全功能 / powershell 档 / 只读档） | §9 新增 **S1-D13** |
+| 3 | 文字 | §4.3 还留着“构造时固定 cwd”的旧理由，与 §4.9 口径不一 | 已改（理由统一为“保持一致、不依赖 `ctx.cwd` 优先级”） |
+| 4 | 文字 | §4.6 的 T6 写“标记文件已生成”，§6 表已升级为“含 toolCallId” | 已对齐到强的那条 |
+| 5 | 提示 | 给 S7 的提醒（非本轮问题）：快照读旧内容必须放在 `operations.writeFile` **内部** | §4.9 末尾记下 |
+
+它同时逐行复核了新 §4.9 的代码：`{ ...base, async execute(...) }` 展开安全（`createWriteToolDefinition` 返回普通对象字面量，渲染器与 `name: "write"` 都带得过去）；内层 `perCall.execute(toolCallId, params, signal, onUpdate, ctx)` 透传了 ctx，路径仍走当前会话 cwd；**没有嵌套两层文件互斥队列**（队列只在内层 execute 里包一次）；`customTools` 经 `wrapRegisteredTools` 后调用的就是这个新 `execute`。
 
 ## 1. 范围
 
@@ -147,7 +159,7 @@ export type PiModule = typeof import("@earendil-works/pi-coding-agent");
 export const REQUIRED_PI_EXPORTS = [
   "VERSION", "getPackageDir", "getAgentDir", "ModelRuntime", "SessionManager", "SettingsManager",
   "createAgentSessionServices", "createAgentSessionFromServices", "createAgentSessionRuntime",
-  "resizeImage", "createWriteToolDefinition",
+  "resizeImage", "createWriteToolDefinition", "getShellConfig",
 ] as const;
 
 let cached: Promise<PiModule> | undefined;
@@ -221,7 +233,8 @@ await rebindSession(runtime.session);        // ← 关键：不调这一行，�
   `finishSessionReplacement()` 里回调）。已核实官方 print/rpc 模式都是先注册、随后 `await rebindSession()`。
   漏了它 → T3 的 `session_start` 标记不写、`/smoke-custom` 的 `onError` 不通、T4 收不到任何事件；
 - **工厂必须使用传进来的 `cwd` 与 `agentDir`**（`switchSession({ cwdOverride })` 时闭包值会错），
-  `customTools` 也必须在工厂内按该 `cwd` 构造（`createWriteToolDefinition(cwd, …)` 在构造时固定 cwd）；
+  `customTools` 也在工厂内按该 `cwd` 构造 —— 理由是**保持一致、不依赖 `ctx.cwd` 的优先级**，
+  而不是“构造时的 cwd 决定写入位置”（实际解析是 `resolveToCwd(path, ctx?.cwd || cwd)`，见 §4.9）；
 - **回调要 `await`**：签名是 `(session: AgentSession) => Promise<void>`，
   `bindExtensions` 返回 Promise，不 await 会让会话替换在绑定完成前 resolve；
 - **`projectTrustContext` 在 S1 不接**：`createAgentSessionServices` / `createAgentSessionFromServices`
@@ -281,7 +294,16 @@ export const REQUIRED_RESOURCE_DIRS = ["docs", "examples"];
   **收到 `message_update` 且 `event.assistantMessageEvent.type === "text_delta"`**（`text_delta` 不是顶层事件）。
   未配置 key → `FAIL E_NO_CREDENTIALS`。
 - **T5**：
-  - T5a `executeBash("echo hi && pwd")` → 输出含 cwd；
+  - T5a `executeBash("echo hi && pwd")` → 输出含 cwd。**失败必须分层**（否则“没装 Git Bash”与
+    “策略禁止 spawn”会被当成同一个结论）：
+    1. `E_SHELL_PATH_INVALID`：设置了 `shellPath` 但文件不存在（pi 抛 `Custom shell path not found: X`）；
+    2. `E_NO_SHELL`：找不到 bash（Windows 上 pi 只搜 `%ProgramFiles%\Git\bin\bash.exe`、
+       `%ProgramFiles(x86)%\Git\bin\bash.exe`，然后 `where bash.exe`——**不搜 per-user 的
+       `%LOCALAPPDATA%\Programs\Git`**，除非它在 PATH 上）；异常原文列出候选路径，**原样写进 Output**；
+    3. `E_SPAWN_DENIED`：shell 找到了但 spawn 被策略拒绝；
+    4. `E_SHELL_OUTPUT`：跑起来了但输出不对。
+    **成功时记录实际使用的 shell 路径**（`getShellConfig().shell`），使 Mac 与 Windows 两次运行可比。
+    （已核实 `getShellConfig(customShellPath?) → { shell, args, commandTransport? }` 已导出，且两个错误文本不同。）
   - T5b `executeBash("sleep 30")` → 2s 后 `abortBash()` → 3s 内返回且 `result.cancelled === true`；
   - T5c（advisory）见下；
   - 已核实：`executeBash` **无** timeout/cwd 参数（cwd 取 `sessionManager.getCwd()`），
@@ -292,7 +314,8 @@ export const REQUIRED_RESOURCE_DIRS = ["docs", "examples"];
   收到标记后等 2s 调 `session.abort()`，断言 `agent_end` 到达且该工具结果为中止。
   60s 内未发起 bash → `SKIP E_NO_TOOLCALL`；发起但无标记 → `FAIL E_NO_SPAWN`。
 - **T6**（R）：临时目录里 `prompt` 让 agent write → read → edit，断言磁盘内容与 `details.patch` 非空；
-  **同时断言 wrappedWrite 的标记文件已生成**（证明调用真的走了我们的实现，而不只是注册表被覆盖）。
+  **同时断言 wrappedWrite 的标记含本次 `toolCallId`**（证明调用真的走了我们的实现，且按调用捕获 ID 可行，
+  而不只是注册表被覆盖）。
 - **T7**（R2）：`SessionManager.create(cwd, sessionDir)` → 一次真实 `prompt("Reply with PONG")`
   （pi 在首条 assistant 消息前不落盘）→ `await R2.dispose()` → `SessionManager.continueRecent(cwd, sessionDir)`
   （**同步**，返回 `SessionManager`）→ 断言消息数 ≥ 2 且文件存在；把 `sessionFile` 与消息数留给 T9。
@@ -381,6 +404,11 @@ export function createCustomTools(pi: PiModule, cwd: string): ToolDefinition[] {
 所以 S7 可以按"实际写入仍受内置文件队列保护"这个前提设计快照逻辑。
 
 存在理由（PLAN.md 第 6 节 S1 第 3 条）：**"同名覆盖内置 write"这个机制有风险，要在闸门里验**。
+
+> **给 S7 的提示（非 S1 问题）**：按 `toolCallId` 存写前旧内容时，**读旧内容这一步必须放在
+> `operations.writeFile` 内部**——队列保护的区间正是包住 `ops.mkdir` 与 `ops.writeFile` 的那一段。
+> 放在 `execute` 开头读就跑到队列外面去了，并行写同一文件时会串。§4.9 里 `recordCall(toolCallId)`
+> 放在 execute 开头，作为“被调用过”的证据没问题，但 **S7 的快照不能照这个位置放**。
 
 ### 4.10 `test-fixtures/ext-smoke/index.ts` 与 `scripts/self-test.mjs`
 
@@ -480,8 +508,9 @@ GATE BLOCKED T3,T6
 | S1-D8 | T4 网络失败怎么办 | **失败即终止判定**，代理层不塞进 S1 |
 | S1-D9 | `wrappedWrite` 是否进 S1 | **进**，并额外断言行为（标记文件） |
 | S1-D10 | 扩展模式 | `mode: "rpc"` |
-| **S1-D11** | 项目信任 | **S1 显式传 `projectTrusted: false`**（pi 默认是 `true`，等于无条件信任工作区设置）；信任 UI 与 `ProjectTrustStore` 留到 S6 |
+| **S1-D11** | 项目信任 | **S1 显式传 `projectTrusted: false`**（pi 默认是 `true`，等于无条件信任工作区设置）；信任 UI 与 `ProjectTrustStore` 留到 S6。⚠ 与 pi CLI 行为刻意不同，已记入 README 已知限制（§1.1 第 7 项） |
 | **S1-D12** | rebind 方式 | 注册 `setRebindSession` + **对初始会话显式调用一次** |
+| **S1-D13** | bash 不可用时的降级 | **三档而非两档**：全功能 → **powershell 档**（引导用户在 `Pi: Open Settings File` 里设 `shellPath`，或把 `powershell` 加进 `defaultTools`）→ 只读档。**只有 `E_SPAWN_DENIED`（策略拒绝）才考虑只读档**；`E_NO_SHELL` / `E_SHELL_PATH_INVALID` 属于配置缺口，一行设置即可修好 |
 
 ## 10. 风险
 
