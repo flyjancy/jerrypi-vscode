@@ -931,3 +931,51 @@ VERDICT: **NON_BLOCKING**。评审者对本轮的判断是"剩下的是收尾级
 
 产物：`jerrypi-0.1.4.vsix`，5,998,041 字节，
 SHA-256 `90a419e761caa57af49c8fdd0af393217127049f32c102265f39280a8d21a7d6`。
+
+
+---
+
+## 12. S2 结项
+
+**人工验收 16/16 全绿，双平台。**
+
+Mac（11 项，0.1.4 源码树，F5 运行）：
+
+| 项 | 覆盖的计划条目 |
+| --- | --- |
+| M0 | `S2-CL1-N1`（CSP/nonce/localResourceRoots）、`S2-CL1-N2`（`retainContextWhenHidden` 要放 registerWebviewViewProvider 第 3 参） |
+| M1 | `S2-CL2-N1`（一次回复只有一个节点）、`S2-CL2-N3`（`message_start` 时序 / id 权威） |
+| M2 | markdown 渲染与多轮上下文 |
+| M3 | `S2-CL2-N5`（abort 前必须先 `clearQueue`）+ 队列退回（`restoreComposer`） |
+| M4/M5 | `S2-CL2-N2`（`promptAccepted` 取代 `pendingText` 闸门）、steer/followUp 语义、`agent_settled` 与队列的对账 |
+| M6 | `S2-CL2-N7`（切容器重放判定） |
+| M6b | `S2-CL3-N1` 的**反向验证**：真实 `Reload Webviews` 后会重放，且**流式那条能继续长完**（重放快照里要带 `streamingMessage`） |
+| M7 | XSS 三载荷（渲染层消毒） |
+| M8 | 远程图片降级 + https 外开（`urlPolicy`） |
+| M9 | `S2-CL2-N4`（工具行 `pendingToolCalls` 占位） |
+| M10 | `S2-CL3-N2`（扩展命令没有 `agent_settled`，必须与 `isIdle` 对账，否则永久"生成中"） |
+
+受限 Windows 机（4 项，**发布产物 0.1.4**）：
+
+| 项 | 结果 |
+| --- | --- |
+| W0 | `GATE PASS` 11/11 —— 证明 `model-choice.ts` 的提取没有破坏 S1 已验收的受限机路径（`S2-CL-P1`） |
+| W1 | 面板基础：流式 / markdown / 多轮上下文 / 无 `[agent] error` |
+| W2 | XSS 三载荷；**额外覆盖了行内代码这条 Mac 上没走到的转义路径** |
+| W3 | 队列：2 条不同标签、状态行不提前解除；三个 flex 挤压回归点在 Windows 上也稳定 |
+
+**发布**：`flyjancy.jerrypi` **0.1.4**（预发布），6,000,747 字节，
+SHA-256 `2a5d10e0e670f5863358daa8e29cfef04eb99dc1497c2cbfb617f1cbfa874c09`。
+打包发生在 README 更新提交（`e583e10`，21:49:20）之后 32 秒，因此**市场页上的 README 就是更新后的版本**
+（`.vsix` 内为 22,213 字节，与仓库 21,736 字节的差异全部来自打包期的相对链接改写）。
+
+**S2 期间抓到并修掉的缺陷共 15 个**，其中 3 个属于"同一类错误重复出现"（flex 被压缩成竖排
+文字：工具名 → 按钮 → 提示文案，三者均已补回归断言）。
+
+### 遗留事项（不属于 S2 的验收范围）
+
+1. 代码块**没有语法高亮**（S2 只要求等宽 + 底色；marked 已就位，hljs 见 S6）。
+2. 面板兜底模型是闸门用的 `deepseek-v4-flash`（文本模型）。全新机器上没在 pi 里选过模型时
+   会落到它；S4 的面板选择器落地后，用户选一次即持久化。
+3. 没有"恢复最近会话"入口（S5）。
+4. 仓内没有 `CHANGELOG.md`，市场页少一个 Changelog 标签页。
