@@ -58,6 +58,11 @@
         "category": "Pi"
       },
       {
+        "command": "jerrypi.resumeSession",
+        "title": "Resume Session",
+        "category": "Pi"
+      },
+      {
         "command": "jerrypi.selectModel",
         "title": "Select Model",
         "category": "Pi"

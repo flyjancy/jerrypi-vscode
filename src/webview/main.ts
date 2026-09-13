@@ -393,7 +393,7 @@ function applyState(message: Extract<ServerMessage, { type: "state" }>): void {
   for (const id of [...order]) removeNode(id);
   transcript.textContent = "";
   busy = message.busy;
-  // 快照里仍带一个 deprecated 的 `model` 字段（给旧 webview 兜底），新代码只用 `meta`。
+  // 协议 v4（S5）起 `state` 里没有 `model` 了 —— 模型只说在 `meta` 里。
   meta = message.meta;
   if (message.truncated) {
     const node = element("div", "msg msg-notice");
@@ -427,6 +427,7 @@ metaBar.addEventListener("click", (event: MouseEvent) => {
   const action = target.getAttribute("data-meta-action");
   if (action === "model") vscode.postMessage({ type: "openModelPicker" } satisfies ClientMessage);
   else if (action === "thinking") vscode.postMessage({ type: "openThinkingPicker" } satisfies ClientMessage);
+  else if (action === "session") vscode.postMessage({ type: "openSessionPicker" } satisfies ClientMessage);
 });
 
 window.addEventListener("message", (event: MessageEvent<ServerMessage>) => {

@@ -853,6 +853,20 @@ cwd 不存在的会话切不动且给可读提示、当前会话不变。
 | 3-4 | 确认弹窗在无头环境下要能测 | 桩里的 `showWarningMessage(message)` 只收一个参数、永远返回 undefined | 扩成真 vscode 的形状（`(message, options, ...items)`）+ `queueWarningResponse()`；否则无法区分"弹了没"与"用户点了啥" |
 | 3-5 | `forcibly 切换一个正在流式的会话`不会产生未处理的 rejection | `prompt()` 的 promise 会在旧会话被 tear down 时 settle | 测试里仍然 `await streaming.catch(() => undefined)` 兜一层（不依赖 pi 的这个行为不变） |
 
+### 第 4 步（列表 + 会话名段 + 协议 v4，2026-09-13）
+
+| # | 现象 | 原因 | 处置 |
+| --- | --- | --- | --- |
+| 4-1 | 删掉 `state.model`（顶层 deprecated 字段）之后，`controller-check` **3 条模型断言同时变红**，而且 detail 是空的（看着像"模型变空了"） | 那三条读的是 `snapshot().model` —— 字段没了就是 `undefined`。**删字段时只想到类型（typecheck 会抓），没想到检查脚本是纯 JS** | 改成读 `meta.model`，并补一条反向断言："顶层不再有 `model`"（以后再有人加回来会立刻红）。教训：**删协议字段时先 `grep` 检查脚本** |
+| 4-2 | 计划 §6 说这几条放 `protocol-check`，实际放到了 `host-check` | `protocol-check` 的边界是 `serialize.ts` + `urlPolicy.ts` 两个**纯函数**，它拿不到真实的 `state` 消息 | 3 条断言（`protocol===4` / 无 `model` 键 / `meta.session` 形状）放 `host-check`（它 inspect 真的 `post()` 出去的消息）。**偏离已记在这里**，未改 protocol-check 的边界 |
+| 4-3 | 两份渲染检查的 meta 夹具都少了 `session`（v4 的必填字段） | —— | `render-xss-check` 补夹具 + 4 条（会话段、`title`=路径、未落盘时**不设** title 且标"未保存"、名字里的 HTML 被转义）；`webview-dom-check` 补 5 条（含"会话名里的 `<img onerror>` 既不生成元素也不出现在 DOM 里"） |
+| 4-4 | `registerCommands` 的 `controller` 参数变成没人用了 | "新建会话"改走 `ChatViewProvider.runNewSession()`（忙时弹确认的逻辑只留一处） | **删掉那个参数**并同步改 `extension.ts` 的调用（签名变更，写在这里免得后人困惑） |
+| 4-5 | 我自己的一条断言写错了：期望"刚过午夜、20 分钟前 → `昨天 23:50`" | 实现是"**1 小时以内一律相对时间**，之后才切日历档" —— 而这个行为更合理（对"我刚聊过哪个"这个问题，`20 分钟前` 信息更多） | **改断言、不改实现**，并把分档选择写进注释与用例名。这不是"断言终于绿了"，是我原来的期望不对 |
+| 4-6 | 时间/名字格式化的归位 | D11/N5：同一个纯函数**只允许一处期望** | 都放 `tool-text-check.mjs`（`formatTokens` 等已在那儿），并把它头注释改成"覆盖 `format.ts` 的**全部**纯函数"；不新开脚本（顺便保住 self-test 里"12 个检查脚本"那条） |
+
+**第 4 步的门禁**：typecheck ✅｜`npm run self-test` 9/9（protocol 112 / render **114** / tool-text **87** / dom **71**）｜
+`check:controller` **79/79**（+7）｜`host-check` **56/56**（+11）｜闸门 **14/14 GATE PASS**。
+
 **第 3 步的门禁**：typecheck ✅｜`npm run self-test` 9/9｜`check:controller` **72/72**（+5）｜
 `host-check` **45/45**（+4）。（本步没改 pi 交互语义，闸门未重跑。）
 

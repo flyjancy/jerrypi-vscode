@@ -16,7 +16,7 @@
 //   3. `busy` 的判定：**空闲以 `agent_settled` 为准**，不能以第一个 `agent_end`
 //      （`agent_end` 之后可能还有 followUp 队列或自动重试）。
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /**
  * 当前会话的**元信息**（模型 / 思考等级 / 上下文用量），显示在输入框下方那一行。
@@ -46,6 +46,14 @@ export interface SessionMeta {
   contextWindow: number;
   /** 见上面两种 null 状态的区别。 */
   contextUsage: { tokens: number | null; percent: number | null } | null;
+  /**
+   * 当前会话本身的信息（S5 的 D8）。
+   *
+   * `path` 在**尚未落盘**时是空串（pi 在首条 assistant 消息之后才建文件），那时的 `name`
+   * 是占位（"新会话"）、`persisted` 为 false；面板会在名字后面标一句"未保存"，
+   * 否则用户会以为"名单里找不到刚建的会话"是 bug。
+   */
+  session: { path: string; name: string; persisted: boolean };
 }
 
 /** 转写里的一条可渲染项。 */
@@ -128,7 +136,9 @@ export type ClientMessage =
   /** 打开模型选择器（QuickPick 在**宿主**侧，不在 webview 里自绘）。 */
   | { type: "openModelPicker" }
   /** 打开思考等级选择器。 */
-  | { type: "openThinkingPicker" };
+  | { type: "openThinkingPicker" }
+  /** 打开会话选择器（QuickPick 在**宿主**侧，与模型选择器同一个理由）。 */
+  | { type: "openSessionPicker" };
 
 /** 扩展 → webview */
 export type ServerMessage =
@@ -141,12 +151,7 @@ export type ServerMessage =
       queue: { steering: string[]; followUp: string[] };
       busy: boolean;
       cwd: string;
-      /**
-       * @deprecated 兼容旧 webview 的遗留字段，与 `meta.model` 同值。
-       * 新代码请读 `meta`；等 S5（会话管理）把两端都换完之后删掉。
-       */
-      model: string;
-      /** 模型 / 思考等级 / 上下文用量。 */
+      /** 模型 / 思考等级 / 上下文用量，加上当前会话的信息（S5 起）。 */
       meta: SessionMeta;
       errorMessage?: string;
     }

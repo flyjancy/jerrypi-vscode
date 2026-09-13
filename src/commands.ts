@@ -6,9 +6,7 @@ import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as vscode from "vscode";
-import type { SessionHostController } from "./pi/controller";
 import { loadPi } from "./pi/loader";
-import { replaceSessionWithConfirm, reportReplaceOutcome } from "./host/sessionActions";
 import { createApiKeyStore, DEFAULT_PROVIDER, injectApiKey, SUGGESTED_PROVIDERS } from "./pi/runtime";
 import { runSelfTest } from "./pi/selftest";
 import { workspaceCwd } from "./host/workspace";
@@ -19,12 +17,15 @@ const CUSTOM_PROVIDER = "其他（手动输入 provider id）";
 export interface PickerCommands {
   runModelPicker(fromPanel: boolean): Promise<void>;
   runThinkingPicker(fromPanel: boolean): Promise<void>;
+  /** `Pi: New Session`（忙时弹确认的逻辑只在 ChatViewProvider 一处）。 */
+  runNewSession(): Promise<void>;
+  /** `Pi: Resume Session`。 */
+  runSessionPicker(fromPanel: boolean): Promise<void>;
 }
 
 export function registerCommands(
   context: vscode.ExtensionContext,
   output: vscode.OutputChannel,
-  controller?: SessionHostController,
   pickers?: PickerCommands,
 ): void {
   const extensionPath = context.extensionUri.fsPath;
@@ -117,14 +118,25 @@ export function registerCommands(
     }),
 
     vscode.commands.registerCommand("jerrypi.newSession", async () => {
-      if (controller === undefined) return;
+      if (pickers === undefined) return;
       try {
-        // S5（D7）：忙的时候先问一句 —— 由宿主弹窗，controller 只返回"忙"这个事实。
-        const outcome = await replaceSessionWithConfirm((force) => controller.newSession({ force }));
-        reportReplaceOutcome(outcome, (level, text) => controller.notifyUser(level, text));
+        // S5（D7）：忙时先问一句 —— 弹窗与文案在 ChatViewProvider（它拿得到 `vscode.window`），
+        // controller 只负责返回"忙"这个事实。
+        await pickers.runNewSession();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         void vscode.window.showErrorMessage(`jerrypi: 新建会话失败：${message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand("jerrypi.resumeSession", async () => {
+      if (pickers === undefined) return;
+      try {
+        // 从命令面板发起：`fromPanel: false` —— 用户的焦点可能在编辑器里，不要抢。
+        await pickers.runSessionPicker(false);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        void vscode.window.showErrorMessage(`jerrypi: 打开会话列表失败：${message}`);
       }
     }),
 

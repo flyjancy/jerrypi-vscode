@@ -113,7 +113,6 @@ function makeController(overrides = {}) {
       queue: { steering: [], followUp: [] },
       busy: false,
       cwd: "/w",
-      model: "",
       meta: {
         model: "",
         provider: "",
@@ -122,6 +121,8 @@ function makeController(overrides = {}) {
         supportsThinking: false,
         contextWindow: 0,
         contextUsage: null,
+        // S5（协议 v4）：`session` 必填，且 `state` 里不再有顶层 `model`。
+        session: { path: "", name: "新会话", persisted: false },
       },
     }),
     prompt: async () => {},
@@ -137,6 +138,11 @@ function makeController(overrides = {}) {
     applyThinkingLevel: (level) => {
       calls.appliedLevels.push(level);
     },
+    // ---- S5 的会话接口 ----
+    currentSessionPath: () => "",
+    listSessions: async () => [],
+    newSession: async () => ({ ok: true }),
+    switchSession: async () => ({ ok: true }),
     notifyUser: (level, text) => {
       calls.notices.push({ level, text });
     },
@@ -154,6 +160,7 @@ async function buildModules(tempDir) {
       `export { ChatViewProvider } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/chatView"))};`,
       `export { buildWebviewHtml } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/webviewHtml"))};`,
       `export { replaceSessionWithConfirm } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/sessionActions"))};`,
+      `export { sessionToItem } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/sessionPicker"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -171,7 +178,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm } = await buildModules(tempDir);
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem } = await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 
 // ----------------------------------------------------------------- 视图装配
@@ -202,16 +209,29 @@ check(
 resetStub();
 const view1 = makeView();
 provider.resolveWebviewView(view1);
-await view1.send({ type: "ready", protocol: 3 });
+await view1.send({ type: "ready", protocol: 4 });
 const stateMessages = view1.posted.filter((m) => m.type === "state");
 check("ready → 恰好回一条 state", stateMessages.length === 1, String(stateMessages.length));
 check(
-  "state 里带 protocol 与 meta（v3 的核心）",
-  stateMessages[0]?.protocol === 3 &&
+  "state 里带 protocol 与 meta（协议 v4 的核心）",
+  stateMessages[0]?.protocol === 4 &&
     typeof stateMessages[0]?.meta === "object" &&
     stateMessages[0]?.meta !== null &&
     "contextWindow" in stateMessages[0].meta,
   JSON.stringify(stateMessages[0]?.meta ?? null).slice(0, 120),
+);
+check(
+  "协议 v4：`state` 里没有 deprecated 的 `model` 键（S5 的 D12 清掉了它）",
+  stateMessages[0] !== undefined && !("model" in stateMessages[0]),
+  JSON.stringify(Object.keys(stateMessages[0] ?? {})),
+);
+check(
+  "`meta.session` 也在（形状：path/name/persisted）",
+  typeof stateMessages[0]?.meta?.session === "object" &&
+    "path" in stateMessages[0].meta.session &&
+    "name" in stateMessages[0].meta.session &&
+    "persisted" in stateMessages[0].meta.session,
+  JSON.stringify(stateMessages[0]?.meta?.session ?? null),
 );
 check("ready 会写一行 [webview] ready", output.lines.includes("[webview] ready"));
 
@@ -623,6 +643,53 @@ check(
   resetStub();
   const idle = await replaceSessionWithConfirm(async () => ({ ok: true }));
   check("空闲时**不弹**确认（直接换）", callsOf("showWarningMessage").length === 0 && idle.ok === true);
+}
+
+// ------------------------------------- S5 第 4 步（D8/D10/S2）：会话选择器的两个消息入口
+{
+  resetStub();
+  const view = makeView();
+  const provider = new ChatViewProvider({
+    controller: makeController({
+      currentSessionPath: () => "/s/a.jsonl",
+      listSessions: async () => [],
+      newSession: async () => ({ ok: true }),
+      switchSession: async () => ({ ok: true }),
+    }),
+    extensionUri: vscode.Uri.file("/ext"),
+    output: makeOutput(),
+  });
+  provider.resolveWebviewView(view);
+  queueQuickPickResponse(undefined); // 用户按 Esc
+  await view.send({ type: "openSessionPicker" });
+  const pickers = callsOf("showQuickPick");
+  check("面板点会话段 → 宿主弹一次会话列表（不是自己画）", pickers.length === 1, String(pickers.length));
+  const items = pickers[0]?.items ?? [];
+  check(
+    "列表第一项**永远**是「新建会话」（D10：刚建的会话不会出现在列表里）",
+    String(items[0]?.label ?? "").includes("新建会话"),
+    JSON.stringify(items.map((i) => i.label)),
+  );
+  check("空列表时给一条能看懂的说明（不对齐 pi 的 Tab 提示，我们没有那个键位）",
+    items.some((i) => String(i.label).includes("还没有已保存的会话")), JSON.stringify(items.map((i) => i.label)));
+}
+
+// S2：把 SessionInfo 组装成 QuickPickItem 的那一步（纯函数，单独断言）
+{
+  const now = new Date(2026, 8, 13, 12, 0, 0); // 2026-09-13 12:00 本地时间
+  const current = "/s/b.jsonl";
+  const item = sessionToItem(
+    { path: current, name: undefined, firstMessage: "帮我看一下 STATUS", modified: new Date(2026, 8, 13, 11, 58, 0), messageCount: 114 },
+    current,
+    now,
+  );
+  check("当前项用 `$(check)` 前缀标（不能用 `picked`：单选时它什么都不做）", String(item.label).startsWith("$(check) "), String(item.label));
+  check("label 是首条 user 消息（没有显式名字时）", String(item.label).includes("帮我看一下 STATUS"), String(item.label));
+  check("description 是「相对时间 · 消息数」", String(item.description) === "2 分钟前 · 114 条消息", String(item.description));
+  check("detail 是缩成 ~ 的路径", String(item.detail).startsWith("~") || String(item.detail) === "/s/b.jsonl", String(item.detail));
+  const other = sessionToItem({ path: "/s/c.jsonl", name: "显式名字", firstMessage: "不理它", modified: new Date(2026, 8, 12, 9, 0, 0), messageCount: 3 }, current, now);
+  check("有显式名字时优先用它，且非当前项没有 check 前缀", String(other.label) === "显式名字", String(other.label));
+  check("跨天用「昨天 HH:MM」", String(other.description).startsWith("昨天 "), String(other.description));
 }
 
 // ----------------------------------------------------------------- 汇总

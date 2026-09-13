@@ -12,11 +12,13 @@
 //   3. 每次 webview 发 `ready` 都往 Output 写一行 —— 这是"面板是否真的被重建了"的
 //      唯一可观测证据（人工判断"DOM 有没有重建"是做不到的），M6/M6b 就靠它判定。
 import * as vscode from "vscode";
-import type { SessionHostController } from "../pi/controller";
+import type { SessionHostController, SessionReplaceOutcome } from "../pi/controller";
 import { PROTOCOL_VERSION, type ClientMessage, type ServerMessage } from "../shared/protocol";
 import { isExternalUrlAllowed } from "../shared/urlPolicy";
 import { buildWebviewHtml, createNonce } from "./webviewHtml";
 import { pickModel, pickThinkingLevel, type PickerBridge } from "./modelPicker";
+import { pickSession, type SessionPickerBridge } from "./sessionPicker";
+import { replaceSessionWithConfirm, reportReplaceOutcome } from "./sessionActions";
 import { MetaStatusBar } from "./statusBar";
 
 export const CHAT_VIEW_ID = "jerrypi.chat";
@@ -69,6 +71,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   async runThinkingPicker(fromPanel: boolean): Promise<void> {
     await this.options.controller.ensure();
     await pickThinkingLevel(this.pickerBridge(), { fromPanel });
+  }
+
+  /**
+   * 一次会话替换：忙时先弹确认（D7），再把结果翻译成面板里的提示。
+   *
+   * **两条入口（新建 / 切换）都走这里** —— 弹窗与文案只有这一处。
+   */
+  private async replaceSession(
+    run: (force: boolean) => Promise<SessionReplaceOutcome>,
+  ): Promise<void> {
+    const outcome = await replaceSessionWithConfirm(run);
+    reportReplaceOutcome(outcome, (level, text) => this.options.controller.notifyUser(level, text));
+  }
+
+  /** `Pi: New Session`（命令面板）。 */
+  async runNewSession(): Promise<void> {
+    await this.options.controller.ensure();
+    await this.replaceSession((force) => this.options.controller.newSession({ force }));
+  }
+
+  /** 会话列表入口。 */
+  async runSessionPicker(fromPanel: boolean): Promise<void> {
+    await this.options.controller.ensure();
+    await pickSession(this.sessionBridge(), { fromPanel });
+  }
+
+  private sessionBridge(): SessionPickerBridge {
+    const { controller } = this.options;
+    return {
+      currentSessionPath: () => controller.currentSessionPath(),
+      listSessions: () => controller.listSessions(),
+      startNewSession: () => this.replaceSession((force) => controller.newSession({ force })),
+      switchToSession: (path) =>
+        this.replaceSession((force) => controller.switchSession(path, { force })),
+      notify: (level, text) => controller.notifyUser(level, text),
+      focusInput: () => this.post({ type: "focusInput" }),
+    };
   }
 
   /**
@@ -173,6 +212,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         case "openThinkingPicker": {
           await pickThinkingLevel(this.pickerBridge(), { fromPanel: true });
+          return;
+        }
+        case "openSessionPicker": {
+          await this.runSessionPicker(true);
           return;
         }
         case "openFile": {

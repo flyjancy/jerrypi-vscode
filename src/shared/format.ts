@@ -41,3 +41,61 @@ export function formatCost(input: number | undefined, output: number | undefined
   if (input === undefined || output === undefined) return "";
   return `$${input}/$${output} / 1M tokens`;
 }
+
+/** 会话名的长度上限（超过就截断 + 省略号）。 */
+export const SESSION_NAME_MAX = 60;
+
+/**
+ * 会话显示名（S5 的 D8/D11）。
+ *
+ * 优先用 `session_info` 里的名字（pi 的 `--name` 与 TUI 的重命名都写它），
+ * 其次用首条 **user** 消息（`SessionInfo.firstMessage` 就是这个，pi 自己算的），
+ * 都没有则给一个能看懂的占位。
+ *
+ * **必须单行化**：它要进 QuickPick 的 `label` 与元信息行，里面有换行会把版式弄乱；
+ * 而这个名字是**别人写的**（模型能往会话文件里写 user 消息），所以外面还要 escapeHtml。
+ */
+export function sessionDisplayName(name: string | undefined, firstMessage: string): string {
+  const single = (text: string): string => text.replace(/\s+/g, " ").trim();
+  const explicit = name === undefined ? "" : single(name);
+  if (explicit.length > 0) return truncateName(explicit);
+  const first = single(firstMessage);
+  // pi 在一条消息都没有时给的是这个占位串（`session-manager.js:508`）。
+  if (first.length === 0 || first === "(no messages)") return "新会话";
+  return truncateName(first);
+}
+
+function truncateName(text: string): string {
+  return text.length <= SESSION_NAME_MAX ? text : `${text.slice(0, SESSION_NAME_MAX)}…`;
+}
+
+/**
+ * 会话时间（S5 的 D11）。`now` 显式传入 —— 不读系统时钟，否则测不了。
+ *
+ * 分档：刚刚 / N 分钟前 / N 小时前 / 今天 HH:MM / 昨天 HH:MM / M月D日 / YYYY年M月D日。
+ * 判"今天/昨天"按**本地日历日**，不是按 24 小时差。
+ */
+export function formatSessionTime(then: Date, now: Date): string {
+  const diffMs = now.getTime() - then.getTime();
+  if (diffMs < 0) return formatClock(then, now);       // 钟表飘了：当今天处理，不写"刚刚"
+  if (diffMs < 60_000) return "刚刚";
+  if (diffMs < 60 * 60_000) return `${Math.floor(diffMs / 60_000)} 分钟前`;
+  const days = calendarDaysBetween(then, now);
+  if (days === 0) return formatClock(then, now);
+  if (days === 1) return `昨天 ${formatClock(then, now)}`;
+  if (then.getFullYear() === now.getFullYear()) return `${then.getMonth() + 1}月${then.getDate()}日`;
+  return `${then.getFullYear()}年${then.getMonth() + 1}月${then.getDate()}日`;
+}
+
+function formatClock(date: Date, now: Date): string {
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  const hhmm = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return calendarDaysBetween(date, now) === 0 ? `今天 ${hhmm}` : hhmm;
+}
+
+/** 两个时间相差几个**本地日历日**（用当天 00:00 比，避开时区与夏令时）。 */
+function calendarDaysBetween(then: Date, now: Date): number {
+  const midnight = (date: Date): number =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  return Math.round((midnight(now) - midnight(then)) / (24 * 60 * 60 * 1000));
+}

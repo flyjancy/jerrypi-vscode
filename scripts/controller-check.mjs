@@ -641,10 +641,57 @@ async function main() {
       await streaming.catch(() => undefined);
     }
 
+    // 5f（D5/D8）：会话列表的数据源与顺序；以及 `meta.session` 的"未保存 → 已保存"
+    {
+      const list = await controller.listSessions();
+      const dir = controller.session?.sessionManager?.getSessionDir();
+      check(
+        "列表全部来自当前会话目录（D5：不跨项目，也不需要第二处目录推导）",
+        list.length > 0 && list.every((s) => path.dirname(s.path) === dir),
+        `${list.length} 条；dir=${dir}`,
+      );
+      const stamps = list.map((s) => s.modified.getTime());
+      check(
+        "列表已按 modified 倒序（pi 排好的，我们没再排一次）",
+        stamps.every((v, i) => i === 0 || stamps[i - 1] >= v),
+        stamps.join(","),
+      );
+      const currentPath = controller.currentSessionPath();
+      check(
+        "未落盘的当前会话不在列表里（pi 的落盘契约：首条 assistant 之后才建文件）",
+        currentPath !== "" && !list.some((s) => s.path === currentPath),
+        `current=${currentPath}`,
+      );
+      const before = controller.snapshot().meta.session;
+      check(
+        "未落盘时 `meta.session.persisted=false`（面板靠它标「未保存」）",
+        before.persisted === false && before.path === currentPath && before.name.length > 0,
+        JSON.stringify(before),
+      );
+      await controller.prompt("Reply with the single word OK", "auto");
+      const after = controller.snapshot().meta.session;
+      check(
+        "一轮回复后 persisted=true，且名字来自首条 user 消息",
+        after.persisted === true && after.name.includes("OK"),
+        JSON.stringify(after),
+      );
+      const listed = await controller.listSessions();
+      check(
+        "落盘后它才出现在列表里",
+        listed.some((s) => s.path === after.path),
+        `${listed.length} 条`,
+      );
+    }
+
     // ---------------------------------------------------- 6. 面板的模型策略
     // 6a：临时 agentDir 里**没有** settings.json → 用户没选过 → 用我们的偏好兜底
+    check(
+      "协议 v4：快照里没有顶层 `model` 了（只说在 meta 里）",
+      !("model" in controller.snapshot()) && typeof controller.snapshot().meta.model === "string",
+      JSON.stringify(Object.keys(controller.snapshot())),
+    );
     check("用户没选过模型时，兜底到便宜的 flash（不用 pro）",
-      controller.snapshot().model === "deepseek/deepseek-v4-flash", controller.snapshot().model);
+      controller.snapshot().meta.model === "deepseek/deepseek-v4-flash", controller.snapshot().meta.model);
 
     // 6b：用户选过（settings.json 里有 defaultProvider/defaultModel）→ 不覆盖
     {
@@ -667,13 +714,13 @@ async function main() {
       });
       try {
         await second.ensure();
-        const picked = second.snapshot().model;
+        const picked = second.snapshot().meta.model;
         check("用户选过模型时，面板不覆盖（跟着 pi 设置走）",
           picked === "deepseek/deepseek-v4-flash-vision-exp", picked);
         // 再换一个会话：新会话同样要保住用户的选择
         await second.newSession();
         check("新会话之后仍然保住用户的选择",
-          second.snapshot().model === "deepseek/deepseek-v4-flash-vision-exp", second.snapshot().model);
+          second.snapshot().meta.model === "deepseek/deepseek-v4-flash-vision-exp", second.snapshot().meta.model);
       } finally {
         await second.dispose().catch(() => {});
       }

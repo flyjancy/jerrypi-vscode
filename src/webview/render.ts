@@ -300,17 +300,29 @@ export function renderToolLine(item: Extract<ChatItem, { kind: "tool" }>): strin
 
 /** 提示行。 */
 /**
- * 输入框下方那一行：`模型 • 等级 • 42.3%/1.0M`。
+ * 输入框下方那一行：`会话名 · 模型 • 等级 • 42.3%/1.0M`。
  *
- * 三条与 pi 对齐的规矩：
- *   - 模型段与等级段是**独立的按钮**（可点开各自的选择器），用量是纯文字；
+ * 四条与 pi 对齐的规矩：
+ *   - 会话段、模型段、等级段是**独立的按钮**（可点开各自的选择器），用量是纯文字；
  *   - `reasoning: false` 的模型**不显示等级**（pi 的 footer 也是这么做的）；
  *   - 用量未知（`percent === null`）显示 `?/1.0M`（**没有百分号**），
- *     没有模型（`contextWindow === 0`）时整段不显示 —— 模型段已经说了"未选择模型"。
+ *     没有模型（`contextWindow === 0`）时整段不显示 —— 模型段已经说了"未选择模型"；
+ *   - 会话**未落盘**时名字后面标一句"未保存"（pi 在首条 assistant 消息之后才建文件；
+ *     不说一句的话，用户会以为"名单里找不到刚建的会话"是 bug）。
  *
- * 所有值都经过转义：模型 id / provider 来自模型目录，可能是用户自定义 provider 写进去的字符串。
+ * 所有值都经过转义：会话名与模型 id 都是**别人写的**（模型能往会话文件里写 user 消息）。
  */
 export function renderMeta(meta: SessionMeta): string {
+  const sessionLabel =
+    meta.session.persisted === true ? meta.session.name : `${meta.session.name} · 未保存`;
+  const sessionButton =
+    `<button type="button" class="meta-link meta-session" data-meta-action="session"` +
+    // 路径放 `title`（S5 的 N3：`path` 得有个用途，不能白留在协议里）；
+    // **未落盘时不设这个属性**（定死，否则两种实现都能"通过"）。
+    (meta.session.path === "" ? "" : ` title="${escapeHtml(meta.session.path)}"`) +
+    ` aria-label="当前会话 ${escapeHtml(meta.session.name)}，点击切换">` +
+    `${escapeHtml(sessionLabel)}</button>`;
+
   const label = meta.model === "" ? "未选择模型" : meta.model.split("/").slice(1).join("/");
   const modelButton =
     `<button type="button" class="meta-link meta-model" data-meta-action="model"` +
@@ -331,7 +343,9 @@ export function renderMeta(meta: SessionMeta): string {
   const tone = percent === null ? "" : percent > 90 ? " meta-usage-error" : percent > 70 ? " meta-usage-warn" : "";
   const usageSpan = usage === "" ? "" : `<span class="meta-usage${tone}">${escapeHtml(usage)}</span>`;
 
-  return [modelButton, levelButton, usageSpan].filter((part) => part !== "").join(`<span class="meta-sep">·</span>`);
+  return [sessionButton, modelButton, levelButton, usageSpan]
+    .filter((part) => part !== "")
+    .join(`<span class="meta-sep">·</span>`);
 }
 
 export function renderNotice(item: Extract<ChatItem, { kind: "notice" }>): string {

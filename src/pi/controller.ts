@@ -14,6 +14,7 @@
 //   3. **空闲以 `agent_settled` 为准**，但 `agent_settled` 不是万能的：扩展命令由
 //      `prompt()` 内部直接执行、不启动 agent run，因此永远不会settle —— 必须在
 //      `prompt()` 返回后与 `session.isIdle` 对账一次（否则状态行永久卡在"生成中"）。
+import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type {
   AgentSession,
@@ -23,6 +24,7 @@ import type {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { TOOL_FRAME_MS, type ChatItem, type ServerMessage, type SessionMeta } from "../shared/protocol";
+import { sessionDisplayName } from "../shared/format";
 import { toolTextFromContent } from "../shared/toolText";
 import type { EventSink } from "./bindings";
 import type { PiModule } from "./loader";
@@ -100,8 +102,6 @@ export interface ReplaySnapshot {
   queue: { steering: string[]; followUp: string[] };
   busy: boolean;
   cwd: string;
-  /** @deprecated 与 `meta.model` 同值，留给旧 webview 兜底（见 protocol.ts）。 */
-  model: string;
   meta: SessionMeta;
   errorMessage?: string;
 }
@@ -109,6 +109,13 @@ export interface ReplaySnapshot {
 /** 会话上我们真正读写的成员（避免把整个 AgentSession 类型铺开）。 */
 interface SessionView {
   messages: readonly unknown[];
+  /** S5：会话自己的身份与目录（`AgentSession.sessionManager` 是 public）。 */
+  sessionManager: {
+    getSessionFile(): string | undefined;
+    getSessionName(): string | undefined;
+    getCwd(): string;
+    getSessionDir(): string;
+  };
   model?: { provider?: string; id?: string; name?: string; contextWindow?: number } | null;
   thinkingLevel: string;
   supportsThinking(): boolean;
@@ -462,6 +469,14 @@ export class SessionHostController {
     const host = this.host;
     if (host === undefined) return { ok: false, code: "busy", detail: "会话尚未建立" };
     if (options.force !== true && this.isBusy()) return { ok: false, code: "busy" };
+    // 只接受当前会话目录里的路径：`switchSession` 会把 `sessionDir` 换成该文件的父目录，
+    // 跨项目切换会让后续的 `newSession` 落到别的项目里（plan §3.4）。这里只做**单调的**
+    // 前缀比对（不 realpath、不归一化 —— pi 自己也不做，plan §3.1）。
+    const dir = this.view().sessionManager.getSessionDir();
+    if (!sessionPath.startsWith(dir)) {
+      this.options.log.appendLine(`[controller] 拒绝切换：${sessionPath} 不在当前会话目录 ${dir} 下`);
+      return { ok: false, code: "missing-cwd", detail: sessionPath };
+    }
     try {
       const result = await host.runtime.switchSession(sessionPath);
       if (result.cancelled) {
@@ -505,6 +520,7 @@ export class SessionHostController {
       supportsThinking: false,
       contextWindow: 0,
       contextUsage: null,
+      session: { path: "", name: "新会话", persisted: false },
     };
   }
 
@@ -591,7 +607,54 @@ export class SessionHostController {
       contextWindow: model?.contextWindow ?? 0,
       contextUsage:
         usage === undefined ? null : { tokens: usage.tokens, percent: usage.percent },
+      session: this.sessionInfo(session),
     };
+  }
+
+  /**
+   * 当前会话的身份（S5 的 D8）：路径、显示名、**落盘了没**。
+   *
+   * 两个易错点：
+   *   - `isPersisted()` **不是**"落盘了没"（它返回的是 persist 模式，`session-manager.js:721-723`）
+   *     → 用 `existsSync(getSessionFile())` 判（pi 在首条 assistant 消息之后才建文件）；
+   *   - 名字优先 `session_info`（pi 的 `--name`/重命名写它），否则用首条 user 消息。
+   */
+  private sessionInfo(session: SessionView): SessionMeta["session"] {
+    const manager = session.sessionManager;
+    const file = manager.getSessionFile();
+    const path = typeof file === "string" ? file : "";
+    const first = session.messages.find(
+      (message) => (message as { role?: string } | null)?.role === "user",
+    );
+    return {
+      path,
+      name: sessionDisplayName(manager.getSessionName(), firstUserText(first)),
+      persisted: path !== "" && existsSync(path),
+    };
+  }
+
+  /**
+   * 列出**当前 cwd 的会话目录**里的会话（S5 的 D5）。
+   *
+   * 用**活会话自己的** `sessionDir`（和 pi CLI 的会话选择器一样，plan §3.6 有出处）：
+   * 这样目录只有一处权威，不会和 `resolveSessionDir` 的推导分叉。
+   * 省略 `sessionDir` 让 pi 自己算是不行的 —— 它默认吃 `getAgentDir()`，
+   * S6 的 `jerrypi.agentDir` 一套上就失效（plan §3.1）。
+   *
+   * 返回值里的 `modified` 是**消息活动时间**（不是文件 mtime），且 pi 已经按它倒序。
+   */
+  async listSessions(): Promise<readonly unknown[]> {
+    await this.ensure();
+    const host = this.host;
+    if (host === undefined) return [];
+    const manager = this.view().sessionManager;
+    const pi = await this.loadPi();
+    return await pi.SessionManager.list(manager.getCwd(), manager.getSessionDir());
+  }
+
+  /** 当前会话文件的绝对路径（未落盘时为空串）。宿主用它标"当前项"。 */
+  currentSessionPath(): string {
+    return this.host === undefined ? "" : this.sessionInfo(this.view()).path;
   }
 
   snapshot(): ReplaySnapshot {
@@ -603,7 +666,6 @@ export class SessionHostController {
         queue: { steering: [], followUp: [] },
         busy: this.pendingSend,
         cwd: this.options.cwd,
-        model: "",
         meta: this.emptyMeta(),
       };
     }
@@ -656,7 +718,6 @@ export class SessionHostController {
       items.push(row);
     }
 
-    const model = session.model;
     // 快照会把 busy 一并带给前端（`state.busy`），也就是说这一刻前后端是同步的。
     // 因此**必须忘掉"上次发过的 busy 值"**：否则在"面板重开 → 前端按快照显示忙 →
     // 服务端的 lastBusy 仍是上一次的值 → 之后真正的 busy:false 被当成重复而丢掉"，
@@ -674,7 +735,6 @@ export class SessionHostController {
       // 乐观 busy 发生在 agent_start 之前，那时 isStreaming 还是 false。
       busy: session.isStreaming || this.pendingSend,
       cwd: this.options.cwd,
-      model: model ? `${model.provider}/${model.id}` : "",
       meta: this.sessionMeta(session),
       ...(session.state.errorMessage === undefined ? {} : { errorMessage: session.state.errorMessage }),
     };
@@ -1081,6 +1141,20 @@ interface ToolPartial {
 }
 
 /** pi 在流式期间收到没有 `streamingBehavior` 的 prompt 时的报错原文。 */
+/** 取一条消息的纯文本（给会话名摘要用；不认识的形状就返回空串）。 */
+function firstUserText(message: unknown): string {
+  const content = (message as { content?: unknown } | null)?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) =>
+      (part as { type?: string; text?: string } | null)?.type === "text"
+        ? ((part as { text?: string }).text ?? "")
+        : "",
+    )
+    .join(" ");
+}
+
 function isAlreadyProcessing(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   return /already processing|streamingBehavior/i.test(text);

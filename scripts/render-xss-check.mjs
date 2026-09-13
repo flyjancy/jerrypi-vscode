@@ -400,6 +400,8 @@ async function main() {
         supportsThinking: true,
         contextWindow: 1000000,
         contextUsage: { tokens: 423000, percent: 42.3 },
+        // S5（协议 v4）：`session` 是必填字段。
+        session: { path: "/tmp/sessions/a.jsonl", name: "海洋介绍", persisted: true },
         ...overrides,
       });
       const meta = (overrides = {}) => render.renderMeta(metaOf(overrides));
@@ -433,6 +435,25 @@ async function main() {
         !meta({ supportsThinking: false }).includes('data-meta-action="thinking"'),
       );
       check("等级为 off 时按 pi 的措辞写 thinking off", meta({ thinkingLevel: "off" }).includes(">thinking off<"));
+
+      // S5 第 4 步（D8）：会话段 + 它的 tooltip + 未保存标注 + XSS
+      check("元信息行首段是会话名（可点）", meta().includes('data-meta-action="session"') && meta().includes(">海洋介绍<"));
+      check(
+        "会话段的 title 是会话文件路径（N3：`path` 得有个用途）",
+        meta().includes('title="/tmp/sessions/a.jsonl"'),
+        meta().slice(0, 200),
+      );
+      check(
+        "未落盘（path 为空串）时不设 title，并标一句\"未保存\"",
+        !meta({ session: { path: "", name: "新会话", persisted: false } }).includes("title=") &&
+          meta({ session: { path: "", name: "新会话", persisted: false } }).includes("未保存"),
+        meta({ session: { path: "", name: "新会话", persisted: false } }),
+      );
+      check(
+        "会话名里的 HTML 被转义（名字是别人写的：模型能往会话文件里写 user 消息）",
+        !meta({ session: { path: "/tmp/x", name: "<img src=x onerror=alert(1)>", persisted: true } }).includes("<img") &&
+          meta({ session: { path: "/tmp/x", name: "<img src=x onerror=alert(1)>", persisted: true } }).includes("&lt;img"),
+      );
 
       // 阈值：**70 与 90 本身**必须一起断言，否则把 ">" 写成 ">=" 也测不出来。
       const tone = (percent) => {

@@ -11,7 +11,7 @@
 
 ## 1. 现在
 
-**进行中**：**S5 第 3 步已完成**（忙时先弹确认 + `missing-cwd` 可读报错），下一步是第 4 步（会话列表 QuickPick + 元信息行的会话名段 + 协议 v4）（2026-09-13）
+**进行中**：**S5 第 4 步已完成**（会话列表 QuickPick + 元信息行会话名段 + 协议 v4），下一步是第 5 步（文档：README 已知限制、`docs/PLAN.md` 的 S5 行改正）（2026-09-13）
 
 | | |
 | --- | --- |
@@ -28,11 +28,11 @@
 | `npm run typecheck`（2 套 tsconfig） | ✅ |
 | `npm run self-test` | **9/9** |
 | `npm run check:protocol` | 112 |
-| `npm run check:render` | 110 |
-| `node scripts/tool-text-check.mjs` | 69 |
-| `node scripts/webview-dom-check.mjs` | 66 |
-| `node scripts/host-check.mjs` | **45** |
-| `npm run check:controller`（真模型，**不进 CI**） | **72/72**（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
+| `npm run check:render` | **114** |
+| `node scripts/tool-text-check.mjs` | **87** |
+| `node scripts/webview-dom-check.mjs` | **71** |
+| `node scripts/host-check.mjs` | **56** |
+| `npm run check:controller`（真模型，**不进 CI**） | **79/79**（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | **14 项（12 gating + T5c/T12 advisory）GATE PASS** |
 | `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **339 文件 / 5.74 MB**（门禁 30 MB）。338 那个基线已过时：多出的 1 个是 `media/jerrypi-mark-j.svg`（20:44 出现的未跟踪文件，见 S5-plan §11 的 1-3） |
 
@@ -69,7 +69,10 @@
    夹具新增可取消的 `session_before_switch`；`controller-check` **67/67**、`host-check` **41/41**。
    **第 3 步 ✅**（守卫与错误处理）：忙时返回 `{ok:false,code:"busy"}` → 宿主弹模态确认 →
    带 `force` 再跑；`missing-cwd` 给可读提示且当前会话不变；`controller-check` **72/72**、`host-check` **45/45**。
-   下一步：第 4 步（列表 QuickPick + 会话名段 + 协议 v4）
+   **第 4 步 ✅**（列表 + 会话名段 + 协议 v4）：`Pi: Resume Session`（宿主 QuickPick，首项永远是"新建"）、
+   元信息行首段是可点的会话名（tooltip = 路径，未落盘标"未保存"）、协议 v4 删掉 `state.model`；
+   `controller-check` **79/79**、`host-check` **56/56**、`dom-check` **71**。
+   下一步：第 5 步（文档），然后是第 6 步（打包 + 自测 + **Mac 验收** ← 要你出手）
 
 ## 4. 发布流程（每次都一样）
 

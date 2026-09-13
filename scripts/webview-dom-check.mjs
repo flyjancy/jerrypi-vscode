@@ -177,14 +177,40 @@ async function main() {
           supportsThinking: true,
           contextWindow: 1000000,
           contextUsage: { tokens: 423000, percent: 42.3 },
+          // S5（协议 v4）：`session` 是必填字段。名字故意带 HTML —— 它是**别人写的**
+          // （模型能往会话文件里写 user 消息），所以这条同时验转义。
+          session: { path: "/tmp/s/a.jsonl", name: "海洋<img src=x onerror=alert(1)>", persisted: true },
         },
       });
       const metaBar = el("meta");
       check(
-        "meta 消息把模型 · 等级 · 用量渲染出来",
-        metaBar.textContent.includes("deepseek-v4-flash") &&
+        "meta 消息把会话名 · 模型 · 等级 · 用量渲染出来",
+        metaBar.textContent.includes("海洋") &&
+          metaBar.textContent.includes("deepseek-v4-flash") &&
           metaBar.textContent.includes("high") &&
           metaBar.textContent.includes("42.3%/1.0M"),
+        metaBar.textContent,
+      );
+      check(
+        "会话名里的 HTML 没被执行（既不生成元素，也不在 DOM 里）",
+        metaBar.querySelector("img") === null && metaBar.innerHTML.includes("&lt;img"),
+        metaBar.innerHTML.slice(0, 160),
+      );
+      check(
+        "会话段的 title 是会话文件路径（S5 的 N3：`path` 得有个用途）",
+        metaBar.querySelector('[data-meta-action="session"]')?.getAttribute("title") === "/tmp/s/a.jsonl",
+        metaBar.querySelector('[data-meta-action="session"]')?.getAttribute("title") ?? "(无 title)",
+      );
+      const beforeSessionClick = posted.length;
+      click(metaBar.querySelector('[data-meta-action="session"]'));
+      check(
+        "点会话段发出 openSessionPicker",
+        posted.slice(beforeSessionClick).some((m) => m.type === "openSessionPicker"),
+        JSON.stringify(posted.slice(beforeSessionClick)),
+      );
+      check(
+        "已落盘的会话名后面**不**写「未保存」",
+        !metaBar.textContent.includes("未保存"),
         metaBar.textContent,
       );
       const beforeMetaClicks = posted.length;
@@ -200,6 +226,29 @@ async function main() {
         "点等级段发出 openThinkingPicker",
         posted.slice(beforeLevelClick).some((m) => m.type === "openThinkingPicker"),
         JSON.stringify(posted.slice(beforeLevelClick)),
+      );
+
+      check(
+        "未落盘的会话：不设 title，且名字后面标一句\"未保存\"",
+        (() => {
+          send({
+            type: "meta",
+            meta: {
+              model: "deepseek/deepseek-v4-flash",
+              provider: "deepseek",
+              modelName: "flash",
+              thinkingLevel: "high",
+              supportsThinking: true,
+              contextWindow: 1000000,
+              contextUsage: { tokens: 0, percent: 0 },
+              session: { path: "", name: "新会话", persisted: false },
+            },
+          });
+          const bar = el("meta");
+          const button = bar.querySelector('[data-meta-action="session"]');
+          return button?.getAttribute("title") === null && bar.textContent.includes("新会话 · 未保存");
+        })(),
+        el("meta").textContent,
       );
 
       send({ type: "focusInput" });

@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /**
- * `src/shared/toolText.ts` 的单元检查 —— 不需要 VS Code，也不需要网络。
+ * `src/shared/toolText.ts` 与 `src/shared/format.ts` 的单元检查（不需 VS Code、不需网络）。
+ *
+ * **本脚本覆盖 `format.ts` 的**全部**纯函数**（`formatTokens` / `formatContextUsage` / `formatCost` /
+ * `sessionDisplayName` / `formatSessionTime`）—— S5 的 D11/N5：同一个函数**只允许一处期望**，
+ * 所以时间/会话名的格式化断言放在这里，不另开脚本。
  *
  * 为什么要单独一个脚本：这里的每条错误都是"看起来正常"的那种 ——
  *   - ANSI 没剥干净 → 正文里出现 `[32m` 之类的乱码；
@@ -238,6 +242,45 @@ console.log("[tool-text-check] formatContextUsage");
   equal("percent=null → ?/1.0M（**没有百分号**）", format.formatContextUsage(null, 1000000), "?/1.0M");
   equal("窗口为 0 → 空串（调用方改显示未选择模型，不要 ?/0）", format.formatContextUsage(0, 0), "");
   equal("percent=0 → 0.0%（不是 ?）", format.formatContextUsage(0, 1000000), "0.0%/1.0M");
+}
+
+console.log("[tool-text-check] sessionDisplayName");
+{
+  equal("有显式名字时优先用它", format.sessionDisplayName("  我的重构  ", "不理它"), "我的重构");
+  equal("没名字时用首条 user 消息", format.sessionDisplayName(undefined, "帮我看一下 STATUS"), "帮我看一下 STATUS");
+  equal("换行/连续空白被压成空格（它要进 QuickPick 的 label）",
+    format.sessionDisplayName(undefined, "第一行\n\n  第二行\t第三行"), "第一行 第二行 第三行");
+  equal("只有空白名字 → 退回消息", format.sessionDisplayName("   ", "有点像话"), "有点像话");
+  equal("pi 的空会话占位串 → 新会话", format.sessionDisplayName(undefined, "(no messages)"), "新会话");
+  equal("什么都没有 → 新会话", format.sessionDisplayName(undefined, ""), "新会话");
+  const long = format.sessionDisplayName(undefined, "好".repeat(100));
+  equal("超长先截断再加省略号（总长 61）", `${long.length}`, `${format.SESSION_NAME_MAX + 1}`);
+  check("截断的尾巴是省略号", long.endsWith("…"), long.slice(-3));
+}
+
+console.log("[tool-text-check] formatSessionTime");
+{
+  const now = new Date(2026, 8, 13, 12, 0, 0); // 2026-09-13 12:00 本地时间
+  const at = (y, m, d, hh = 12, mm = 0, ss = 0) => new Date(y, m, d, hh, mm, ss);
+  equal("30 秒前 → 刚刚", format.formatSessionTime(at(2026, 8, 13, 11, 59, 30), now), "刚刚");
+  equal("2 分钟前", format.formatSessionTime(at(2026, 8, 13, 11, 58), now), "2 分钟前");
+  equal("59 分钟前仍是分钟档", format.formatSessionTime(at(2026, 8, 13, 11, 1), now), "59 分钟前");
+  equal("今天更早 → 今天 HH:MM（与 now 差不到 24h 也算今天）",
+    format.formatSessionTime(at(2026, 8, 13, 9, 5), now), "今天 09:05");
+  equal("昨天 → 昨天 HH:MM", format.formatSessionTime(at(2026, 8, 12, 23, 30), now), "昨天 23:30");
+  equal("更早的同年 → M月D日", format.formatSessionTime(at(2026, 7, 3, 10), now), "8月3日");
+  equal("跨年 → 带年份", format.formatSessionTime(at(2025, 11, 31, 10), now), "2025年12月31日");
+  // 分档是"相对 → 绝对"：**1 小时以内一律用相对时间**，不切日历档。
+  // 所以刚过午夜时，20 分钟前的会话显示"20 分钟前"而不是"昨天 23:50" ——
+  // 对"我刚聊过哪个"这个问题，前者信息更多。
+  const midnight = new Date(2026, 8, 13, 0, 10, 0);
+  equal("刚过午夜：1 小时以内仍是相对时间（不切「昨天」）",
+    format.formatSessionTime(new Date(2026, 8, 12, 23, 50, 0), midnight), "20 分钟前");
+  equal("同一午夜、但超过 1 小时 → 转成「昨天 HH:MM」",
+    format.formatSessionTime(new Date(2026, 8, 12, 22, 30, 0), midnight), "昨天 22:30");
+  check("钟表飘了（未来时间）不写「刚刚」",
+    format.formatSessionTime(at(2026, 8, 13, 12, 5), now) === "今天 12:05",
+    format.formatSessionTime(at(2026, 8, 13, 12, 5), now));
 }
 
 console.log(`TOOL-TEXT-CHECK ${failures === 0 ? "OK" : "FAILED"} (${checks} checks)`);
