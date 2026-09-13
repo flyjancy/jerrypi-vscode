@@ -510,6 +510,14 @@ abortButton.addEventListener("click", () => vscode.postMessage({ type: "abort" }
 
 input.addEventListener("keydown", (event: KeyboardEvent) => {
   if (event.key !== "Enter" || event.shiftKey) return;
+  // 输入法（S5 验收期用户实测）：拼音还在组合中时，回车是"把拼音落成字母"（或选词），
+  // **不是发送**。没有这个守卫时，那一按会把（还没组合完的）内容当成消息发出去，
+  // 而 IME 随后才把字母插进（已被我们清空的）输入框 —— 于是"消息发出去了，框里还留着那串英文"
+  // （中文用户每天都会撞到）。
+  // `isComposing` 是标准信号；`keyCode === 229` 是 IME 处理键的旧信号
+  // （部分输入法在 compositionend 之后还会补发一次）。
+  // 注意：这两条分支里**不能** preventDefault —— 那可能打断输入法的上屏。
+  if (event.isComposing || event.keyCode === 229) return;
   event.preventDefault();
   send(busy ? "steer" : "auto");
 });

@@ -11,7 +11,7 @@
 
 ## 1. 现在
 
-**进行中**：**S5 第 6 步：Mac 验收进行中**（用户已报回第 1 个问题：中止后切回旧会话的观感，已查证 + 补了确认框文案；**等用户继续做动作①的剩余部分与动作②**）（2026-09-13）
+**进行中**：**S5 第 6 步：Mac 验收进行中**（用户报回 2 个问题：① 中止后切回旧会话的观感——查证为忠实记录，已补确认框文案；② **输入法拼音回车被当成发送**——已修。**等用户用新包重测这两处 + 完成动作②**）（2026-09-13）
 
 | | |
 | --- | --- |
@@ -30,7 +30,7 @@
 | `npm run check:protocol` | 112 |
 | `npm run check:render` | **114** |
 | `node scripts/tool-text-check.mjs` | **87** |
-| `node scripts/webview-dom-check.mjs` | **71** |
+| `node scripts/webview-dom-check.mjs` | **75** |
 | `node scripts/host-check.mjs` | **57** |
 | `npm run check:controller`（真模型，**不进 CI**） | **81/81**（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | **14 项（12 gating + T5c/T12 advisory）GATE PASS** |

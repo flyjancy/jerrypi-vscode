@@ -504,6 +504,31 @@ async function main() {
     check("确认之前不再接受下一条（防重复发送）", input.value === "");
     send({ type: "promptAccepted" });
 
+    // S5 验收期（用户实测）：输入法。拼音组合中按回车是"把拼音落成字母"，**不是发送**。    // 少了这个守卫：那一按既会把（还没组合完的）内容发出去，又会把刚落下来的字母留在输入框里
+    // （用户的原话："想输入的是英文，但按下回车时会直接把它发出去，并且输入框里是我想打的英文"）。
+    posted.length = 0;
+    input.value = "ni hao";
+    const composing = new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(composing, "isComposing", { value: true });
+    input.dispatchEvent(composing);
+    check("拼音组合中按回车**不发送**（event.isComposing）",
+      posted.filter((m) => m.type === "prompt").length === 0, JSON.stringify(posted));
+    check("组合中的回车也不清空输入框（拼音还在）", input.value === "ni hao", input.value);
+
+    // `keyCode === 229` 是 IME 处理键的旧信号（部分输入法在 compositionend 之后还会发一次）
+    const legacy = new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(legacy, "keyCode", { value: 229 });
+    input.dispatchEvent(legacy);
+    check("keyCode 229 的回车也不发送",
+      posted.filter((m) => m.type === "prompt").length === 0, JSON.stringify(posted));
+
+    // 组合结束后，真回车照旧发送
+    input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    check("组合结束后回车照常发送",
+      posted.filter((m) => m.type === "prompt").at(-1)?.text === "ni hao", JSON.stringify(posted.at(-1)));
+    send({ type: "promptAccepted" });
+
+    // 忙时回车 = 转向（先回到忙态）
     send({ type: "busy", busy: true });
     input.value = "追加一句";
     input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
