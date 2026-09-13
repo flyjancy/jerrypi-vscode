@@ -22,7 +22,7 @@ import type {
   ExtensionUIContext,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { TOOL_FRAME_MS, type ChatItem, type ServerMessage } from "../shared/protocol";
+import { TOOL_FRAME_MS, type ChatItem, type ServerMessage, type SessionMeta } from "../shared/protocol";
 import { toolTextFromContent } from "../shared/toolText";
 import type { EventSink } from "./bindings";
 import type { PiModule } from "./loader";
@@ -79,14 +79,21 @@ export interface ReplaySnapshot {
   queue: { steering: string[]; followUp: string[] };
   busy: boolean;
   cwd: string;
+  /** @deprecated 与 `meta.model` 同值，留给旧 webview 兜底（见 protocol.ts）。 */
   model: string;
+  meta: SessionMeta;
   errorMessage?: string;
 }
 
 /** 会话上我们真正读写的成员（避免把整个 AgentSession 类型铺开）。 */
 interface SessionView {
   messages: readonly unknown[];
-  model?: { provider?: string; id?: string } | null;
+  model?: { provider?: string; id?: string; name?: string; contextWindow?: number } | null;
+  thinkingLevel: string;
+  supportsThinking(): boolean;
+  getContextUsage():
+    | { tokens: number | null; percent: number | null; contextWindow: number }
+    | undefined;
   isStreaming: boolean;
   isIdle: boolean;
   state: {
@@ -333,6 +340,45 @@ export class SessionHostController {
    *   - `state.streamingMessage`：正在流式接收的那条 assistant；
    *   - `state.pendingToolCalls`：正在执行的工具调用（toolResult 还没产生）。
    */
+  /** 没有会话时的元信息（与 `sessionMeta()` 的空模型结果保持一致）。 */
+  private emptyMeta(): SessionMeta {
+    return {
+      model: "",
+      provider: "",
+      modelName: "",
+      thinkingLevel: "off",
+      supportsThinking: false,
+      contextWindow: 0,
+      contextUsage: null,
+    };
+  }
+
+  /**
+   * 组装元信息（模型 / 思考等级 / 上下文用量）。
+   *
+   * 三条容易错的地方：
+   *   - `thinkingLevel` 要**回读** `session.thinkingLevel`：`setThinkingLevel()` 会静默
+   *     clamp（实测 `medium→high`、`xhigh→max`），设进去的值不一定是生效值；
+   *   - `supportsThinking()` 为 false 时**不要**去读 `getAvailableThinkingLevels()` ——
+   *     `model === undefined` 时那个函数会返回**全部 7 档**（假数据）；
+   *   - `contextUsage === null`（没有模型 / 窗口 <= 0）与 `contextUsage.percent === null`
+   *     （刚压缩）是两种状态，见 protocol.ts 的注释。
+   */
+  private sessionMeta(session: SessionView): SessionMeta {
+    const model = session.model;
+    const usage = session.getContextUsage();
+    return {
+      model: model ? `${model.provider}/${model.id}` : "",
+      provider: model?.provider ?? "",
+      modelName: model?.name ?? "",
+      thinkingLevel: session.thinkingLevel,
+      supportsThinking: session.supportsThinking(),
+      contextWindow: model?.contextWindow ?? 0,
+      contextUsage:
+        usage === undefined ? null : { tokens: usage.tokens, percent: usage.percent },
+    };
+  }
+
   snapshot(): ReplaySnapshot {
     const session = this.host === undefined ? undefined : this.view();
     if (session === undefined) {
@@ -343,6 +389,7 @@ export class SessionHostController {
         busy: this.pendingSend,
         cwd: this.options.cwd,
         model: "",
+        meta: this.emptyMeta(),
       };
     }
 
@@ -411,6 +458,7 @@ export class SessionHostController {
       busy: session.isStreaming || this.pendingSend,
       cwd: this.options.cwd,
       model: model ? `${model.provider}/${model.id}` : "",
+      meta: this.sessionMeta(session),
       ...(session.state.errorMessage === undefined ? {} : { errorMessage: session.state.errorMessage }),
     };
   }

@@ -16,7 +16,37 @@
 //   3. `busy` 的判定：**空闲以 `agent_settled` 为准**，不能以第一个 `agent_end`
 //      （`agent_end` 之后可能还有 followUp 队列或自动重试）。
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
+
+/**
+ * 当前会话的**元信息**（模型 / 思考等级 / 上下文用量），显示在输入框下方那一行。
+ *
+ * 为什么把 `contextWindow` 放在**顶层**而不是塞进 `contextUsage` 里：
+ * `contextUsage` 可以是 `null`（见下），那时前端仍需要知道窗口大小才能显示 `?/1.0M`。
+ * pi 自己在 usage 未知时也是拿 `model.contextWindow` 兜底的。
+ *
+ * **两种“没有用量”是不同状态，协议层面分开**：
+ *   - `contextUsage === null`：根本没有可用量信息 —— 没有模型，或模型的 `contextWindow <= 0`
+ *     （此时 `contextWindow` 必为 `0`，前端走“未选择模型”文案，**不渲染 `?/0`**）；
+ *   - `contextUsage.percent === null`：用量未知但窗口知道 —— pi 的“刚压缩、还没等到下一次回复”
+ *     状态，前端显示 `?/1.0M`（**注意没有百分号**，这与 `NN.N%/1.0M` 是两个分支）。
+ */
+export interface SessionMeta {
+  /** `"provider/id"`；未选择模型时为空串。 */
+  model: string;
+  /** 供 tooltip 用；行内只渲染 `id`。 */
+  provider: string;
+  /** 模型目录里的 `Model.name`（可能比 id 可读）。 */
+  modelName: string;
+  /** 思考等级：`off|minimal|low|medium|high|xhigh|max`（pi 会 clamp，**只信回读值**）。 */
+  thinkingLevel: string;
+  /** `!!model?.reasoning`。**false 时不要去看等级列表**，否则会拿到 7 个假档位。 */
+  supportsThinking: boolean;
+  /** 模型上下文窗口；无模型时为 `0`。 */
+  contextWindow: number;
+  /** 见上面两种 null 状态的区别。 */
+  contextUsage: { tokens: number | null; percent: number | null } | null;
+}
 
 /** 转写里的一条可渲染项。 */
 export type ChatItem =
@@ -94,7 +124,11 @@ export type ClientMessage =
   | { type: "clearQueue" }
   | { type: "openExternal"; href: string }
   /** 打开工具卡片里的文件路径。host 会用控制器的白名单做精确比对。 */
-  | { type: "openFile"; path: string };
+  | { type: "openFile"; path: string }
+  /** 打开模型选择器（QuickPick 在**宿主**侧，不在 webview 里自绘）。 */
+  | { type: "openModelPicker" }
+  /** 打开思考等级选择器。 */
+  | { type: "openThinkingPicker" };
 
 /** 扩展 → webview */
 export type ServerMessage =
@@ -107,11 +141,24 @@ export type ServerMessage =
       queue: { steering: string[]; followUp: string[] };
       busy: boolean;
       cwd: string;
+      /**
+       * @deprecated 兼容旧 webview 的遗留字段，与 `meta.model` 同值。
+       * 新代码请读 `meta`；等 S5（会话管理）把两端都换完之后删掉。
+       */
       model: string;
+      /** 模型 / 思考等级 / 上下文用量。 */
+      meta: SessionMeta;
       errorMessage?: string;
     }
   /** upsert：id 已存在则替换，不存在则按顺序追加。 */
   | { type: "item"; item: ChatItem }
+  /**
+   * 元信息整块替换（不做增量）。
+   *
+   * 前端处理它时**不得滚动转写**：滚动跟随的正确条件是“转写内容变了”，
+   * 而 meta 的变化不改内容（见 S4 的 R10）。
+   */
+  | { type: "meta"; meta: SessionMeta }
   | { type: "delta"; id: string; kind: "text" | "thinking"; delta: string }
   | { type: "queue"; steering: string[]; followUp: string[] }
   | { type: "busy"; busy: boolean; errorMessage?: string }
@@ -128,7 +175,15 @@ export type ServerMessage =
   /** 失败提示：输入框下方的红字。 */
   | { type: "composerError"; text: string }
   /** 把文本**退回**输入框（中止时清队列的产物；不是错误）。 */
-  | { type: "restoreComposer"; text: string };
+  | { type: "restoreComposer"; text: string }
+  /**
+   * 把焦点还给输入框。
+   *
+   * 只在**从面板发起**的流程（点模型/等级段 → QuickPick 关闭）里发；
+   * 从命令面板发起时不发 —— 那时用户的焦点可能在编辑器里，抢焦点是 bug。
+   * 两条退出路径（选中 / Esc 取消）都要发。
+   */
+  | { type: "focusInput" };
 
 /** 重放时的总量上限（防止一个长会话把 webview 灌爆）。 */
 export const MAX_REPLAY_ITEMS = 500;

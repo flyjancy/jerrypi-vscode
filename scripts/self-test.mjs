@@ -26,9 +26,10 @@ const PROTOCOL_CHECK = path.join(SCRIPT_DIR, "protocol-check.mjs");
 const RENDER_CHECK = path.join(SCRIPT_DIR, "render-xss-check.mjs");
 const TOOL_TEXT_CHECK = path.join(SCRIPT_DIR, "tool-text-check.mjs");
 const WEBVIEW_DOM_CHECK = path.join(SCRIPT_DIR, "webview-dom-check.mjs");
+const HOST_CHECK = path.join(SCRIPT_DIR, "host-check.mjs");
 const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 
-const TOTAL = 8;
+const TOTAL = 9;
 let passed = 0;
 
 function pass(id, name, detail) {
@@ -216,6 +217,22 @@ function testWebviewDom() {
   pass(8, "webview DOM wiring checks pass", output.split("\n").filter((l) => l.includes("OK")).slice(-1)[0] ?? "");
 }
 
+/**
+ * 宿主侧接线检查（fake-`vscode` 桩）。
+ *
+ * 与 §webview DOM 检查分开成独立用例：那个测"面板里的 DOM 接线"，
+ * 这个测"宿主收到消息之后做了什么"（唯一做运行期消息校验的地方）。
+ */
+function testHostWiring() {
+  const result = spawnSync(process.execPath, [HOST_CHECK], { cwd: REPO_ROOT, encoding: "utf8" });
+  const output = `${result.stdout}${result.stderr}`.trim();
+  if (result.status !== 0) {
+    const failed = output.split("\n").filter((line) => line.includes("FAIL")).slice(0, 4).join(" | ");
+    fail(9, "host-side wiring checks pass", failed || output.split("\n").slice(-2).join(" | "));
+  }
+  pass(9, "host-side wiring checks pass", output.split("\n").filter((l) => l.includes("OK")).slice(-1)[0] ?? "");
+}
+
 function testUnitChecks() {
   // S2 的纯函数层（serialize 的 id 规则、urlPolicy 的白名单、渲染安全）由单独脚本检查，
   // 这里只保证它们**真的会被跑**——漂移的检查脚本等于没有检查。
@@ -245,6 +262,7 @@ async function main() {
   testScriptsParse();
   testUnitChecks();
   testWebviewDom();
+  testHostWiring();
   console.log(`SELF-TEST OK (${passed}/${TOTAL})`);
 }
 
