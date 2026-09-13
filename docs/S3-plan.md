@@ -858,8 +858,24 @@ Marketplace 下载 5961264 B（gzip）→ 解压 6009856 B
 SHA-256: 5e03d0fc2b0323cc29bd47f0be272b1a3e6bdaf9b188005afa430241872be5a0
 本地构建 SHA-256: 同一个值
 ```
-**⚠️ 教训**：`curl` 直接下载 Marketplace 的 vsix 拿到的是 **gzip 流**
+**⚠️ 教训一**：`curl` 直接下载 Marketplace 的 vsix 拿到的是 **gzip 流**
 （响应头不是 `Content-Encoding`，所以 curl 不会自动解压；`file` 会显示
 `gzip compressed data … original size modulo 2^32 6009856`）。
 0.1.5 一开始就因此被判"不一致、疑似上传了旧包"，虚惊一场。
-**以后核对发版产物：先 `gunzip -c`，或者直接看 `file` 输出的 original size。**
+
+**⚠️ 教训二（更重要）：`.vsix` 的字节不可复现。** 打完 tag 后我为了别的事
+重新执行了一次 `npm run package`，同一个 HEAD、同一棵树，得到的 `.vsix`
+SHA-256 却变了：
+
+```
+已发布的  5e03d0fc…（6009856 B）
+重建的    8938d184…（6009856 B）   ← 只差 zip 里的文件 mtime
+```
+
+解包逐文件比对：**338 个文件全部字节相同，0 个不同**；差别只在 zip 元数据。
+所以"下载回来比字节"这条路只在**同一份文件**之间成立 —— 一旦本地重新打包，
+比字节就会给出假警报。**规则改为：比内容（文件列表 + 每文件 SHA-256）。**
+
+为此新增 `scripts/compare-vsix.mjs <version>`：嗅探并解开 gzip、解包两边、
+比对文件列表与逐文件 SHA-256、把已发布的那一份留档到仓库外
+`~/jerrypi-releases/`。0.1.5 用它复核通过（`VSIX-COMPARE OK 0.1.5`）。
