@@ -1,6 +1,8 @@
 # jerrypi：Pi 聊天面板 VS Code 扩展 —— 实施计划
 
-状态：实施计划（待执行）。日期：2026-09-10。
+状态：**终稿**（Codex 5 轮评审 + DeepSeek 11 轮实跑复核，第 11 轮 APPROVE；2026-09-11）。日期：2026-09-10。
+**评审记录见文末**（本文档是唯一一份总计划；根目录那份已按用户 2026-09-13 的决定合并进来并删除）。
+**进度**：S0–S4 已完成，S5 实施中 —— 见 `docs/STATUS.md`。
 
 ## 1. 目标与成功判据
 
@@ -264,3 +266,237 @@ jerrypi-vscode/
 - **Q4 diff 审阅**：采纳作者建议：进 v1。
 - **Q5 早期验证**：用户无法往受限机拷文件。改为发布预发布版到 Marketplace，用户在受限机安装后运行 `Pi: Run Self-Test` 并口头回报每项结果。
 - **Q6 VS Code 版本**：可升到最新（1.137，Node 24.18.1）。据此把声明下限定为 1.123（首个 Node 24 版本），不承诺未实测的 Node 22 档。
+
+## 评审记录
+
+### 第 1 轮（2026-09-10，评审者 jp-pi-vscode，Codex 只读）
+
+VERDICT: BLOCKING（4 B / 6 S / 1 N）
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| B1 | S1 只发一句 prompt，不触发 bash/文件/会话恢复，无法验证 A3/A4 | ACCEPT | S1 重写为 8 项自测闸门，要求在受限机上从已安装 .vsix 跑；G2/G3 补中止与重启恢复 |
+| B2 | 自己 bundle `dist/index.js` 会走非 bundled 扩展加载路径，`require.resolve`/`import.meta.resolve` 失效 | ACCEPT | 核实属实。方案改为原样消费 pi 官方 `dist/bundle/`（`PI_BUNDLED_NODE=true`，虚拟模块分支）；第 2、4.2、5.4 节重写；S1 第 3 项与 G6 验证 TS 扩展加载 |
+| B3 | `activate()` 里设 `PI_PACKAGE_DIR` 晚于 `config.js` 顶层读包元数据 | ACCEPT | 核实属实。改为绝不静态 import pi，`loader.ts` 动态 import；复刻包布局让 `findNodePackageDir` 直接命中；S1 第 2 项断言 VERSION |
+| B4 | `engines ^1.100` 对应 Node 20.19，不满足 pi ≥ 22.19 | ACCEPT | 查 vscode-versions：1.105 是首个 Node 22.19.0 版本。engines 改 `^1.105.0`；新增 Q6、R11；S1 第 1 项记录 `process.versions` |
+| S1 | worker 复制方案漏传递依赖与 WASM，且失败会被静默回退掩盖 | ACCEPT | 用官方 bundle 后 worker 在 chunks 内自带；photon-node 含 wasm 整包复制；S1 第 8 项直接构造 Worker 验证 |
+| S2 | `HTTPS_PROXY` 透传不是已成立的方案；SDK 不装 dispatcher | ACCEPT | 核实 `configureHttpDispatcher` 未导出且仅 CLI 调用。5.3 改为两层策略（VS Code 自身代理设置 → 扩展自带 undici EnvHttpProxyAgent）；网络验证提前到 S1 第 4 项；CA 问题记为已知限制 |
+| S3 | `path:` 前缀不存在；`install()` 不持久化；git 源也可能要 npm | ACCEPT | 核实属实。改用 pi 原生源格式与 `installAndPersist`；S9 验收改为重启后实际加载；npm/git 限制写进 README |
+| S4 | 审批缺少取消生命周期与 mutating 定义 | ACCEPT | 5.3 补四种取消路径、mutating 覆盖集（未知工具默认确认）；S8 验收加"待审批时中止" |
+| S5 | Zetaphor diff 不是按调用的前后对比 | ACCEPT | 核实其用首次原文 + 当前磁盘。改为自写 `snapshots.ts` 按 toolCallId 存前后快照；S7 验收改为连续两次 edit 分别查看 |
+| S6 | 影响范围与回滚低估副作用 | ACCEPT | 第 7 节改为三类影响，明确卸载只撤销扩展自身 |
+| N1 | CJS 回退引用的 shim 只匹配旧包名 | ACCEPT | A2、4.2 改为"需适配和重新验证的参考实现" |
+
+STRONGEST_OBJECTION（本轮）：S1 把"能聊天"当成"嵌入方案成立"，不覆盖子进程、worker/WASM、扩展解析这些最可能推翻方案的路径。→ 已由 B1/B2/S1 的处置覆盖。
+
+本轮之后新增的、评审者尚未复核的内容：第 4.1 方案切换到官方 bundle（含第 2 节新增的 bundle 外部依赖清单）、5.3 网络两层策略、5.3 快照式 diff、S1 八项闸门。请第 2 轮重点复核这些。
+
+### 第 2 轮（2026-09-10）
+
+VERDICT: BLOCKING（1 B / 5 S / 2 N）
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| B5 | S1 引用不存在的 API（`getThemesDir`、`getCommands`），bash 中止 API 配对错误，worker 路径与验证方式不成立 | ACCEPT | 全部核实。S1 第 2、3、5、8 项重写：用 `getPackageDir()` 拼路径；`extensionRunner.getRegisteredCommands()`；`executeBash`/`abortBash` 配对并补 agent 驱动的 `session.abort()`；worker 用 chunks 准确路径做 postMessage 往返并设超时 |
+| S7 | undici 跨副本共享结论缺版本条件，槽位应为 `.2` 主 `.1` 兼容 | ACCEPT | 核实 bundle 内两个槽位都出现。第 2 层不再依赖 `setGlobalDispatcher`，改为包装 `globalThis.fetch`；第 2 节补充事实 |
+| S8 | 第 2 层 `undici.install()` 替换整套全局对象，破坏宿主与其他扩展 | ACCEPT | 核实 pi-ai 的 `fetch` 选项无法从 SDK 注入。第 2 层改为 opt-in、只包装 fetch、不 install、不改 dispatcher，并加宿主网络回归验收 |
+| S9 | 按 toolCallId 在事件回调读盘做快照，在并行执行下会串 | ACCEPT | 核实并行分支先发整批 start。edit 改用 `EditToolDetails.patch`（执行边界内生成）；write 先验证自定义工具替换内置 + 包装 `operations`，不成立则注明限制；S7 验收改为同一消息内两次修改 |
+| S10 | `createAgentSession` 不绑定扩展，`extensionsResult.errors` 不代表生命周期正常 | ACCEPT | 核实 sdk.js 不调 `bindExtensions`，rpc/print 模式自己调。新增 `bindings.ts`；S1 第 3 项要求 session_start 与命令执行各写标记文件 |
+| S11 | smoke 扩展永久放进用户全局扩展目录 | ACCEPT | 改用临时目录 + `additionalExtensionPaths`，结束清理，诊断分开报告 |
+| N2 | AWS CRT 不是实际外部加载依赖 | ACCEPT | 第 2 节与 R1 改为"按需能力限制" |
+| N3 | 卸载不会清除配置与密钥 | ACCEPT | 第 7 节改写；S6 增加清除密钥命令 |
+
+STRONGEST_OBJECTION（本轮）：S1 自身不可执行，闸门数量不代表覆盖有效。→ 已由 B5/S10/S11 的处置覆盖。
+
+本轮之后新增的、评审者尚未复核的内容：5.3 扩展绑定条目、网络第 2 层的"只包装 fetch"方案、diff 的 patch/替换工具方案、S1 第 3/5/8 项的新写法。
+
+### 第 3 轮（2026-09-10，最后一轮）
+
+VERDICT: BLOCKING（1 B / 5 S / 0 N）
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| B6 | S1 第 3 项的 `DefaultResourceLoader` 缺必需的 `cwd`/`agentDir`，且传入现成 loader 时 `createAgentSession` 不会 `reload()` | ACCEPT，**本条修复未经复核** | 核实 sdk.js 第 75–77 行只对自建 loader 调 reload。S1 第 3 项改为显式顺序；第 2 节补事实 |
+| S12 | uiContext 最小实现不满足 `ExtensionUIContext` 必填字段；`ExtensionCommandContextActions` 也有必需项 | ACCEPT | 核实 types.d.ts。5.3 改为以官方 rpc 的 `createExtensionUIContext()` 为蓝本提供完整对象，明确 no-op 与取消语义 |
+| S13 | 只替换 fetch 会导致跨 undici 实现的 `Request` 不兼容 | ACCEPT | 第 2 层包装器对非字符串/URL 输入委托原 fetch；加 deactivate 恢复与连接释放；验收加原 `Request` 输入与 body/signal 用例 |
+| S14 | edit patch 反向应用不能还原真实文件 | ACCEPT | 简化为只展示 patch |
+| S15 | write 同名覆盖已可确认，但 operations 层没有 toolCallId | ACCEPT | 核实 `_refreshToolRegistry` 覆盖与 `createWriteToolDefinition` 导出。改为外层 execute 捕获 toolCallId 再构造 operations；删除"替换不成立"的回退 |
+| S16 | S1 5(c) 从 prompt 计时会把模型慢误判为 A3 失败 | ACCEPT | 改为等 `tool_execution_start` 后计时；分开报告"模型未调用工具"与"子进程未能中止" |
+
+STRONGEST_OBJECTION（本轮）：全局 fetch 包装即使 opt-in 仍有跨实现兼容风险，字符串 URL 成功不足以验收。→ 已按 S13 处置；该层默认关闭，不阻断默认方案。
+
+**收敛状态**：撞到 3 轮上限。第 3 轮的 BLOCKING（B6）在评审结束后修入，没有第二双眼睛看过；其余 5 条 SHOULD-FIX 的修复同样未经复核。评审者三轮都没有对第 4.1 选定方案本身提出反对，所有 BLOCKING 都指向 S1 闸门的可执行性与实现细节。
+
+**留给用户裁决的未解决分歧**：无。评审者与作者没有持续两轮的对立意见。第 9 节 Q1–Q6 已由用户回答，Q3/Q4 按作者建议定。
+
+### 第 4 轮（2026-09-10，用户要求追加）
+
+VERDICT: BLOCKING（1 B / 5 S / 1 N）。评审者确认第 3 轮的 loader 顺序、edit 只展示 patch、write 按调用构造 operations 已正确落地。
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| B7 | S0 与 S1 都发 0.1.0，Marketplace 不允许覆盖 | ACCEPT | 5.4/S0/S1：0.1.0 空壳，S1 起 0.1.1 递增，正式 0.2.0，后续预发布 0.3.x；用户运行前核对版本 |
+| S17 | 口头回报缺版本身份、固定编号、SKIP 语义 | ACCEPT | S1 输出格式固定为首行身份 + `T<n> PASS/FAIL/SKIP <错误码>` + `GATE PASS/BLOCKED`；SKIP 不算通过 |
+| S18 | 本地验收的 .vsix 与实际发布产物没绑定 | ACCEPT | 5.4：发布必须 `--packagePath` 同一文件，记录大小与 SHA-256 |
+| S19 | `custom<T>()` 没有统一取消值 | ACCEPT | 实现为 reject 的 `Promise<never>`；S1 第 3 项加 `/smoke-custom` 分支 |
+| S20 | 恢复 fetch 会覆盖别的扩展后装的包装器 | ACCEPT | 只在仍是自己的包装器时恢复，否则切为纯委托；在途请求结束后再关代理；验收加顺序用例 |
+| S21 | `tool_execution_start` 不等于 bash 已 spawn | ACCEPT | 5(c) 改为命令先回显唯一标记，收到标记后再计时；错误码区分 `E_NO_TOOLCALL`/`E_NO_SPAWN`/`E_NOT_ABORTED` |
+| N4 | G1 仍写侧载；S9 在受限机上依赖不存在的 pi-config 目录 | ACCEPT | G1 删侧载；S9 受限机改用随扩展发布的 fixture 目录 |
+
+STRONGEST_OBJECTION（本轮）："口头 PASS"无法绑定版本且 SKIP 未闭合。→ 已由 S17 处置。
+
+### 第 5 轮（2026-09-10，追加复核的最后一轮）
+
+VERDICT: BLOCKING（1 B / 0 S / 0 N）。评审者复核第 4 轮全部修复已落地，全文通读未发现其他阻断。
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| B8 | 预发布标记由 `vsce package --pre-release` 写入包内，普通打包再 `publish --pre-release` 会被拒 | ACCEPT，**本条修复未经复核** | 核实 vsce 3.9.2 publish.js 检查包内标记。5.4/S10 改为预发布与正式分别用对应的 package 命令，publish 一律 `--packagePath` |
+
+STRONGEST_OBJECTION（本轮）：B8 阻断唯一发布通道。→ 已处置。评审者声明其结论基于只读静态核查，不代表受限 Windows 实测通过。
+
+**最终收敛状态**：5 轮后停止（3 轮上限 + 用户追加 2 轮）。第 5 轮 B8 的修复未经复核。没有双方僵持的分歧。
+
+### DeepSeek 复核第 1 轮（2026-09-11，pi 会话 deepseek-flash，用户自行发起，**实跑核查**；本节编号前缀 D1-）
+
+VERDICT: BLOCKING（1 B / 3 S / 2 N）。与 Codex 五轮的区别：它把 bundle 拷到干净目录实际 import 了一次。
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| B1 | bundle 静态 import `@earendil-works/chord/context`，只复制 bundle 无法加载 | ACCEPT | 作者隔离目录复现：无 chord 时 `ERR_MODULE_NOT_FOUND`，补 chord 后 OK。第 2 节更正；5.1 加 chord；5.4 sync 脚本加裸依赖扫描与隔离 import；S0 加解包后隔离 import |
+| S1 | 手拼主题路径是对 pi 内部布局的二次推断 | ACCEPT | S1 第 2 项与 sync 脚本改为断言四个资源路径存在可读 |
+| S2 | `.vscodeignore` 未显式包含 `test-fixtures/**`；`node_modules/` 排除会误伤 `pi-runtime/node_modules/` | ACCEPT | 5.4 显式取反三条；S0 解包检查精确到 chord/wasm/fixture 路径 |
+| S3 | 5(c) 把模型配合度与 spawn 策略耦合 | ACCEPT | A3 决定性证据改为 5(a)/5(b)；5(c) 允许 SKIP 不阻断 |
+| N1 | `PI_PACKAGE_DIR` 双保险会掩盖 A8 验证 | ACCEPT | 去掉双保险；A8 改为断言 `getPackageDir()` 命中 `pi-runtime` |
+| N2 | 评审记录应标注每轮验证手段 | ACCEPT | 见下表 |
+
+**各轮验证手段**：Codex 第 1–5 轮均为只读静态核查（读 d.ts/js 源码与文档），未执行过 import 或解包；作者在第 1 轮前用 esbuild 自打包产物跑过一次 Node 26 进程内启动，但那不是官方 bundle 的隔离 import。DeepSeek 一轮为实跑（隔离目录 import）。**教训：依赖解析类问题必须执行验证，本计划已把它落成 `sync-pi-runtime.mjs` 的机械校验与 S0 的解包门禁。** 作者第 1 轮前用 grep 列外部依赖时因 `head -40` 截断漏掉了 chord，这是本次错误的直接原因。
+
+### DeepSeek 复核第 2 轮（2026-09-11，实跑核查；本节编号前缀 D2-）
+
+VERDICT: APPROVE-WITH-CHANGES（0 B / 3 S / 3 N）。确认上一轮 B1/N1 及 Codex B6 的修复成立，并逐一复核了 `SessionManager.list`、`ModelRuntime`、`executeBash/abortBash`、`customTools`、`ToolDefinition.execute` 签名、`EditToolDetails.patch` 与计划一致。
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| S1 | 朴素正则扫描压缩产物会命中 18 条伪 import，脚本恒失败 | ACCEPT | 作者复现：严格无空白 + 形状正则正好得到 33 个真实标识符。5.4 第 1 条改为严格正则 + `isBuiltin` + 白名单，备选 es-module-lexer |
+| S2 | chord/photon 在本机嵌套在 pi 的 node_modules 下，按仓库根固定路径复制会 ENOENT | ACCEPT | 核实位置。5.4 改为 `createRequire(pi/package.json).resolve()` 定位包根 |
+| S3 | 声明下限 1.105（Node 22.19）从未实测 | ACCEPT，选"上调下限" | 受限机可升到最新，没必要承诺未测区间。`engines.vscode ^1.123.0`（首个 Node 24 版本）；G1/A1/R11/Q6 同步 |
+| N1 | 体积账目偏小；examples/README 路径会进系统提示但未复制 | ACCEPT | 核实 docs 2.7 MB、examples 1.3 MB。一并复制 examples/README；体积估计改为 ≈ 16 MB |
+| N2 | `getThemesDir()` 看 `pi-runtime/src` 是否存在 | ACCEPT | 核实实现。sync 脚本加"`src/` 不存在"断言；第 2 节补充说明 |
+| N3 | 闸门措辞自相矛盾 | ACCEPT | T5c 明确为 advisory，不计入 GATE BLOCKED |
+| 附 | 第 2 层 undici 验收要针对打进产物的那份 | ACCEPT | 5.3 补一句 |
+
+DeepSeek 结论：修掉 S1–S3 后可进入 S0 实施。三条均已修入，**本轮修复未经复核**。
+
+### DeepSeek 复核第 3 轮（2026-09-11，实跑核查：在隔离 pi-runtime 里真实加载扩展；本节编号前缀 D3-）
+
+VERDICT: BLOCKING（1 B / 3 S / 3 N）
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| B1 | `jiti` 未打进 bundle，`require3("jiti")` 是硬依赖，`.js`/`.ts` 扩展加载全部失败 | ACCEPT | 作者隔离目录复现：缺 jiti 时 smoke 与用户两个扩展全报 `Cannot find module 'jiti'`，补上后全部注册。第 2 节更正；5.1/5.4 加 jiti；体积改 ≈ 18 MB |
+| S1 | 依赖扫描要匹配重命名后的 require；隔离校验应升级为真实加载扩展 | ACCEPT | 5.4 第 1 条改为匹配任意含 `require` 的调用，白名单分三档；新增第 7 条隔离加载扩展；S0 解包检查同步 |
+| S2 | `additionalExtensionPaths` 传目录时入口必须是 `index.ts` | ACCEPT | 实跑确认。fixture 入口定为 `index.ts`，S1 与 sync 脚本都传文件路径 |
+| S3 | `extensionsResult.errors` 为空的断言会被用户扩展的错误误判 | ACCEPT | 实跑确认会混入用户扩展。改为"不含 smoke 路径"；G6 同步 |
+| N1 | bundle 对 `@mariozechner/clipboard` 有 guarded require | ACCEPT | 核实。第 2 节更正，白名单"允许缺失"档加入 |
+| N2 | 体积再更新 | ACCEPT | ≈ 18 MB |
+| N3 | S1 第 3 项在受限机上的定位应聚焦 Windows + 宿主 + 用户扩展 | ACCEPT | S1 第 3 项开头写明 |
+
+**教训（第二次同类错误）**：作者第 1 轮前 grep 到 chunk 里有 `createJiti` 就写了"jiti 已打进 bundle"，实际那是 `require3("jiti").createJiti` 的调用。上一轮新增的隔离 import 只验证了 `import bundle`，没有触发扩展加载路径，所以也没抓到。依赖完整性的验证必须覆盖**每一条运行时路径**（import、扩展加载、图片 worker、bash spawn），现已把扩展加载落成 sync 脚本第 7 条。本轮修复未经复核。
+
+### DeepSeek 复核第 4 轮（2026-09-11，实跑核查；本节编号前缀 D4-）
+
+VERDICT: APPROVE-WITH-CHANGES（0 B / 3 S / 4 N）。确认 D3 的 jiti 修复与新的依赖扫描规格正确（按字面复跑得到 8 个非内置标识符，全部落在三档白名单）。同时实跑通过：S8 审批阻塞与 `ctx.signal` 取消、T5b/T5c bash 中止、T8 图片 worker 往返、T4 deepseek 流式、同名 write 覆盖内置、`/smoke-custom` 错误路径、`/smoke` 命令触发。
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| D4-S1 | T7 只 append user 消息不会落盘，pi 在首条 assistant 消息前不写文件 | ACCEPT | 核实 `_persist` 实现。T7 改为真实 `prompt` 产生 assistant 消息；G3 注明限制；第 2 节补事实 |
+| D4-S2 | `cp -R`/`cpSync` 默认保留符号链接，pnpm 布局下产物失效且开发机校验假通过 | ACCEPT | 实测 `dereference: true` 才复制内容。sync 脚本统一 dereference；第 5 条加"无符号链接"断言 |
+| D4-S3 | T4 需要凭据，但 `Pi: Set API Key` 在 S6，受限机 `~/.pi/agent/` 为空 | ACCEPT，选方案一 | 核实 pi 内置 deepseek provider。最小版 Set API Key / Open Settings File 提前到 S1；T4 无凭据时 `FAIL E_NO_CREDENTIALS` 并提示 |
+| D4-N1 | S0 仍写"四项校验" | ACCEPT | 改为"全部 7 条" |
+| D4-N2 | `DefaultPackageManager` 构造需 `{cwd, agentDir, settingsManager}`；本地源持久化为相对路径，扩展升级后失效 | ACCEPT | 核实 d.ts。5.3/S9 写明；列为已知限制 |
+| D4-N3 | 1.123 = Node 24.15 是单一数据源 | ACCEPT | S0 记录受限机实测版本，不符则修正 `engines` |
+| D4-N4 | 各轮编号重名 | ACCEPT | DeepSeek 各轮加 D<n>- 前缀 |
+
+本轮修复未经复核。
+
+### DeepSeek 复核第 5 轮（2026-09-11，实跑核查：会话替换路径与真实 vsce 打包；本节编号前缀 D5-）
+
+VERDICT: APPROVE-WITH-CHANGES（0 B / 2 S / 3 N）。实跑通过：vsce 预发布标记与 `--packagePath` 校验、`.vscodeignore` 取反、G3 CLI 真能 `--session` 读取 SDK 生成的会话、G4 `setModel` 生效、edit 结果 details 含 patch、依赖扫描规格按字面复跑正确。
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| D5-S1 | `newSession`/`switchSession` 不在 `AgentSession` 上，计划缺 `AgentSessionRuntime`；S1 装配路径与生产不一致；无一项覆盖会话替换 | ACCEPT | 核实 d.ts 与 rpc 模式。5.1/5.3 改为 `session.ts` 包装 runtime、统一装配路径、替换后 rebind；`commandContextActions` 委托 runtime；S1 T3 改按生产路径；新增 T9 会话替换 |
+| D5-S2 | S0 的 `package.json` 无 `contributes`/`activationEvents`，vsce 拒绝打包 | ACCEPT | S0 明确必须含 `contributes.commands` |
+| D5-N1 | 预发布标记在 `extension.vsixmanifest`；版本号不得带 `-suffix` | ACCEPT | 5.4 写明；本地检查改为查 manifest 属性 |
+| D5-N2 | 符号链接会让 vsce 打包失败并留下 0 字节 .vsix | ACCEPT | 打包加 `--follow-symlinks`；本地检查加"非 0 字节且能解包" |
+| D5-N3 | `SessionManager.list(cwd)` 省略 `sessionDir` 不跟随自定义 agentDir | ACCEPT | S5 与 `sessions.ts` 统一传 `<agentDir>/sessions` |
+
+本轮修复未经复核。
+
+### DeepSeek 复核第 6 轮（2026-09-11，实跑核查：T9 会话替换、S7 并行写快照、代理层二打包；本节编号前缀 D6-）
+
+VERDICT: APPROVE-WITH-CHANGES（0 B / 1 S / 1 N）。实跑通过：按 5.3 装配路径的 T9 全链路（newSession 后 session_start 再触发、命令仍在、switchSession 回旧会话历史恢复）；按 5.3 包装的 write 工具在同一条消息里两次写同一文件，`withFileMutationQueue` 串行化后两张快照各自正确；`write` 无 details、`edit` 有 patch。
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| D6-S1 | esbuild ESM 输出打进 CJS 的 undici 会在运行时报 `Dynamic require of "node:assert"` | ACCEPT | 作者复现：无 banner 报错，加 `createRequire` banner 正常。5.4 写明 banner 为必需 |
+| D6-N1 | undici 版本不要写"随大版本"，应锁精确版本 | ACCEPT | 5.3 改为 devDependencies 锁精确版本 |
+
+本轮修复未经复核。DeepSeek 指出剩余未实测面：Webview UI 与 diff 虚拟文档（需有 UI 的环境）、第 2 层代理的真实企业网络回归，均已在 S2/S3/S7 与 R5 的验收里。
+
+### DeepSeek 复核第 7 轮（2026-09-11，实跑核查：S2 输入/队列语义与转发事件名；本节编号前缀 D7-）
+
+VERDICT: APPROVE-WITH-CHANGES（0 B / 2 S / 0 N）。确认 5.2 转发的事件名在 pi 0.85.1 bundle 里全部真实存在；`agent_settled` 在 `agent_end` 之后触发一次。
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| D7-S1 | 流式期间再 `prompt()` 会抛错，计划未定义 webview 发送语义 | ACCEPT | 核实 `PromptOptions.streamingBehavior` 流式时必填。5.2 新增第 5 条发送语义；S2 验收补充 |
+| D7-S2 | 转发列表缺 `agent_settled`，UI 空闲态不应以 `agent_end` 为准 | ACCEPT | 5.2 事件清单加 `agent_settled`，新增第 6 条空闲判定；S2 验收补充 |
+
+本轮修复未经复核。
+
+### DeepSeek 复核第 8 轮（2026-09-11，实跑核查：runtime 装配路径的参数接线；本节编号前缀 D8-）
+
+VERDICT: APPROVE-WITH-CHANGES（0 B / 2 S / 0 N）。实跑确认：sync 脚本第 7 条在空 agentDir、无凭据下可跑通（model 为占位但不抛错）；空 agentDir 仅 `setRuntimeApiKey("deepseek", key)` 即可流式返回。
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| D8-S1 | 装配片段未传 `modelRuntime`，服务会自建一个，SecretStorage 的 key 失效 | ACCEPT | 核实 sdk.js `options.modelRuntime ?? ModelRuntime.create(...)`。5.3/S1 T3 显式传单例并跨会话复用；第 2 节补事实 |
+| D8-S2 | 装配片段未传 `customTools`，同名 write 包装不生效 | ACCEPT | 核实 `CreateAgentSessionFromServicesOptions.customTools`。5.3/S1 T3 显式传 `[wrappedWrite]`；第 2 节事实句改为生产路径 |
+
+本轮修复未经复核。至此装配链 `loader.ts → runtime.ts → session.ts → filechanges.ts` 的四个注入点（凭据、扩展/审批、写快照、会话替换）都已写明。
+
+### DeepSeek 复核第 9 轮（2026-09-11，实跑核查：S1 T3 走 runtime 装配路径；本节编号前缀 D9-）
+
+VERDICT: APPROVE-WITH-CHANGES（0 B / 0 S / 3 N）。S1 T3 在 `createAgentSessionServices → createAgentSessionFromServices → createAgentSessionRuntime → rebind` 路径上全链路实跑通过（smoke 无错误、命令在、session_start 与命令标记落盘、`/smoke-custom` 经 `onError` 上报一次后会话仍可用）。DeepSeek 声明：可实测的运行时路径已全部覆盖，剩余未知量只有 VS Code 宿主内项与受限机专有项，其这边没有新的实质问题。
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| D9-N1 | runtime 路径下没有 `extensionsResult`，应读 `runtime.services.resourceLoader.getExtensions().errors` | ACCEPT | 核实 `AgentSessionServices.resourceLoader` 与 `getExtensions()`。5.3、S1 T3、sync 第 7 条改写 |
+| D9-N2 | 包管理器没有 `list()`，是 `listConfiguredPackages()`；`removeAndPersist` 返回 boolean | ACCEPT | 核实 d.ts。5.1 改写 |
+| D9-N3 | 空 `~/.pi/agent` 首次运行会被自动创建并写入 `auth.json`、`models-store.json` | ACCEPT | 第 7 节影响范围第 3 类补充，README 说明 |
+
+本轮修复未经复核。
+
+### DeepSeek 复核第 10 轮（2026-09-11，实跑核查：工具结果流向 webview 的安全面与持久化；本节编号前缀 D10-）
+
+VERDICT: APPROVE-WITH-CHANGES（0 B / 2 S / 0 N）。确认 `edit.patch` 是标准 unified diff 并被持久化；确认 D9-N2 已落地。
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| D10-S1 | `marked` 默认不消毒，工具结果进 webview 会 XSS；pi 的 export-html 模板有现成配置 | ACCEPT | 核实模板里的 `html()/tag()` 置 undefined 与 `sanitizeMarkdownUrl`。5.1 render.ts、R9 改写；S2 验收加三种 XSS 用例；第 2 节补事实 |
+| D10-S2 | 只有 edit 的 toolResult 持久化 details，diff 卡片重启后的口径不清 | ACCEPT，选"edit 从会话文件重建" | 核实本机会话文件。5.3 写明重放优先读持久化 patch，write 不持久化列为已知限制；S7 验收加重启用例 |
+
+本轮修复未经复核。DeepSeek 声明运行时路径与打包链路已找不到新的实质问题。
+
+### DeepSeek 复核第 11 轮（2026-09-11，实跑核查：S7 写包装 + S8 审批组合；本节编号前缀 D11-）
+
+VERDICT: **APPROVE**（0 B / 0 S / 2 N）。实跑确认：自定义 write 覆盖内置后 `tool_call` 预检仍在执行前触发，审批拒绝时包装层的 `writeFile` 未被调用、文件未创建、无快照产生，S7 与 S8 可安全叠加。
+
+| 编号 | 意见摘要 | 处置 | 理由与落点 |
+|---|---|---|---|
+| D11-N1 | 第 2 节 SDK API 清单未跟上 runtime 重构 | ACCEPT | 补 `createAgentSessionServices/FromServices/Runtime`、`AgentSessionRuntime` 及其不重复 reload、不调 bindExtensions 的说明 |
+| D11-N2 | "四个资源路径"措辞与 sync 第 4 条的 8 个路径不一致 | ACCEPT | A8、S1 第 2 项、sync 第 4 条统一为"第 4 条列出的全部路径" |
+
+DeepSeek 总体判断：可离线实测的路径已全部跑通并有证据；剩余未知量只有 VS Code 宿主内项与受限 Windows 机专有项，均已安排验收；建议直接进入 S0，若 S0/S1 出现 FAIL 再针对具体错误码决策，不再在计划上加注脚。作者同意此判断。

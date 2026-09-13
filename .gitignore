@@ -9,5 +9,6 @@ coverage/
 .DS_Store
 .env
 
-# Local full plan (includes review notes); the committed copy is docs/PLAN.md
-/PLAN.md
+# 总计划只有一份：docs/PLAN.md（它含 16 轮评审记录）。
+# 以前根目录还有一份带评审记录的本地副本，2026-09-13 已并入 docs/ 并删除，
+# 所以这里不再忽略 /PLAN.md —— 万一将来又冒出一份根目录副本，让它出现在 git status 里。
