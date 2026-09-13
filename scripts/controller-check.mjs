@@ -579,6 +579,68 @@ async function main() {
       }
     }
 
+    // 5d（D9）：cwd 已不存在的会话 → 可读的拒绝，且当前会话不变
+    {
+      const goneCwd = path.join(root, "gone-cwd");
+      fs.mkdirSync(goneCwd, { recursive: true });
+      const encoded = `--${path.resolve(goneCwd).replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+      const goneDir = path.join(sessionsRoot, encoded);
+      const manager = pi.SessionManager.create(goneCwd, goneDir);
+      manager.appendMessage({ role: "user", content: [{ type: "text", text: "gone" }], timestamp: Date.now() });
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        api: "jerrypi-check",
+        provider: "jerrypi-check",
+        model: "check",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const goneFile = manager.getSessionFile();
+      fs.rmSync(goneCwd, { recursive: true, force: true });
+      const fileBefore = controller.session?.sessionManager?.getSessionFile();
+      const gone = await controller.switchSession(goneFile);
+      check(
+        "cwd 已不存在的会话：给可读的 missing-cwd（不是抛异常）",
+        gone.ok === false && gone.code === "missing-cwd",
+        JSON.stringify(gone),
+      );
+      check(
+        "  而且当前会话没变（失败是原子的）",
+        controller.session?.sessionManager?.getSessionFile() === fileBefore,
+        String(controller.session?.sessionManager?.getSessionFile()),
+      );
+    }
+
+    // 5e（D7）：忙时**不直接切**。两格 —— `pendingSend`（agent_start 之前）与真流式。
+    {
+      const fileBefore = controller.session?.sessionManager?.getSessionFile();
+
+      // 格 1：那个窗口里 `isIdle` 仍是 true（这正是评审 B2 指的洞），只有 `pendingSend` 知道
+      controller.pendingSend = true;
+      const busy1 = await controller.newSession();
+      controller.pendingSend = false;
+      check(
+        "忙（已发送、agent_start 未到）：拒绝且会话不变",
+        busy1.ok === false && busy1.code === "busy" && controller.session?.sessionManager?.getSessionFile() === fileBefore,
+        JSON.stringify(busy1),
+      );
+
+      // 格 2：真流式 —— 先拒，force 之后才真的换（旧会话那一轮会被中止并落盘）
+      const streaming = controller.prompt("请数 1 到 30，每行一个数字。", "auto");
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const busy2 = await controller.newSession();
+      check("真流式：拒绝", busy2.ok === false && busy2.code === "busy", JSON.stringify(busy2));
+      const forced = await controller.newSession({ force: true });
+      check(
+        "确认后（force）真的换了",
+        forced.ok === true && controller.session?.sessionManager?.getSessionFile() !== fileBefore,
+        JSON.stringify(forced),
+      );
+      await streaming.catch(() => undefined);
+    }
+
     // ---------------------------------------------------- 6. 面板的模型策略
     // 6a：临时 agentDir 里**没有** settings.json → 用户没选过 → 用我们的偏好兜底
     check("用户没选过模型时，兜底到便宜的 flash（不用 pro）",

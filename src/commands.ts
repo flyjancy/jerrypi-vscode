@@ -8,6 +8,7 @@ import { join } from "node:path";
 import * as vscode from "vscode";
 import type { SessionHostController } from "./pi/controller";
 import { loadPi } from "./pi/loader";
+import { replaceSessionWithConfirm, reportReplaceOutcome } from "./host/sessionActions";
 import { createApiKeyStore, DEFAULT_PROVIDER, injectApiKey, SUGGESTED_PROVIDERS } from "./pi/runtime";
 import { runSelfTest } from "./pi/selftest";
 import { workspaceCwd } from "./host/workspace";
@@ -118,9 +119,9 @@ export function registerCommands(
     vscode.commands.registerCommand("jerrypi.newSession", async () => {
       if (controller === undefined) return;
       try {
-        // 会话替换由 controller 负责 rebind（`runtime.setRebindSession`），
-        // 面板随后会重新要一次全量状态。
-        await controller.newSession();
+        // S5（D7）：忙的时候先问一句 —— 由宿主弹窗，controller 只返回"忙"这个事实。
+        const outcome = await replaceSessionWithConfirm((force) => controller.newSession({ force }));
+        reportReplaceOutcome(outcome, (level, text) => controller.notifyUser(level, text));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         void vscode.window.showErrorMessage(`jerrypi: 新建会话失败：${message}`);

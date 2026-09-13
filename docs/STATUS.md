@@ -11,7 +11,7 @@
 
 ## 1. 现在
 
-**进行中**：**S5 第 2 步已完成**（启动即恢复 + 会话替换后重放；顺手修掉“`Pi: New Session` 后面板不消旧转写”），下一步是第 3 步（忙时确认弹窗 + 切不动的可读报错）（2026-09-13）
+**进行中**：**S5 第 3 步已完成**（忙时先弹确认 + `missing-cwd` 可读报错），下一步是第 4 步（会话列表 QuickPick + 元信息行的会话名段 + 协议 v4）（2026-09-13）
 
 | | |
 | --- | --- |
@@ -31,8 +31,8 @@
 | `npm run check:render` | 110 |
 | `node scripts/tool-text-check.mjs` | 69 |
 | `node scripts/webview-dom-check.mjs` | 66 |
-| `node scripts/host-check.mjs` | **41** |
-| `npm run check:controller`（真模型，**不进 CI**） | **67/67**（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
+| `node scripts/host-check.mjs` | **45** |
+| `npm run check:controller`（真模型，**不进 CI**） | **72/72**（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | **14 项（12 gating + T5c/T12 advisory）GATE PASS** |
 | `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **339 文件 / 5.74 MB**（门禁 30 MB）。338 那个基线已过时：多出的 1 个是 `media/jerrypi-mark-j.svg`（20:44 出现的未跟踪文件，见 S5-plan §11 的 1-3） |
 
@@ -67,7 +67,9 @@
    **第 2 步 ✅**（启动即恢复 + 替换后重放）：`continueRecent` 取代 `create`；
    `onSessionReplaced` 回调 → `ChatViewProvider.replay()`（修掉 `newSession` 后不重放的 bug）；
    夹具新增可取消的 `session_before_switch`；`controller-check` **67/67**、`host-check` **41/41**。
-   下一步：第 3 步（忙时替会话→弹确认；cwd 不存在的会话→可读报错）
+   **第 3 步 ✅**（守卫与错误处理）：忙时返回 `{ok:false,code:"busy"}` → 宿主弹模态确认 →
+   带 `force` 再跑；`missing-cwd` 给可读提示且当前会话不变；`controller-check` **72/72**、`host-check` **45/45**。
+   下一步：第 4 步（列表 QuickPick + 会话名段 + 协议 v4）
 
 ## 4. 发布流程（每次都一样）
 

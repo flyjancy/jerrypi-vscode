@@ -23,6 +23,7 @@ function state() {
     statusBars: [],
     quickPickQueue: [],
     inputBoxAnswers: [],
+    warningQueue: [],
     outputChannels: new Map(),
   };
   return globalThis[KEY];
@@ -51,6 +52,14 @@ export function queueQuickPickResponse(response) {
 /** 预置下一次 `showInputBox` 的返回值。 */
 export function queueInputBoxAnswer(answer) {
   state().inputBoxAnswers.push(answer);
+}
+
+/**
+ * 预置下一次 `showWarningMessage` 的返回值（用户点了哪个按钮，或 undefined = 取消）。
+ * S5 的"忙时切会话要问一句"就靠它。
+ */
+export function queueWarningResponse(response) {
+  state().warningQueue.push(response);
 }
 
 function record(kind, payload = {}) {
@@ -179,9 +188,12 @@ export const window = {
     state().outputChannels.set(name, channel);
     return channel;
   },
-  showWarningMessage(message) {
-    record("showWarningMessage", { message });
-    return Promise.resolve(undefined);
+  showWarningMessage(message, options, ...items) {
+    // 真 vscode 的形状：`showWarningMessage(message, options?, ...items)`；
+    // 带 items 时返回被点的那个（或 undefined = 取消/Esc）。
+    record("showWarningMessage", { message, options, items });
+    const queued = state().warningQueue.shift();
+    return Promise.resolve(typeof queued === "function" ? queued(items) : queued);
   },
   showErrorMessage(message) {
     record("showErrorMessage", { message });

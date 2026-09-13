@@ -843,6 +843,19 @@ cwd 不存在的会话切不动且给可读提示、当前会话不变。
 **第 2 步的门禁**：typecheck ✅｜`npm run self-test` 9/9｜`check:controller` **67/67**｜
 `host-check` **41/41**（+2）｜闸门 **14/14 GATE PASS**。
 
+### 第 3 步（忙时确认 + 切不动的可读报错，2026-09-13）
+
+| # | 现象 | 原因 | 处置 |
+| --- | --- | --- | --- |
+| 3-1 | 分层落地比预想的干净 | D7/D9 的"分类在 controller、文案在 host"正好与现有分层对上 | controller 新增 `SessionReplaceOutcome = {ok:true} \| {ok:false, code:"busy"\|"cancelled"\|"missing-cwd"}`；新建 `src/host/sessionActions.ts`（`replaceSessionWithConfirm` + `reportReplaceOutcome`） |
+| 3-2 | `pendingSend` 那个窗口（评审 B2 指的洞）**能直接造出来** | 它是 TS 的 `private`，但运行期就是普通属性 —— `controller.pendingSend = true` 即可 | 格 1 不花模型调用就能测（`controller-check` 5e），格 2 用真流式 + `force` |
+| 3-3 | `MissingSessionCwdError` 的造法 | 需要一个 header.cwd 不存在的会话文件 | 在临时目录写一条会话（两三条 message 才落盘）→ **删掉那个 cwd** → `switchSession`。实测返回 `missing-cwd` 且当前会话未变（原子性：`assertSessionCwdExists` 在 `teardownCurrent` 之前） |
+| 3-4 | 确认弹窗在无头环境下要能测 | 桩里的 `showWarningMessage(message)` 只收一个参数、永远返回 undefined | 扩成真 vscode 的形状（`(message, options, ...items)`）+ `queueWarningResponse()`；否则无法区分"弹了没"与"用户点了啥" |
+| 3-5 | `forcibly 切换一个正在流式的会话`不会产生未处理的 rejection | `prompt()` 的 promise 会在旧会话被 tear down 时 settle | 测试里仍然 `await streaming.catch(() => undefined)` 兜一层（不依赖 pi 的这个行为不变） |
+
+**第 3 步的门禁**：typecheck ✅｜`npm run self-test` 9/9｜`check:controller` **72/72**（+5）｜
+`host-check` **45/45**（+4）。（本步没改 pi 交互语义，闸门未重跑。）
+
 ---
 
 ## 12. 实施与验收结果

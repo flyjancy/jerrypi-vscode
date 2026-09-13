@@ -27,7 +27,7 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const STUB_PATH = path.join(SCRIPT_DIR, "fixtures", "vscode-stub.mjs");
 
 const stub = await import(pathToFileURL(STUB_PATH).href);
-const { resetStub, callsOf, queueQuickPickResponse } = stub;
+const { resetStub, callsOf, queueQuickPickResponse, queueWarningResponse } = stub;
 
 const results = [];
 const check = (name, ok, detail = "") => results.push([name, ok, detail]);
@@ -153,6 +153,7 @@ async function buildModules(tempDir) {
     [
       `export { ChatViewProvider } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/chatView"))};`,
       `export { buildWebviewHtml } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/webviewHtml"))};`,
+      `export { replaceSessionWithConfirm } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/sessionActions"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -170,7 +171,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider } = await buildModules(tempDir);
+const { ChatViewProvider, replaceSessionWithConfirm } = await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 
 // ----------------------------------------------------------------- 视图装配
@@ -592,6 +593,37 @@ check(
   (globalThis.__jerrypiVscodeStub.statusBars[0]?.text ?? "").includes("?/1.0M"),
   globalThis.__jerrypiVscodeStub.statusBars[0]?.text,
 );
+
+// ------------------------------------------------- S5 第 3 步（D7）：忙时先问一句
+//
+// 分工："忙不忙"由 controller 判定（controller-check 验那两条），"问不问、问了之后怎么跑"
+// 在这里验 —— controller 拿不到 `vscode.window`。
+{
+  const busy = { ok: false, code: "busy" };
+
+  resetStub();
+  queueWarningResponse("继续");
+  const forced = [];
+  const confirmed = await replaceSessionWithConfirm(async (force) => {
+    forced.push(force);
+    return force ? { ok: true } : busy;
+  });
+  const warnings = callsOf("showWarningMessage");
+  check("忙时先弹一次确认，而且是模态", warnings.length === 1 && warnings[0]?.options?.modal === true, JSON.stringify(warnings[0]?.options));
+  check("点了「继续」→ 带 force 再跑一次，并返回成功", confirmed.ok === true && forced.join(",") === "false,true", forced.join(","));
+
+  resetStub();
+  queueWarningResponse(undefined); // 用户取消（或 Esc）
+  const cancelled = await replaceSessionWithConfirm(async (force) => {
+    forced.push(force);
+    return force ? { ok: true } : busy;
+  });
+  check("取消 → 不重跑、并把「忙」原样返回（会话不变）", cancelled.code === "busy" && forced.join(",") === "false,true,false", `${cancelled.code}:${forced.join(",")}`);
+
+  resetStub();
+  const idle = await replaceSessionWithConfirm(async () => ({ ok: true }));
+  check("空闲时**不弹**确认（直接换）", callsOf("showWarningMessage").length === 0 && idle.ok === true);
+}
 
 // ----------------------------------------------------------------- 汇总
 const failed = results.filter(([, ok]) => !ok);

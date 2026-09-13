@@ -83,6 +83,16 @@ export interface SessionHostControllerOptions {
   additionalExtensionPaths?: string[];
 }
 
+/**
+ * 会话替换的结果（D7/D9）。
+ *
+ * 为什么返回结果而不直接弹窗：**分类在 controller，文案/弹窗在 host** ——
+ * controller 拿不到 `vscode.window`，而 `controller-check` 也断言不了"有没有弹窗"（评审 S4）。
+ */
+export type SessionReplaceOutcome =
+  | { ok: true }
+  | { ok: false; code: "busy" | "cancelled" | "missing-cwd"; detail?: string };
+
 /** `snapshot()` 的产物。 */
 export interface ReplaySnapshot {
   items: ChatItem[];
@@ -237,7 +247,7 @@ export class SessionHostController {
    * 转写（而且新消息的 `msg-<下标>` 会和旧内容撞号）。重放本身由宿主做（`state` 的组装
    * 只在 chatView 一处），controller 只负责"替换成功后叫一声"。
    */
-  private afterSessionChange(reason: "start" | "new"): void {
+  private afterSessionChange(reason: "start" | "new" | "switch"): void {
     this.resetLiveState();
     this.publishMeta();
     const file = this.host?.session.sessionManager.getSessionFile();
@@ -248,7 +258,21 @@ export class SessionHostController {
           : "(尚未落盘：pi 在首条 assistant 消息之后才建文件)"
       }`,
     );
-    if (reason === "new") this.options.onSessionReplaced?.();
+    // 首个会话不发：宿主那时正要自己发一次全量 state（`ready` 的处理里），
+    // 发了就是两条一样的。
+    if (reason !== "start") this.options.onSessionReplaced?.();
+  }
+
+  /**
+   * "面板正忙吗" —— **与面板显示的那个忙同源**（D7；评审 B2）。
+   *
+   * 不能只用 `session.isIdle`：pi 的 `isIdle = !_isAgentRunActive && !isCompacting`
+   * （`agent-session.js:620-622`）—— 它看得到续跑循环里的队列，但**看不到**
+   * "已发送、`agent_start` 还没到"那个窗口，而本仓自己为它维护了 `pendingSend`。
+   */
+  private isBusy(): boolean {
+    if (this.host === undefined) return false;
+    return this.pendingSend || !this.view().isIdle;
   }
 
   private async createHost(): Promise<void> {
@@ -401,20 +425,64 @@ export class SessionHostController {
     return [...cleared.steering, ...cleared.followUp].join("\n\n");
   }
 
-  /** 开一个新会话（D8 的 `Pi: New Session`）。 */
-  async newSession(): Promise<void> {
+  /**
+   * 开一个新会话（D8 的 `Pi: New Session`）。
+   *
+   * 忙的时候**不直接切**（D7）：返回 `{ok:false, code:"busy"}`，由宿主去问用户；
+   * 「继续」则带 `{force:true}` 再调一次。三条路的取舍见 plan §4 D7。
+   */
+  async newSession(options: { force?: boolean } = {}): Promise<SessionReplaceOutcome> {
     await this.ensure();
     const host = this.host;
-    if (host === undefined) return;
+    if (host === undefined) return { ok: false, code: "busy", detail: "会话尚未建立" };
+    if (options.force !== true && this.isBusy()) return { ok: false, code: "busy" };
     // 顺序很重要（评审 S1）：**替换成功之后**才清状态/重放。
     // 以前是替换之前清，于是被扩展取消（`{cancelled:true}`）时会白清一次、而面板还拿着旧转写。
     const result = await host.runtime.newSession();
     if (result.cancelled) {
-      this.options.log.appendLine("[controller] 新建会话被扩展取消");
-      return;
+      this.options.log.appendLine("[controller] 新建会话被扩展取消（session_before_switch）");
+      return { ok: false, code: "cancelled" };
     }
     this.afterSessionChange("new");
     this.options.log.appendLine("[controller] 已新建会话");
+    return { ok: true };
+  }
+
+  /**
+   * 切换到某个会话文件（D5/D9）。
+   *
+   * 只应传**当前 cwd 的会话目录**里的路径：`switchSession` 会把 `sessionDir`
+   * 换成该文件的父目录，跨项目切换会让后续的 `newSession` 落到别的项目里（plan §3.4）。
+   */
+  async switchSession(
+    sessionPath: string,
+    options: { force?: boolean } = {},
+  ): Promise<SessionReplaceOutcome> {
+    await this.ensure();
+    const host = this.host;
+    if (host === undefined) return { ok: false, code: "busy", detail: "会话尚未建立" };
+    if (options.force !== true && this.isBusy()) return { ok: false, code: "busy" };
+    try {
+      const result = await host.runtime.switchSession(sessionPath);
+      if (result.cancelled) {
+        this.options.log.appendLine(`[controller] 切换会话被扩展取消：${sessionPath}`);
+        return { ok: false, code: "cancelled" };
+      }
+    } catch (error) {
+      // `MissingSessionCwdError` **不在 bundle 的导出面**（plan §3.3），但它有结构化的
+      // `issue`（`core/session-cwd.js`）→ 按 `name` + `issue` 判定，
+      // **不按 message 字符串匹配**（name 是契约，message 不是）。
+      const typed = error as { name?: string; issue?: { sessionCwd?: string } } | null;
+      if (typed?.name === "MissingSessionCwdError") {
+        const gone = typed.issue?.sessionCwd ?? "(未知)";
+        this.options.log.appendLine(`[controller] 切换失败：会话的工作目录已不存在 ${gone}`);
+        return { ok: false, code: "missing-cwd", detail: gone };
+      }
+      throw error;
+    }
+    this.afterSessionChange("switch");
+    this.options.log.appendLine(`[controller] 已切换会话：${sessionPath}`);
+    return { ok: true };
   }
 
   // ---------------------------------------------------------------- 重放
