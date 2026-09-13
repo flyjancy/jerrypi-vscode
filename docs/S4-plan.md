@@ -632,7 +632,21 @@ package：338 文件 / 5.74 MB（19% 的 30MB 门禁）
 
 ### 12.3 人工验收
 
-**Mac（用户只做 2 个动作）**：待做 → 结果记在这里。
+**Mac（用户只做 2 个动作）—— ✅ PASS**
+
+| 动作 | 结果 |
+| --- | --- |
+| ① 切到最长模型 id + 截图 | ✅ 顶部无状态行；输入框下方 `deepseek-v4-flash-vision-exp · high · 0.0%/1.0M` **一行放得下、不换行、等级与百分比都没被挤掉**；VS Code 状态栏同步显示并可点击；Output 里 `[controller] 模型：deepseek/deepseek-pi 设置里的默认 deepseek/deepseek-flash，未覆盖` 证明**没有覆盖用户在 pi 里的选择** |
+| ② 流式中往上滚 + 中止 | ✅ **不被拽回底部**（R10 的真机验证）；中止后卡片 `✗`、`Took 11.7s`、**已流出的第 1–12 行仍在**、末尾是 pi 自己的 `Command aborted` |
+
+**截图 2 里发现一处该改的**（用户没提，是我看出来的）：中止时面板多显示一行
+`（本次回复没有内容：error）`。原因是 pi 在中止长命令时给的是
+`stopReason: "error"` + `errorMessage: "This operation was aborted"`（**不是** `"aborted"`），
+所以 render.ts 里那条 `reason === "aborted"` 分支没命中，而且 `error` 是 StopReason
+**枚举值**、不是给人看的词。已改成：**已经有具体错误信息时不再补"没有内容"那句**
+（两行说的是同一件事，红色那行已经把原因说全）。配 5 条 render-check 断言
+（toolUse 不补、aborted 写"已被中止"、有错误信息时不补、错误信息本身仍显示）。
+
 **Windows（W0–W2）**：待做。
 
 ### 12.4 已知未覆盖

@@ -358,6 +358,38 @@ async function main() {
       const clipped = render.renderToolCard(toolItem({ text: "abc", textTruncated: true }), true);
       check("我们自己的裁剪有独立文案", clipped.includes("开头已省略") && !clipped.includes("已截断"), clipped.slice(0, 200));
 
+    console.log("[render-check] 助手空回复与错误（S4 收尾）");
+    {
+      const assistant = (overrides = {}) => ({
+        kind: "assistant",
+        id: "live-1",
+        text: "",
+        thinking: "",
+        stopReason: "stop",
+        ...overrides,
+      });
+      check(
+        "空回复且没有错误信息时给占位（别让人以为界面坏了）",
+        render.renderAssistant(assistant()).includes("本次回复没有内容"),
+        render.renderAssistant(assistant()),
+      );
+      check(
+        "toolUse 那一轮不补占位（正文在下一轮）",
+        !render.renderAssistant(assistant({ stopReason: "toolUse" })).includes("本次回复"),
+      );
+      check(
+        "中止（stopReason=aborted）写成『已被中止』",
+        render.renderAssistant(assistant({ stopReason: "aborted" })).includes("本次回复已被中止"),
+      );
+      // 实测：中止长命令时 pi 给的是 stopReason="error" + errorMessage="This operation was aborted"，
+      // 两行说的是同一件事，而且 `error` 是枚举值不是人话 —— 只留错误那一行。
+      const abortedByError = render.renderAssistant(
+        assistant({ stopReason: "error", errorMessage: "This operation was aborted" }),
+      );
+      check("有具体错误信息时**不再**补『没有内容：error』", !abortedByError.includes("没有内容"), abortedByError);
+      check("错误信息本身仍然显示", abortedByError.includes("This operation was aborted"), abortedByError);
+    }
+
     console.log("[render-check] 元信息行（S4）");
     {
       const metaOf = (overrides = {}) => ({

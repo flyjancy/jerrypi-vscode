@@ -344,7 +344,15 @@ export function renderAssistant(item: Extract<ChatItem, { kind: "assistant" }>):
   if (item.thinking !== "") parts.push(renderThinking(item.thinking, item.streaming === true));
   if (item.text !== "") {
     parts.push(`<div class="markdown">${renderMarkdown(item.text)}</div>`);
-  } else if (item.streaming !== true && item.stopReason !== "toolUse") {
+  } else if (
+    item.streaming !== true &&
+    item.stopReason !== "toolUse" &&
+    // 已经有一条具体的错误信息时**不再补一句"没有内容"**：
+    // 两行说的是同一件事，而且"没有内容：error"里的 `error` 是 StopReason 枚举值、
+    // 不是给人看的词（实测中止长命令时就是这样：pi 给的是 `stopReason: "error"` +
+    // `errorMessage: "This operation was aborted"`，下面那行红字已经把原因说全了）。
+    (item.errorMessage === undefined || item.errorMessage === "")
+  ) {
     // 中止或模型没吐字时，别留一个空壳让人以为界面坏了。
     //
     // ⚠️ `toolUse` 必须排除：那一轮的 assistant 消息**本来就只带工具调用、没有正文**
