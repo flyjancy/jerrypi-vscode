@@ -13,9 +13,20 @@
 src/**
 scripts/**
 docs/**
+# 仅开发期使用，不进包
+.github/**
+.vscode/**
+src/**
+scripts/**
+docs/**
 # 给 agent 看的规矩与 pi 陷阱索引 —— 它们不是扩展的一部分。
 # （踩过的坑：dfbac0f 加的 .pi/settings.json 曾被 vsce 打进包）
 AGENTS.md
+# logo **候选**（77196c1 加进仓库，还没选、也没被任何地方引用）：
+# cheese-mouse.png 就有 800KB，占整个包的 12%。将来定了用哪一张、
+# 真的接进 package.json 的 icon / viewsContainers 时，把那一行删掉（并确认 pi-runtime 里没有同名引用）。
+media/jerrypi-mark-j.svg
+media/jerrypi-cheese-mouse.png
 # 仓库自己的开发用 pi 项目设置（被 git 跟踪，但不是扩展的一部分）：
 # pi 的项目级设置只从**工作区 cwd** 下的 .pi/ 读，从扩展目录读不到它，
 # 所以进包只是死重。dfbac0f（2026-09-13 19:11）加了它之后包里多出一个文件

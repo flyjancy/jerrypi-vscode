@@ -193,7 +193,10 @@ async function main() {
     deltasAfterSnapshot = 0;
     snapshotDuringStream = undefined;
     liveIdAtFirstDelta = "";
-    await controller.prompt("请写一段 150 字左右的中文介绍，主题是海洋。", "auto");
+    // 明确"不要用工具"：这句原本只是要一段纯文本回复，而模型偶尔会先调一次工具，
+    // 于是"只剩一个 assistant 节点"与"正文非空"两条就红了（S5 实施期撞到过）。
+    // 断言的前提（一次纯文本回复）应当由**提示词**保证，而不是靠运气。
+    await controller.prompt("请用中文写一段 150 字左右的海洋介绍。直接回答，不要调用任何工具。", "auto");
     const view = collect();
     check(
       "第一轮回复后文件真的落在同一个目录（路径不漂）",
@@ -499,7 +502,15 @@ async function main() {
 
     messages.length = 0;
     await controller.prompt("Reply with exactly: OK", "auto");
-    check("中止后会话仍可用", collect().byKind("assistant").some((i) => textOf(i).toUpperCase().includes("OK")));
+    // 不断言模型"回了 OK 这两个字" —— 那是模型的措辞，不是我们的行为
+    // （S5 实施期撞到过一次：它没照 exactly 回，门禁就红了）。
+    // 我们真正要证的是"会话还能正常跑完一轮"。
+    const afterAbort = collect().byKind("assistant");
+    check(
+      "中止后会话仍可用（又跑完了一轮，且有正文）",
+      afterAbort.length > 0 && textOf(afterAbort[afterAbort.length - 1]).length > 0 && controller.snapshot().busy === false,
+      JSON.stringify(textOf(afterAbort[afterAbort.length - 1] ?? {}).slice(0, 60)),
+    );
 
     // ---------------------------------------------------- 4. 扩展命令不卡 busy
     messages.length = 0;

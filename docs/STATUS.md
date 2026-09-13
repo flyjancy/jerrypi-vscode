@@ -11,12 +11,12 @@
 
 ## 1. 现在
 
-**进行中**：**S5 第 5 步已完成**（README 双语 + PLAN 的 S5 行改正 + R9 诊断日志），下一步是第 6 步：**打包 + 自测 + Mac 验收（要你出手）**（2026-09-13）
+**进行中**：**S5 第 6 步：等你做 Mac 验收**（本地 F5，2 个动作；0.1.7 已打包）（2026-09-13）
 
 | | |
 | --- | --- |
 | 阶段 | **S4 已关闭**；**S5（会话管理）实施中** —— 计划已定稿并全部拍板（`docs/S5-plan.md`），按它的 §9 逐步做 |
-| 最新发布 | **0.1.6**（2026-09-13，预发布） |
+| 最新发布 | **0.1.6**（2026-09-13，预发布）；**0.1.7 已本地打包、待 Mac 验收后上传** |
 | 发布核验 | `node scripts/compare-vsix.mjs 0.1.6` → **338 个文件逐个字节相同**（发布当时）；tag `v0.1.6`；留档 `~/jerrypi-releases/jerrypi-0.1.6.vsix`。⚠️ 仓库根那份 `jerrypi-0.1.6.vsix` 已被 S5 第 1 步的 `npm run package` 重建，**不再是发布时的字节**（权威副本在 `~/jerrypi-releases/`） |
 | 真机验收 | Mac（2 个动作）✅ ／ Windows（W0–W3）✅ —— 明细 S4-plan §12.3 |
 | 工作区 | `main` 上有 **7 个提交未 push**；两个未跟踪文件 `media/jerrypi-mark-j.svg` 与 `output/`（你的 logo 素材，我没纳进任何提交）。**总计划只有一份**：`docs/PLAN.md`（2026-09-13 已把根目录那份的 233 行评审记录并进去并删除，见 S5-plan §10.1 的 U6） |
@@ -34,7 +34,7 @@
 | `node scripts/host-check.mjs` | **56** |
 | `npm run check:controller`（真模型，**不进 CI**） | **81/81**（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | **14 项（12 gating + T5c/T12 advisory）GATE PASS** |
-| `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **339 文件 / 5.74 MB**（门禁 30 MB）。338 那个基线已过时：多出的 1 个是 `media/jerrypi-mark-j.svg`（20:44 出现的未跟踪文件，见 S5-plan §11 的 1-3） |
+| `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **338 文件 / 5.75 MB**（门禁 30 MB）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |
 
 ## 2. 欠着的事（已知、刻意未做或暂时做不到）
 
@@ -75,7 +75,9 @@
    **第 5 步 ✅**（文档）：README 双语（会话管理转"已实现" + 已知限制删 1 增 3 + 顶部状态行 S0–S5）、
    `docs/PLAN.md` 的 S5 行改正 + D5-N3 加注"结论错"、§5.1 目录清单补三个文件；顺手把 R9
    承诺的"CLI 会话目录被指到别处"诊断日志写进 controller 并加 2 条断言。
-   下一步：第 6 步 = **打包 + 自测 + Mac 验收（用户 2 个动作）**
+   **第 6 步 ⏳**（打包 + 自测 + Mac 验收）：版本 → **0.1.7**、VSIX **338 文件 / 5.75 MB**、
+   全套门禁绿（controller 81/81）；**等用户做 Mac 的 2 个动作**（见 S5-plan §7，含"先点新建会话"那一步）
+   → 然后上传 0.1.7 → Windows W0/W1 → 回填 §12 关阶段。
 
 ## 4. 发布流程（每次都一样）
 
