@@ -123,7 +123,7 @@ jerrypi-vscode/
   src/pi/loader.ts          唯一 import pi 的地方：解析 pi-runtime 路径，`await import(pathToFileURL(...))`，导出类型化句柄
   src/pi/runtime.ts         ModelRuntime 单例；SecretStorage 里的 key 通过 setRuntimeApiKey 注入
   src/pi/session.ts         PiSession：包装 AgentSession；prompt/steer/followUp/abort；事件 → 协议消息
-  src/pi/sessions.ts        SessionManager.list/open/create/continueRecent 封装
+  src/pi/sessions.ts        会话目录推导（resolveSessionDir/sessionsRootOf，复刻 pi 的 per-cwd 编码规则）+ list/continueRecent 封装
   src/pi/bindings.ts        bindExtensions 的 uiContext（QuickPick/InputBox/通知）、onError→Output、commandContextActions
   src/pi/approval.ts        InlineExtension：tool_call 阻塞 + webview 审批（默认关）
   src/pi/packages.ts        DefaultPackageManager 封装：installAndPersist / listConfiguredPackages / removeAndPersist（返回 boolean，false 时提示"未移除"）
@@ -131,6 +131,9 @@ jerrypi-vscode/
   src/host/chatView.ts      WebviewViewProvider；消息路由；v1 单会话
   src/host/diff.ts          pi-diff: 虚拟文档 + 打开 diff 编辑器（自写，读 filechanges）
   src/host/statusBar.ts     模型名 + 上下文用量
+  src/host/modelPicker.ts   模型 / 思考等级选择器（宿主侧 QuickPick，不认识 session）
+  src/host/sessionPicker.ts 会话选择器（宿主侧 QuickPick；sessionToItem 是纯函数，便于断言）
+  src/host/sessionActions.ts 会话替换的"忙时先问一句"与结果文案（弹窗在宿主层）
   src/host/config.ts        读 VS Code 配置；SecretStorage 存取 API key
   src/host/net.ts           代理/证书策略（见 5.3）
   src/shared/protocol.ts    ClientMessage / ServerMessage 联合类型
@@ -217,7 +220,8 @@ jerrypi-vscode/
 - **S3 工具调用卡片**：bash / read / edit / write 的调用参数与结果展示，可折叠，bash 输出流式更新，点击文件路径打开文件。（让 agent 列目录并改一个文件，G2。）
   **状态：已实现（0.1.5）**。实现记录与验收清单见 [`S3-plan.md`](S3-plan.md)；diff 渲染（`edit` 的 patch）与工具审批按原计划留给 S7/S8。
 - **S4 模型与思考等级**：模型选择器（QuickPick）、思考等级切换、状态栏显示模型与上下文用量。（G4。）
-- **S5 会话管理**：新建（`runtime.newSession()`）、列表（`SessionManager.list(cwd, sessionDir)`，`sessionDir` 从生效的 agentDir 推导为 `<agentDir>/sessions`，否则自定义 `jerrypi.agentDir` 时列不出）、恢复（`runtime.switchSession(path)`）、显示会话名；每次替换后 rebind；VS Code 重启后自动 `continueRecent(cwd, sessionDir)`。（G3。）
+- **S5 会话管理**：新建（`runtime.newSession()`）、列表（`SessionManager.list(cwd, sessionDir)`，`sessionDir` 从生效的 agentDir 推导为 **`<agentDir>/sessions/--<编码 cwd>--`** —— 见下面的修正注）、恢复（`runtime.switchSession(path)`）、显示会话名；每次替换后 rebind；VS Code 重启后**自动 `continueRecent(cwd, sessionDir)`**；忙时替换先弹确认；替换后宿主全量重放。（G3。）
+  > ⚠️ **2026-09-13（S5 实施期）修正**：本行原先写的是 `<agentDir>/sessions`（把 pi 的 `sessionDir` 参数当成了"sessions 根"），**那是错的** —— 那个参数是"**直接装 `.jsonl` 的目录**"（`session-manager.js:1127` 直接 `join` 文件名）。按原写法会话会平铺在根上，`pi --resume` 与 pi 自己的 `listAll()` 都看不到（实测：`list(cwd)` 5 条 / `list(cwd, 平铺目录)` 0 条）。已修：`src/pi/sessions.ts` 的 `resolveSessionDir` 复刻 pi 的编码规则，并用自测 T10/T11/T12 钉住它。详见 `docs/S5-plan.md` 的 §3.1 与 §11。
 - **S6 设置与密钥**：三项 VS Code 设置、`Pi: Clear Stored API Keys`，并把 S1 的最小版 `Pi: Set API Key` / `Pi: Open Settings File` 补完整（provider 选择、校验）。（清空 `models.json` 里的 key 只靠 SecretStorage 也能完成对话。）
 - **S7 diff 审阅**：`filechanges.ts` + `diff.ts`。（验收：让 agent 在**同一条消息里**对同一文件发出两次 edit，两张卡片各自只显示该次 patch；同一条消息里两次 write 同一文件，两张卡片前后内容各自正确；重启 VS Code 恢复会话后，edit 卡片的 diff 仍可打开，write 卡片显示"本次会话不可用"。）
 - **S8 工具审批开关**：`approval.ts`，三档。（开 `all` 后每次工具调用停在面板等确认；拒绝后 agent 收到 block 原因；待审批时点中止，待审批项被清除且 agent 结束。）
@@ -430,7 +434,7 @@ VERDICT: APPROVE-WITH-CHANGES（0 B / 2 S / 3 N）。实跑通过：vsce 预发�
 | D5-S2 | S0 的 `package.json` 无 `contributes`/`activationEvents`，vsce 拒绝打包 | ACCEPT | S0 明确必须含 `contributes.commands` |
 | D5-N1 | 预发布标记在 `extension.vsixmanifest`；版本号不得带 `-suffix` | ACCEPT | 5.4 写明；本地检查改为查 manifest 属性 |
 | D5-N2 | 符号链接会让 vsce 打包失败并留下 0 字节 .vsix | ACCEPT | 打包加 `--follow-symlinks`；本地检查加"非 0 字节且能解包" |
-| D5-N3 | `SessionManager.list(cwd)` 省略 `sessionDir` 不跟随自定义 agentDir | ACCEPT | S5 与 `sessions.ts` 统一传 `<agentDir>/sessions` |
+| D5-N3 | `SessionManager.list(cwd)` 省略 `sessionDir` 不跟随自定义 agentDir | ACCEPT（**结论错，2026-09-13 由 S5 修正**） | 当年的落点是"S5 与 `sessions.ts` 统一传 `<agentDir>/sessions`" —— 察觉了风险，但选出的值用的是同一套错误理解（那个参数要的是**装 `.jsonl` 的目录**）。现在传的是 `resolveSessionDir(cwd, sessionsRoot)` = `<agentDir>/sessions/--<编码 cwd>--`。**教训：多轮评审能抓"论证不自洽"，抓不到"对上游参数的语义理解错" —— 后者只能靠实跑对照上游实现。** |
 
 本轮修复未经复核。
 

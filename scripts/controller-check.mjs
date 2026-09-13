@@ -683,6 +683,47 @@ async function main() {
       );
     }
 
+    // 5g（R9）：CLI 侧的会话目录被上游开关搬走时，面板不跟随 —— 但必须说一声
+    {
+      const makeControllerWith = (extraAgentDir) =>
+        new SessionHostController({
+          pi, cwd, agentDir: extraAgentDir, sessionsRoot,
+          keys: { listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {} },
+          uiContext: createSelfTestUIContext(log),
+          log,
+          onMessage: () => {},
+        });
+
+      process.env.PI_CODING_AGENT_SESSION_DIR = path.join(root, "elsewhere");
+      logLines.length = 0;
+      const byEnv = makeControllerWith(agentDir);
+      try { await byEnv.ensure(); } finally { await byEnv.dispose().catch(() => undefined); }
+      delete process.env.PI_CODING_AGENT_SESSION_DIR;
+      check(
+        "环境变量 PI_CODING_AGENT_SESSION_DIR 会得到一行诊断（R9）",
+        logLines.some((line) => line.includes("PI_CODING_AGENT_SESSION_DIR")),
+        logLines.filter((l) => l.includes("注意")).join(" ｜ ").slice(0, 200),
+      );
+
+      // settings.json 的 sessionDir 那条分支也要真跑一次（否则它只是“看起来写了”）
+      const settingsDir = path.join(root, "agent3");
+      fs.mkdirSync(settingsDir, { recursive: true });
+      fs.copyFileSync(path.join(sourceAgentDir, "auth.json"), path.join(settingsDir, "auth.json"));
+      fs.writeFileSync(
+        path.join(settingsDir, "settings.json"),
+        JSON.stringify({ sessionDir: path.join(root, "elsewhere2") }),
+        "utf8",
+      );
+      logLines.length = 0;
+      const bySettings = makeControllerWith(settingsDir);
+      try { await bySettings.ensure(); } finally { await bySettings.dispose().catch(() => undefined); }
+      check(
+        "settings.json 里的 sessionDir 也会得到一行诊断（R9）",
+        logLines.some((line) => line.includes("settings.json 里的 sessionDir")),
+        logLines.filter((l) => l.includes("注意")).join(" ｜ ").slice(0, 200),
+      );
+    }
+
     // ---------------------------------------------------- 6. 面板的模型策略
     // 6a：临时 agentDir 里**没有** settings.json → 用户没选过 → 用我们的偏好兜底
     check(

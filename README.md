@@ -17,7 +17,7 @@
 
 ## 中文
 
-> 🚧 **状态**：S0–S2 已实现，并在 macOS 与那台受限 Windows 机上完成共 16 项人工验收（侧边栏聊天面板可用）。目前只发布了**预发布版**；下文标注「计划中」的能力尚未实现。
+> 🚧 **状态**：**S0–S5 已实现**（聊天面板 / 工具卡片 / 模型与思考等级 / 会话管理），并在 macOS 与那台受限 Windows 机上完成了历次人工验收。目前只发布了**预发布版**；下文标注「计划中」的能力尚未实现。
 
 `jerrypi` 是一个 VS Code 扩展，把 [`@earendil-works/pi-coding-agent`](https://github.com/earendil-works/pi) 的 coding agent 能力装进侧边栏聊天面板。它面向一种受限环境：Windows 机器、**没有安装 Node.js、也不允许运行下载的可执行文件**，只能通过 Marketplace 安装扩展。
 
@@ -37,7 +37,7 @@
 | 内置工具 | **已实现** | `read` / `bash` / `edit` / `write`（bash 可中止） |
 | 密钥管理 | **已实现** | API key 存入 VS Code SecretStorage，优先于 `models.json` 中的 key；可在面板里设置 |
 | 模型与思考等级 | **已实现** | 输入框**上方**是工作状态行（空闲时不占内容但那行仍在，避免输入框跳动），**下方**是 `模型 · 思考等级 · 42.3%/1.0M`（**点模型/等级即可切换**，也可用命令面板 `Pi: Select Model` / `Pi: Select Thinking Level`）；VS Code 状态栏同时显示模型与用量，点击开选择器。**不覆盖**你在 pi 里选定的模型；面板里选过的模型在本窗口内一直生效（含新建会话），但**不写回 pi 的设置** |
-| 会话管理 | 计划中（S5） | 列表、新建、恢复；写入 `~/.pi/agent/sessions/`，与 pi CLI `--resume` 互通 |
+| 会话管理 | **已实现** | 窗口启动**自动接过上一会话**（与 `pi -c` 同行为）；`Pi: Resume Session` 或点输入框下方的**会话名**打开列表（首项永远是“新建会话”，当前项带 `✓`，另一项 `Pi: New Session`）；忙时切换会**先问一句**。会话写在 `<agentDir>/sessions/--<编码 cwd>--/`，**与 pi CLI 互通**（`pi -c` / `pi --resume` 能打开它，反之亦然） |
 | Diff 审阅 | 计划中（S7） | `edit` 展示 unified patch；`write` 展示本次调用的前后对比 |
 | 工具审批 | 计划中（S8） | 开关式确认，默认 `off`（与 pi CLI 一致），可选 `mutating` / `all` |
 | 扩展与包 | 计划中（S9） | 加载用户的 pi TypeScript 扩展；支持本地路径 / git / `npm:` 包源 |
@@ -164,7 +164,10 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 - **远程图片不加载**：markdown 里的 `![](https://…)` 会被降级成 alt 文字。放行远程图片等于让模型可控的 URL 变成一条出网信道（一张 1×1 像素就能把内容编码进 query 发出去），因此消息里的图片**只允许 `data:image/...`**（CSP 里写的是 `img-src <扩展自身资源> data:`，另外放行扩展自己的图标），任何远程 URL 都不会发起请求。
 - **图片内容不显示**：`read` 到图片时只显示一行 `[Image: image/png]` 提示。把图片画出来需要把 base64 塞进协议（一张图可达数 MB），会顶爆重放预算；这也正是 pi 在没有图片能力的终端下的降级行为。
 - **依赖 `ctx.ui.custom()` 的 pi 扩展在面板里不可用**：那是终端 TUI 专有的全屏自定义渲染入口（需要真实的 TUI 实例），扩展宿主里无法实现。这类命令会**显示一条明确的错误**（而不是静默失败），其余功能不受影响。
-- **窗口重载（`Reload Window`）会开始新会话**：历史保存在 `~/.pi/agent/sessions/` 里没有丢，但 S2 还没有"恢复最近会话"的入口（S5 补）。面板被单独重载（`Developer: Reload Webviews`）则会完整重放当前会话，**包括正在流式接收的那一条**。
+- **会话文件存在规范位置，但有两种情况会“看不到”**：① **S5 之前（≤0.1.6）写的会话平铺在 `~/.pi/agent/sessions/` 根上**（那时我们把 pi 的 `sessionDir` 参数当成了“根”，其实是“直接装 `.jsonl` 的目录”）—— 它们在面板与 `pi --resume` 里都看不到，但**没丢**，在 `~` 下跑 `pi --session-dir ~/.pi/agent/sessions --resume` 能翻出来；② 若你设过环境变量 `PI_CODING_AGENT_SESSION_DIR` 或 `settings.json` 里的 `sessionDir`，终端里的 `pi` 会写到别处，**面板不跟随**（遇到时会在 Output 里记一行诊断）。
+- **启动会自动接过上一会话** —— 包括你在终端里用 `pi` 聊的那次（判定是“**文件最后被写过**的那次”，不是“消息最多”）。不想要这个行为就开面板后点一次“新建会话”。
+- **忙时切换会话会先弹确认**：正在生成时点会话名/`Pi: New Session`，会问一句“切换会中止这一轮，继续吗”。确认后那一轮会被中止（**并保存到原会话**，不丢）；取消则什么都不动。
+- **同一个项目的会话不要“两边同时写”**：两个 VS Code 窗口、或面板与终端 `pi` 同时开同一个项目时，它们会接管**同一份**会话文件（pi 的 append-only 树能容忍，但面板显示的条数与“当前项”会变得反直觉）。另外**路径写法要一致**：pi 不做符号链接归一化，用 `~/proj` 和 `/Users/x/proj` 会得到两个不同的会话目录。
 - **队列只能整体取回**：pi 只提供 `clearQueue()`，没有按条移除/编辑的 API，所以「取回编辑」是全部取回。
 - **卸载扩展不会撤销**工作区文件改动，也不清除 `~/.pi/agent` 下的会话、配置与已安装的包。
 
@@ -185,7 +188,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 
 ## English
 
-> 🚧 **Status**: steps S0–S2 are implemented, and all 16 manual acceptance checks passed on macOS and on the constrained Windows machine (the sidebar chat panel is usable). Only **pre-release** versions have been published; anything marked "Planned" below is not implemented yet.
+> 🚧 **Status**: steps **S0–S5** are implemented (chat panel, tool cards, model & thinking level, sessions) and every manual acceptance pass so far has succeeded on macOS and on the constrained Windows machine. Only **pre-release** versions have been published; anything marked "Planned" below is not implemented yet.
 
 `jerrypi` is a VS Code extension that brings the [`@earendil-works/pi-coding-agent`](https://github.com/earendil-works/pi) coding agent into a sidebar chat panel. It targets a constrained environment: a Windows machine with **no Node.js installed and no permission to run downloaded executables**, where extensions can only be installed from the Marketplace.
 
@@ -205,7 +208,7 @@ To make that possible, the extension **ships pi's official pre-bundled SDK** ins
 | Built-in tools | **Implemented** | `read` / `bash` / `edit` / `write` (bash can be aborted) |
 | API keys | **Implemented** | Stored in VS Code SecretStorage, taking precedence over keys in `models.json` |
 | Model & thinking level | **Implemented** | The working-status line sits **above** the composer (it keeps its height when idle so the composer never jumps), and `model · thinking level · 42.3%/1.0M` sits **below** it — **click the model or the level to switch**, or use `Pi: Select Model` / `Pi: Select Thinking Level`. The VS Code status bar mirrors the model and usage and opens the picker on click. The panel **never overrides** the model you picked in pi; a model you pick *in the panel* stays in effect for this window (including new sessions) but is **not written back** to pi's settings |
-| Sessions | Planned (S5) | List, create and resume; stored in `~/.pi/agent/sessions/`, interoperable with `pi --resume` |
+| Sessions | **Implemented** | The window **resumes the previous session on startup** (same behaviour as `pi -c`); `Pi: Resume Session` — or clicking the **session name** under the composer — opens the list (the first item is always "New session", the current one is marked `✓`, and `Pi: New Session` still works); switching while the agent is busy **asks first**. Sessions live in `<agentDir>/sessions/--<encoded cwd>--/` and are **interoperable with the pi CLI** (`pi -c` / `pi --resume` can open ours, and vice versa) |
 | Diff review | Planned (S7) | `edit` shows the unified patch; `write` shows per-call before/after snapshots |
 | Tool approval | Planned (S8) | Optional confirmation gate (default `off`, matching the pi CLI), plus `mutating` / `all` |
 | Extensions & packages | Planned (S9) | Loads user pi TypeScript extensions; installs local / git / `npm:` package sources |
@@ -315,7 +318,10 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full notices and lice
 - **Remote images are not loaded**: a markdown `![](https://…)` is downgraded to its alt text. Allowing remote images would turn a model-controlled URL into an outbound channel (a 1×1 pixel can encode content in its query string), so inside messages **only `data:image/...` is allowed** (the CSP reads `img-src <extension's own resources> data:` and also allows the extension's own icons); no remote URL is ever fetched.
 - **Images are not displayed**: reading an image shows a single `[Image: image/png]` line. Rendering it would mean pushing base64 through the protocol (a single image can be several MB) and blowing the replay budget; this is also exactly how pi degrades on a terminal without image support.
 - **pi extensions that rely on `ctx.ui.custom()` do not work in the panel**: that API renders a full-screen TUI component and needs a real TUI instance, which an extension host cannot provide. Such commands show an **explicit error** (rather than failing silently); everything else about the extension keeps working.
-- **Reloading the window starts a new session**: history is still on disk under `~/.pi/agent/sessions/`, but S2 has no "resume recent session" entry point yet (S5 adds it). Reloading only the webview (`Developer: Reload Webviews`) replays the whole session, **including the message currently streaming**.
+- **Session files live in the canonical place, but two things can make them "invisible"**: ① **sessions written before S5 (≤ 0.1.6) are flat** in the root of `~/.pi/agent/sessions/` (back then we treated pi's `sessionDir` argument as the "root", when it actually means "the directory that directly holds the `.jsonl` files") — neither the panel nor `pi --resume` lists them, but they are **not lost**: from `~` run `pi --session-dir ~/.pi/agent/sessions --resume`; ② if you have set `PI_CODING_AGENT_SESSION_DIR` or `sessionDir` in `settings.json`, the terminal `pi` writes elsewhere and the panel **does not follow** (it logs a line to the Output channel when it sees this).
+- **Startup resumes the previous session** — including one you had in the terminal `pi` (the rule is "the file that was written last", not "the one with the most messages"). If you do not want that, click "New session" once.
+- **Switching sessions while busy asks first**: when the agent is generating, clicking the session name or `Pi: New Session` asks "switching aborts this turn — continue?". If you confirm, that turn is aborted **and saved into the old session** (nothing is lost); cancelling does nothing.
+- **Do not write to one session from two places at once**: two VS Code windows or a panel plus a terminal `pi` will take over the **same** session file (pi's append-only tree copes, but the panel's message count and "current" marker become counter-intuitive). Also **use the same path spelling**: pi does not normalise symlinks, so `~/proj` and `/Users/x/proj` give you two different session directories.
 - **The queue can only be emptied as a whole**: pi exposes `clearQueue()` and nothing per-item, so "Edit queued" returns everything.
 - **Uninstalling the extension does not revert** workspace file changes, nor does it clean up sessions, config or installed packages under `~/.pi/agent`.
 

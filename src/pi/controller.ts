@@ -344,6 +344,39 @@ export class SessionHostController {
     });
     this.host = host;
     this.afterSessionChange("start");
+    this.warnIfCliSessionDirRedirected(pi, cwd, agentDir);
+  }
+
+  /**
+   * 诊断（R9）：CLI 侧有两个"把会话目录整体搬走"的开关 ——
+   * 环境变量 `PI_CODING_AGENT_SESSION_DIR`（`config.js:407`、`main.js:531-534`）与
+   * `settings.json` 的 `sessionDir`（`settings-manager.js:450-453`）。
+   *
+   * 面板**不跟随**（跟随会把目录推导从一份变成三份，而 agentDir 的事属于 S6），
+   * 但要不声不响地分叉会弄出极难自诊的现象（终端与面板各写一处）→ 至少记一行。
+   * 优先级（实现侧）：`--session-dir` > 环境变量 > settings.json。
+   */
+  private warnIfCliSessionDirRedirected(pi: PiModule, cwd: string, agentDir: string): void {
+    const env = process.env.PI_CODING_AGENT_SESSION_DIR;
+    if (typeof env === "string" && env.length > 0) {
+      this.options.log.appendLine(
+        `[controller] 注意：环境变量 PI_CODING_AGENT_SESSION_DIR=${env} 会让终端里的 pi 把会话写到那个目录，` +
+          "面板不跟随（它固定用 <agentDir>/sessions/<编码 cwd>/）。两边会分叉。",
+      );
+    }
+    try {
+      const fromSettings = pi.SettingsManager.create(cwd, agentDir, {
+        projectTrusted: false,
+      }).getSessionDir();
+      if (typeof fromSettings === "string" && fromSettings.length > 0) {
+        this.options.log.appendLine(
+          `[controller] 注意：settings.json 里的 sessionDir=${fromSettings} 会让终端里的 pi 把会话写到那里，` +
+            "面板不跟随。两边会分叉。",
+        );
+      }
+    } catch {
+      // 读设置失败不影响会话（上面已经在建会话时读过一次了）——这是诊断，不是功能。
+    }
   }
 
   // ---------------------------------------------------------------- 发送语义

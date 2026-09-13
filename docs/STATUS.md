@@ -11,7 +11,7 @@
 
 ## 1. 现在
 
-**进行中**：**S5 第 4 步已完成**（会话列表 QuickPick + 元信息行会话名段 + 协议 v4），下一步是第 5 步（文档：README 已知限制、`docs/PLAN.md` 的 S5 行改正）（2026-09-13）
+**进行中**：**S5 第 5 步已完成**（README 双语 + PLAN 的 S5 行改正 + R9 诊断日志），下一步是第 6 步：**打包 + 自测 + Mac 验收（要你出手）**（2026-09-13）
 
 | | |
 | --- | --- |
@@ -32,7 +32,7 @@
 | `node scripts/tool-text-check.mjs` | **87** |
 | `node scripts/webview-dom-check.mjs` | **71** |
 | `node scripts/host-check.mjs` | **56** |
-| `npm run check:controller`（真模型，**不进 CI**） | **79/79**（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
+| `npm run check:controller`（真模型，**不进 CI**） | **81/81**（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | **14 项（12 gating + T5c/T12 advisory）GATE PASS** |
 | `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **339 文件 / 5.74 MB**（门禁 30 MB）。338 那个基线已过时：多出的 1 个是 `media/jerrypi-mark-j.svg`（20:44 出现的未跟踪文件，见 S5-plan §11 的 1-3） |
 
@@ -72,7 +72,10 @@
    **第 4 步 ✅**（列表 + 会话名段 + 协议 v4）：`Pi: Resume Session`（宿主 QuickPick，首项永远是"新建"）、
    元信息行首段是可点的会话名（tooltip = 路径，未落盘标"未保存"）、协议 v4 删掉 `state.model`；
    `controller-check` **79/79**、`host-check` **56/56**、`dom-check` **71**。
-   下一步：第 5 步（文档），然后是第 6 步（打包 + 自测 + **Mac 验收** ← 要你出手）
+   **第 5 步 ✅**（文档）：README 双语（会话管理转"已实现" + 已知限制删 1 增 3 + 顶部状态行 S0–S5）、
+   `docs/PLAN.md` 的 S5 行改正 + D5-N3 加注"结论错"、§5.1 目录清单补三个文件；顺手把 R9
+   承诺的"CLI 会话目录被指到别处"诊断日志写进 controller 并加 2 条断言。
+   下一步：第 6 步 = **打包 + 自测 + Mac 验收（用户 2 个动作）**
 
 ## 4. 发布流程（每次都一样）
 
