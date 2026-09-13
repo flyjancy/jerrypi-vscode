@@ -56,9 +56,16 @@ export function buildWebviewHtml(options: WebviewHtmlOptions): string {
 <title>Pi</title>
 </head>
 <body>
-<div id="status" class="status" aria-live="polite"></div>
 <div id="transcript" class="transcript"></div>
 <div id="queue" class="queue" hidden></div>
+<!--
+  状态行与元信息行的位置**照 pi TUI 的装配顺序**（interactive-mode.js:634-642）：
+  转录 → 待发消息 → 工作状态 → 输入框 → 底部信息。
+  状态行在输入框**上方**（空闲时内容为空，但**常驻一行高度** —— 否则每轮
+  忙/闲切换会让输入框上下跳一行）；模型/等级/用量在输入框**下方**（那里才是
+  用户打字时视线所在处，也是 pi 的 footer 位置）。
+-->
+<div id="status" class="status" aria-live="polite"></div>
 <div class="composer">
   <textarea id="input" class="input" rows="3" placeholder="输入消息，Enter 发送（Shift+Enter 换行）"></textarea>
   <div class="composer-actions">
@@ -70,6 +77,7 @@ export function buildWebviewHtml(options: WebviewHtmlOptions): string {
     </div>
   </div>
   <div id="composer-error" class="composer-error" hidden></div>
+  <div id="meta" class="meta" aria-live="polite"></div>
 </div>
 <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>

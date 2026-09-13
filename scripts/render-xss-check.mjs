@@ -358,6 +358,66 @@ async function main() {
       const clipped = render.renderToolCard(toolItem({ text: "abc", textTruncated: true }), true);
       check("我们自己的裁剪有独立文案", clipped.includes("开头已省略") && !clipped.includes("已截断"), clipped.slice(0, 200));
 
+    console.log("[render-check] 元信息行（S4）");
+    {
+      const metaOf = (overrides = {}) => ({
+        model: "deepseek/deepseek-v4-flash",
+        provider: "deepseek",
+        modelName: "flash",
+        thinkingLevel: "high",
+        supportsThinking: true,
+        contextWindow: 1000000,
+        contextUsage: { tokens: 423000, percent: 42.3 },
+        ...overrides,
+      });
+      const meta = (overrides = {}) => render.renderMeta(metaOf(overrides));
+
+      check("元信息行含模型短 id（不带 provider 前缀）", meta().includes(">deepseek-v4-flash<"), meta().slice(0, 140));
+      check("元信息行含等级", meta().includes(">high<"));
+      check("元信息行含 42.3%/1.0M", meta().includes(">42.3%/1.0M<"), meta());
+      check(
+        "模型段与等级段是可点的 button（键盘可达）",
+        meta().includes('data-meta-action="model"') &&
+          meta().includes('data-meta-action="thinking"') &&
+          meta().includes("<button type=\"button\""),
+      );
+      check(
+        "aria-label 是整句而不是一串 id",
+        meta().includes('aria-label="当前模型 deepseek/deepseek-v4-flash，点击切换"'),
+        meta(),
+      );
+      check(
+        "percent=null → ?/1.0M 且**没有百分号**",
+        meta({ contextUsage: { tokens: null, percent: null } }).includes(">?/1.0M<"),
+        meta({ contextUsage: { tokens: null, percent: null } }),
+      );
+      check(
+        "contextWindow=0（无模型）→ 不渲染 ?/0，改说未选择模型",
+        !meta({ model: "", contextWindow: 0, contextUsage: null, supportsThinking: false }).includes("?/0") &&
+          meta({ model: "", contextWindow: 0, contextUsage: null, supportsThinking: false }).includes("未选择模型"),
+      );
+      check(
+        "不支持思考时不渲染等级段",
+        !meta({ supportsThinking: false }).includes('data-meta-action="thinking"'),
+      );
+      check("等级为 off 时按 pi 的措辞写 thinking off", meta({ thinkingLevel: "off" }).includes(">thinking off<"));
+
+      // 阈值：**70 与 90 本身**必须一起断言，否则把 ">" 写成 ">=" 也测不出来。
+      const tone = (percent) => {
+        const html = meta({ contextUsage: { tokens: 1, percent } });
+        return html.includes("meta-usage-error") ? "error" : html.includes("meta-usage-warn") ? "warn" : "normal";
+      };
+      check("42 → 普通", tone(42) === "normal", tone(42));
+      check("70 → 普通（严格大于）", tone(70) === "normal", tone(70));
+      check("70.1 → warning", tone(70.1) === "warn", tone(70.1));
+      check("90 → warning（不是 error）", tone(90) === "warn", tone(90));
+      check("90.1 → error", tone(90.1) === "error", tone(90.1));
+      check("percent=null → 不着色", tone(null) === "normal", tone(null));
+
+      // 模型 id / provider 是外部字符串（自定义 provider 可能写脏）
+      const evil = meta({ model: "m/<img src=x onerror=alert(1)>" });
+      check("模型名里的 <img> 不生成元素", !evil.includes("<img") && evil.includes("&lt;img"), evil);
+    }
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

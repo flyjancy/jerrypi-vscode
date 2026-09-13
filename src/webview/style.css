@@ -394,3 +394,60 @@ body {
   font-size: 0.85em;
   white-space: pre-wrap;
 }
+
+/* ---------------------------------------------------------------- 元信息行（S4）
+   位置照 pi 的 footer：输入框下方。窄侧边栏里的溢出规则很关键 ——
+   模型名可以被省略号截断，**等级与用量永远不能被挤掉**（它们是这一行存在的理由）。 */
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 1.2em;
+  padding: 2px 2px 0;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+.meta:empty {
+  display: none;
+}
+.meta-link {
+  /* 按钮长得像文字：无背景、无边框，但键盘可达（Tab 能到、Enter 能按）。 */
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  /* 可被压缩的那一段（长模型 id） */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta-link:hover {
+  text-decoration: underline;
+}
+.meta-level,
+.meta-usage {
+  /* 等级与百分比**不被挤掉**：flex:none + 不换行 */
+  flex: none;
+  white-space: nowrap;
+}
+.meta-sep {
+  flex: none;
+  opacity: 0.6;
+}
+
+/* 状态行：**常驻一行高度**，空闲时内容为空 —— 收掉整行会让输入框上下跳。 */
+.status {
+  min-height: 1.2em;
+  padding: 0 2px;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+.meta-usage-warn {
+  color: var(--vscode-editorWarning-foreground);
+}
+.meta-usage-error {
+  color: var(--vscode-errorForeground);
+}

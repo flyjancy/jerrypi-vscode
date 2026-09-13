@@ -150,6 +150,70 @@ async function main() {
     const click = (element) => element.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
     const openFileMessages = () => posted.filter((m) => m.type === "openFile");
 
+    // ------------------------------------------------- 版式与元信息行（S4）
+    console.log("[webview-dom-check] 版式与元信息行");
+    {
+      const el = (id) => doc.getElementById(id);
+      // 结构位置：照 pi 的装配顺序（转录 → 队列 → 状态 → 输入框 → 底部信息）
+      // 4 = DOCUMENT_POSITION_FOLLOWING（happy-dom 的 DOM 在窗口里，Node 常量取不到，用字面量）
+      const precedes = (a, b) => (a.compareDocumentPosition(b) & 4) !== 0;
+      check(
+        "状态行在输入框**之上**（不是面板顶部）",
+        precedes(el("status"), doc.querySelector(".composer")),
+      );
+      check("队列仍在状态行之上", precedes(el("queue"), el("status")));
+      // 这一条才真正锁住"从面板顶部挪下来了"：状态行必须在**转录之后**。
+      // （只断言"在输入框之上"的话，把它放回面板最上面照样能过。）
+      check("状态行在转录**之后**（不是又回到面板顶部）", precedes(el("transcript"), el("status")));
+      check("元信息行在输入框**之后**（pi footer 的位置）", precedes(el("input"), el("meta")));
+
+      send({
+        type: "meta",
+        meta: {
+          model: "deepseek/deepseek-v4-flash",
+          provider: "deepseek",
+          modelName: "flash",
+          thinkingLevel: "high",
+          supportsThinking: true,
+          contextWindow: 1000000,
+          contextUsage: { tokens: 423000, percent: 42.3 },
+        },
+      });
+      const metaBar = el("meta");
+      check(
+        "meta 消息把模型 · 等级 · 用量渲染出来",
+        metaBar.textContent.includes("deepseek-v4-flash") &&
+          metaBar.textContent.includes("high") &&
+          metaBar.textContent.includes("42.3%/1.0M"),
+        metaBar.textContent,
+      );
+      const beforeMetaClicks = posted.length;
+      click(metaBar.querySelector('[data-meta-action="model"]'));
+      check(
+        "点模型段发出 openModelPicker",
+        posted.slice(beforeMetaClicks).some((m) => m.type === "openModelPicker"),
+        JSON.stringify(posted.slice(beforeMetaClicks)),
+      );
+      const beforeLevelClick = posted.length;
+      click(metaBar.querySelector('[data-meta-action="thinking"]'));
+      check(
+        "点等级段发出 openThinkingPicker",
+        posted.slice(beforeLevelClick).some((m) => m.type === "openThinkingPicker"),
+        JSON.stringify(posted.slice(beforeLevelClick)),
+      );
+
+      send({ type: "focusInput" });
+      check(
+        "收到 focusInput 后焦点回到输入框",
+        doc.activeElement === el("input"),
+        String(doc.activeElement?.id ?? doc.activeElement?.tagName),
+      );
+
+      send({ type: "busy", busy: false });
+      check("空闲时状态行内容为空（但这一行仍占位）", el("status").textContent === "", el("status").textContent);
+      check("整份 DOM 里不再出现「空闲」两个字", !doc.body.textContent.includes("空闲"));
+    }
+
     // ---------------------------------------------------------------- 工具卡片
     console.log("[webview-dom-check] 工具卡片（点击接线）");
     const toolItem = (extra) => ({
@@ -327,6 +391,23 @@ async function main() {
       return scrollWrites - before;
     };
     check("收到 busy 不写 transcript.scrollTop（R10）", writesAfter(() => send({ type: "busy", busy: true })) === 0);
+    check(
+      "收到 meta 不写 transcript.scrollTop（R10 的正主：meta 每轮刷新好几次）",
+      writesAfter(() =>
+        send({
+          type: "meta",
+          meta: {
+            model: "m/m",
+            provider: "m",
+            modelName: "m",
+            thinkingLevel: "off",
+            supportsThinking: false,
+            contextWindow: 1000,
+            contextUsage: { tokens: 1, percent: 1 },
+          },
+        }),
+      ) === 0,
+    );
     check("收到 delta 会写（跟随时必须还在底部）", writesAfter(() => send({ type: "delta", id: "live-x", kind: "text", delta: "字" })) > 0);
     send({ type: "busy", busy: false });
     check(

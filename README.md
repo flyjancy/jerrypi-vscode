@@ -36,9 +36,8 @@
 | 工具卡片 | **已实现** | 标题行（名字 + 参数摘要 + `✓`/`✗` + 耗时）可展开看正文；**bash 输出流式回显**（折叠时显示最后 5 行）；输出被 pi 截断时给出摘要与完整输出文件的链接；卡片里的文件路径**可点开**（用编辑器打开） |
 | 内置工具 | **已实现** | `read` / `bash` / `edit` / `write`（bash 可中止） |
 | 密钥管理 | **已实现** | API key 存入 VS Code SecretStorage，优先于 `models.json` 中的 key；可在面板里设置 |
-| 模型选择 | **部分** | 面板**不覆盖**你在 pi 里选定的模型（没选过时才由扩展兜底避开不可用 provider）；面板内切换选择器见 S4 |
+| 模型与思考等级 | **已实现** | 输入框**上方**是工作状态行（空闲时不占内容但那行仍在，避免输入框跳动），**下方**是 `模型 · 思考等级 · 42.3%/1.0M`（**点模型/等级即可切换**，也可用命令面板 `Pi: Select Model` / `Pi: Select Thinking Level`）；VS Code 状态栏同时显示模型与用量，点击开选择器。**不覆盖**你在 pi 里选定的模型；面板里选过的模型在本窗口内一直生效（含新建会话），但**不写回 pi 的设置** |
 | 会话管理 | 计划中（S5） | 列表、新建、恢复；写入 `~/.pi/agent/sessions/`，与 pi CLI `--resume` 互通 |
-| 工具卡片 | 计划中（S3） | 参数与结果、bash 输出流式、点路径打开文件 |
 | Diff 审阅 | 计划中（S7） | `edit` 展示 unified patch；`write` 展示本次调用的前后对比 |
 | 工具审批 | 计划中（S8） | 开关式确认，默认 `off`（与 pi CLI 一致），可选 `mutating` / `all` |
 | 扩展与包 | 计划中（S9） | 加载用户的 pi TypeScript 扩展；支持本地路径 / git / `npm:` 包源 |
@@ -157,6 +156,10 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 - **写入历史提示**：`edit` 的 diff 会随会话持久化；`write` 的前后快照只存在于当前进程内，重启 VS Code 后不再显示。
 - **会话落盘条件**（pi 行为）：只有完成过至少一轮 assistant 回复的会话才会写入磁盘。
 - **项目级设置默认不被信任**：pi CLI 会解析信任并询问用户，而 jerrypi 固定以 `projectTrusted: false` 初始化会话，因此工作区里的 `.pi/settings.json`、`SYSTEM.md` 等项目级资源不会被加载，也**不会有任何提示**。这是刻意的安全默认值（项目级设置能改 `shellPath` 与默认工具），信任流程待 S6 补上；在此之前如需使用项目级配置，请改用全局 `settings.json`。
+- **生成中切换模型不影响本轮**：pi 只改 `state.model`，正在跑的那轮仍用旧模型（下一轮生效）。切模型本身是**异步**的（要校验凭据），面板在切换完成前仍显示旧值。
+- **面板里选的模型只在本窗口有效**：面板内的选择不写入 pi 的 `settings.json`（等价于 pi TUI 里"选了但没按 Ctrl+S 保存"），重开窗口会回到 pi 的默认/你自己的设置。写入设置属于 S6。
+- **模型列表只列"配了凭据"的模型**：用 `getAvailable()` 过滤，所以列表里没有的模型不是 bug，而是那个 provider 没配 API key（`Pi: Set API Key`）。
+- **模型选择器不做"先显示旧列表再刷新"**：直接传一个 Promise 给 VS Code 的 `showQuickPick`（原生加载态）。这台机器上取列表只要 1ms，而 OAuth provider 上先显示一份可能已失效的旧列表反而更糟；真出现明显卡顿再升级成 `createQuickPick`。
 - **远程图片不加载**：markdown 里的 `![](https://…)` 会被降级成 alt 文字。放行远程图片等于让模型可控的 URL 变成一条出网信道（一张 1×1 像素就能把内容编码进 query 发出去），因此消息里的图片**只允许 `data:image/...`**（CSP 里写的是 `img-src <扩展自身资源> data:`，另外放行扩展自己的图标），任何远程 URL 都不会发起请求。
 - **图片内容不显示**：`read` 到图片时只显示一行 `[Image: image/png]` 提示。把图片画出来需要把 base64 塞进协议（一张图可达数 MB），会顶爆重放预算；这也正是 pi 在没有图片能力的终端下的降级行为。
 - **依赖 `ctx.ui.custom()` 的 pi 扩展在面板里不可用**：那是终端 TUI 专有的全屏自定义渲染入口（需要真实的 TUI 实例），扩展宿主里无法实现。这类命令会**显示一条明确的错误**（而不是静默失败），其余功能不受影响。
@@ -200,9 +203,8 @@ To make that possible, the extension **ships pi's official pre-bundled SDK** ins
 | Tool cards | **Implemented** | A header line (name + argument summary + `✓`/`✗` + duration) expands to the result; **bash output streams in** (collapsed shows the last 5 lines); truncated output gets a summary and a link to the full output file; file paths inside a card are **clickable** and open in the editor |
 | Built-in tools | **Implemented** | `read` / `bash` / `edit` / `write` (bash can be aborted) |
 | API keys | **Implemented** | Stored in VS Code SecretStorage, taking precedence over keys in `models.json` |
-| Model selection | **Partial** | The panel **never overrides** the model you picked in pi; it only falls back (to a credentialed provider) when nothing is configured. An in-panel model picker lands in S4 |
+| Model & thinking level | **Implemented** | The working-status line sits **above** the composer (it keeps its height when idle so the composer never jumps), and `model · thinking level · 42.3%/1.0M` sits **below** it — **click the model or the level to switch**, or use `Pi: Select Model` / `Pi: Select Thinking Level`. The VS Code status bar mirrors the model and usage and opens the picker on click. The panel **never overrides** the model you picked in pi; a model you pick *in the panel* stays in effect for this window (including new sessions) but is **not written back** to pi's settings |
 | Sessions | Planned (S5) | List, create and resume; stored in `~/.pi/agent/sessions/`, interoperable with `pi --resume` |
-| Tool cards | Planned (S3) | Arguments and results, streaming bash output, click a path to open the file |
 | Diff review | Planned (S7) | `edit` shows the unified patch; `write` shows per-call before/after snapshots |
 | Tool approval | Planned (S8) | Optional confirmation gate (default `off`, matching the pi CLI), plus `mutating` / `all` |
 | Extensions & packages | Planned (S9) | Loads user pi TypeScript extensions; installs local / git / `npm:` package sources |

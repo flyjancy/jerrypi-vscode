@@ -589,10 +589,54 @@ D14 的 8 个边界值它重算过全对。但指出 **2 处"采纳方式不对"
 | C6 | §9 第 4 步里"收到 `meta` 不写 scrollTop"在**那个提交点是恒绿的**（`meta` 的前端处理第 6 步才有）→ 违反刚立的"红必须是断言失败" | 第 4 步只留 `busy 不写`（真红）+ `state 写`；`meta 不写` 挪到第 6 步 |
 | C7 | 文档结构错位（§10.1 掉到了 §12 后面）+ 头部状态行过期 | 挪回这里；头部改为"三轮评审已完成" |
 
-## 11. 待记录的问题（实施期发现即追加）
+## 11. 实施期发现的问题 / 偏离计划的地方
 
-（暂无）
+1. **`controller-check` 里有三条既有问题**（不是 S4 引入的，已在 S3 的 `fe3a659` 上复现）：
+   两条断言期望"正文里能看到 pi 的截断脚注"，与 S3 的 M5 修复（**故意剥掉**重复脚注）
+   正好相反；另一条轮询只等"有 pending 工具行"，而 pending 行在第一个输出到达**之前**
+   就存在，于是"已流出的正文还在"偶发假红。已按需求侧改正，现在 59/59。
+2. **host-check 的第一版漏了一个宏任务的等待**：`chatView` 的监听器是
+   `void this.handleMessage(...)`（fire-and-forget，产品代码故意的），所以
+   `await listener(msg)` 立刻返回，而处理链还在跑 → 所有"await 之后"的断言假红。
+   `send()` 现在多等一个宏任务。**教训：假红和假绿一样要查到底。**
+3. **第 3 步的断言分配**（与计划略有出入）：`host-check` 先只写"今天就能成立"的那批
+   （消息路由、版本日志、prompt 失败、链接/文件白名单、队列取回），
+   选择器与状态栏的断言随第 5 步一起补（否则第 3 步就会红着进 CI）。
 
 ## 12. 实施与验收结果
 
-（待填）
+### 12.1 自动检查（全绿）
+
+```
+typecheck（2 套 tsconfig）· self-test 9/9（含新增的 host-check 用例）
+protocol 112 · render 105 · tool-text 69 · webview-dom 66 · host 39
+controller-check（真模型）59/59
+package：338 文件 / 5.74 MB（19% 的 30MB 门禁）
+```
+
+**能红验证**（每条新断言都先证明它会红）：
+- 宿主：把白名单判断去掉 → 2 条红；未知消息日志去掉 → 1 条红；`composerError` 去掉 → 1 条红；
+- 选择器：当前项标记换成 `picked`（评审判定"真机不生效"的写法）→ 红；
+  把 Model 对象换成 `"provider/id"` 字符串 → 红；
+- 版式：把 `#status` 放回面板顶部 → 2 条红；
+- R10：把无条件 `scrollToBottom()` 放回去 → "busy 不写"红。
+
+### 12.2 提交切分（实际）
+
+| 提交 | 内容 |
+| --- | --- |
+| `24c2b62` | feat: broadcast session meta and wire the model/thinking pickers（controller + host + 命令 + 状态栏 + 断言） |
+| `f3475ba` | test: add a fake-vscode stub and host-side wiring checks |
+| `3f3fe91` | fix: stop scrolling the transcript on every status render（R10，独立 fix 提交） |
+| （本提交） | feat: move the status line next to the composer and add the meta row + docs + 0.1.6 |
+
+### 12.3 人工验收
+
+**Mac（用户只做 2 个动作）**：待做 → 结果记在这里。
+**Windows（W0–W2）**：待做。
+
+### 12.4 已知未覆盖
+
+- `>70%`/`>90%` 的**颜色**只在纯函数层断言（`renderMeta` 的 class），真机上没有构造
+  70% 上下文（记录为"未覆盖"，不是"通过"）。
+- 滚动行为仍不自动断言（无头 DOM 无排版引擎）；R10 只断言"有没有写 scrollTop"。

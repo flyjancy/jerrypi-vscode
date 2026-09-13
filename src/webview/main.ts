@@ -15,8 +15,15 @@ import {
   renderToolBody,
   renderToolHeadLine,
   renderToolStatusClass,
+  renderMeta,
 } from "./render";
-import { PROTOCOL_VERSION, type ChatItem, type ClientMessage, type ServerMessage } from "../shared/protocol";
+import {
+  PROTOCOL_VERSION,
+  type ChatItem,
+  type ClientMessage,
+  type ServerMessage,
+  type SessionMeta,
+} from "../shared/protocol";
 
 interface VsCodeApi {
   postMessage(message: ClientMessage): void;
@@ -34,6 +41,7 @@ const abortButton = document.getElementById("abort-button") as HTMLButtonElement
 const queueButton = document.getElementById("queue-button") as HTMLButtonElement;
 const hint = document.getElementById("composer-hint") as HTMLSpanElement;
 const errorBox = document.getElementById("composer-error") as HTMLDivElement;
+const metaBar = document.getElementById("meta") as HTMLDivElement;
 
 interface LiveRegion {
   thinking: HTMLDivElement;
@@ -69,7 +77,8 @@ const order: string[] = [];
 /** 耗时 tick（每秒一次，只改进行中卡片的那个 span）。 */
 let durationTimer: ReturnType<typeof setInterval> | undefined;
 let busy = false;
-let model = "";
+/** 当前会话元信息（模型/等级/用量）。`undefined` 表示还没收到过（面板刚开）。 */
+let meta: SessionMeta | undefined;
 /**
  * 已发出、还没被确认的那条文本。
  *
@@ -196,9 +205,16 @@ function renderQueue(queue: { steering: string[]; followUp: string[] }): void {
   }
 }
 
+/**
+ * 工作状态行（**输入框上方**，pi 的 statusContainer 位置）。
+ *
+ * 只显示**瞬态**状态：生成中… / 已中止之类由 notice 负责。
+ * 空闲时**内容为空但保留一行高度** —— 空闲时把整行收掉会让输入框上下跳一行
+ * （VS Code 里 composer 是底部锚定的），这比"省一行"重要。
+ * 另外：**不再出现"空闲"两个字**（与 pi 一致；忙/闲已由按钮与提示语体现）。
+ */
 function renderStatus(): void {
-  const parts = [model === "" ? "未选择模型" : model, busy ? "生成中…" : "空闲"];
-  statusBar.textContent = parts.join(" · ");
+  statusBar.textContent = busy ? "生成中…" : "";
   abortButton.hidden = !busy;
   queueButton.hidden = !busy;
   // 发出一份、还没确认的期间禁用发送按钮（避免连点重复发送），但**不禁用输入框**：
@@ -369,11 +385,16 @@ function onUserItem(_text: string): void {
 
 // ------------------------------------------------------------------ 消息
 
+function renderMetaBar(): void {
+  metaBar.innerHTML = meta === undefined ? "" : renderMeta(meta);
+}
+
 function applyState(message: Extract<ServerMessage, { type: "state" }>): void {
   for (const id of [...order]) removeNode(id);
   transcript.textContent = "";
   busy = message.busy;
-  model = message.model;
+  // 快照里仍带一个 deprecated 的 `model` 字段（给旧 webview 兜底），新代码只用 `meta`。
+  meta = message.meta;
   if (message.truncated) {
     const node = element("div", "msg msg-notice");
     node.textContent = "（更早的消息已省略）";
@@ -382,6 +403,7 @@ function applyState(message: Extract<ServerMessage, { type: "state" }>): void {
   for (const item of message.items) renderItem(item);
   renderQueue(message.queue);
   renderStatus();
+  renderMetaBar();
   // 快照重放之后**必须**停在底部（与 pi 一致：重开会话看到的是最新内容）。
   // 这一句是 R10 修复的配套：状态渲染不再顺带滚动之后，重开面板就不会自己滚了。
   scrollToBottom();
@@ -393,6 +415,18 @@ window.addEventListener("pagehide", () => {
     clearInterval(durationTimer);
     durationTimer = undefined;
   }
+});
+
+// 元信息行的点击委托。
+//
+// 为什么单独挂一处：`#meta` 在 `.composer` 里、**不在** `#transcript` 下，
+// 转写那套捕获阶段的委托覆盖不到它。命名与那边保持一致（`data-meta-action`）。
+metaBar.addEventListener("click", (event: MouseEvent) => {
+  const target = (event.target as HTMLElement | null)?.closest("[data-meta-action]");
+  if (target === null || target === undefined) return;
+  const action = target.getAttribute("data-meta-action");
+  if (action === "model") vscode.postMessage({ type: "openModelPicker" } satisfies ClientMessage);
+  else if (action === "thinking") vscode.postMessage({ type: "openThinkingPicker" } satisfies ClientMessage);
 });
 
 window.addEventListener("message", (event: MessageEvent<ServerMessage>) => {
@@ -413,6 +447,16 @@ window.addEventListener("message", (event: MessageEvent<ServerMessage>) => {
       return;
     case "queue":
       renderQueue({ steering: message.steering, followUp: message.followUp });
+      return;
+    case "meta":
+      // **不滚**：meta 刷新不改转写内容（DOM 测试台有一条 setter 探针锁这个）。
+      meta = message.meta;
+      renderMetaBar();
+      return;
+    case "focusInput":
+      // 选择器关闭后把焦点还给输入框。不判 `document.hasFocus()`：
+      // iframe 没焦点时 `focus()` 只设置文档内 activeElement，等它拿回焦点时正好落在输入框。
+      input.focus();
       return;
     case "busy":
       busy = message.busy;

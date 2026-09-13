@@ -11,7 +11,8 @@
 //   - 代码块与文本一律 escapeHtml。
 // 唯一比 pi 更严的地方是图片（见 urlPolicy：只允许 data:image/，不放行远程 URL）。
 import { marked, type Tokens } from "marked";
-import { TOOL_PREVIEW_LINES, type ChatItem } from "../shared/protocol";
+import { TOOL_PREVIEW_LINES, type ChatItem, type SessionMeta } from "../shared/protocol";
+import { formatContextUsage } from "../shared/format";
 import { cleanUrl, isExternalUrlAllowed, isImageUrlAllowed } from "../shared/urlPolicy";
 
 /** 转义 HTML 特殊字符（照抄 pi 的实现，包含单引号）。 */
@@ -298,6 +299,41 @@ export function renderToolLine(item: Extract<ChatItem, { kind: "tool" }>): strin
 }
 
 /** 提示行。 */
+/**
+ * 输入框下方那一行：`模型 • 等级 • 42.3%/1.0M`。
+ *
+ * 三条与 pi 对齐的规矩：
+ *   - 模型段与等级段是**独立的按钮**（可点开各自的选择器），用量是纯文字；
+ *   - `reasoning: false` 的模型**不显示等级**（pi 的 footer 也是这么做的）；
+ *   - 用量未知（`percent === null`）显示 `?/1.0M`（**没有百分号**），
+ *     没有模型（`contextWindow === 0`）时整段不显示 —— 模型段已经说了"未选择模型"。
+ *
+ * 所有值都经过转义：模型 id / provider 来自模型目录，可能是用户自定义 provider 写进去的字符串。
+ */
+export function renderMeta(meta: SessionMeta): string {
+  const label = meta.model === "" ? "未选择模型" : meta.model.split("/").slice(1).join("/");
+  const modelButton =
+    `<button type="button" class="meta-link meta-model" data-meta-action="model"` +
+    ` aria-label="当前模型 ${escapeHtml(meta.model === "" ? "未选择，点击选择" : meta.model)}，点击切换">` +
+    `${escapeHtml(label)}</button>`;
+
+  const levelButton =
+    meta.supportsThinking === true
+      ? `<button type="button" class="meta-link meta-level" data-meta-action="thinking"` +
+        ` aria-label="当前思考等级 ${escapeHtml(meta.thinkingLevel)}，点击切换">` +
+        `${escapeHtml(meta.thinkingLevel === "off" ? "thinking off" : meta.thinkingLevel)}</button>`
+      : "";
+
+  const percent = meta.contextUsage?.percent ?? null;
+  const usage = formatContextUsage(percent, meta.contextWindow);
+  // 阈值与配色**照 pi 的 footer**：`> 90` error、`> 70` warning（严格大于），
+  // `percent === null`（刚压缩）**不着色**（pi 用的是 `percent ?? 0`）。
+  const tone = percent === null ? "" : percent > 90 ? " meta-usage-error" : percent > 70 ? " meta-usage-warn" : "";
+  const usageSpan = usage === "" ? "" : `<span class="meta-usage${tone}">${escapeHtml(usage)}</span>`;
+
+  return [modelButton, levelButton, usageSpan].filter((part) => part !== "").join(`<span class="meta-sep">·</span>`);
+}
+
 export function renderNotice(item: Extract<ChatItem, { kind: "notice" }>): string {
   return `<div class="notice notice-${item.level}">${renderPlain(item.text)}</div>`;
 }
