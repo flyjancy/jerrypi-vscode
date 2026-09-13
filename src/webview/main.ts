@@ -163,7 +163,9 @@ function appendDelta(id: string, kind: "text" | "thinking", delta: string): void
   const target = kind === "thinking" ? live.get(id)!.thinking : live.get(id)!.text;
   if (kind === "thinking") target.hidden = false;
   target.textContent = (target.textContent ?? "") + delta;
-  scrollToBottom();
+  // **这里不滚**：调用方（delta 分支）自己会走 `scrollIfFollowing()`。
+  // 原来这里有一句无条件 `scrollToBottom()`，于是"流式中往上翻"每个 delta 都被拽回底部 ——
+  // 跟随的判定权必须只有一个（`following`），否则两处各自决定就会打架。
 }
 
 function renderQueue(queue: { steering: string[]; followUp: string[] }): void {
@@ -206,7 +208,10 @@ function renderStatus(): void {
   // 而是在"这段输出结束、下一次调用模型之前"注入（pi 的 TUI 也是这个行为）。
   // 第一版的提示语声称"会打断当前回复"，那是照抄 PLAN.md 5.2 的错误描述，已更正。
   hint.textContent = busy ? "Enter：转向（写完这段就注入）\n「追加」：整轮结束后再发" : "";
-  scrollToBottom();
+  // **这里不滚**（S4 的 R10）：状态行/chips 的变化不改变转写内容，
+  // 滚动跟随的唯一条件是"内容变了"（delta 与 item 两条路径）。
+  // 原来这里有无条件 `scrollToBottom()`，在 meta 每轮刷新几次之后会把翻历史的用户
+  // 反复拽回底部。
 }
 
 /**
@@ -377,7 +382,9 @@ function applyState(message: Extract<ServerMessage, { type: "state" }>): void {
   for (const item of message.items) renderItem(item);
   renderQueue(message.queue);
   renderStatus();
-
+  // 快照重放之后**必须**停在底部（与 pi 一致：重开会话看到的是最新内容）。
+  // 这一句是 R10 修复的配套：状态渲染不再顺带滚动之后，重开面板就不会自己滚了。
+  scrollToBottom();
 }
 
 // webview 被销毁时停掉耗时定时器（页面隐藏/卸载之后让它空转没有意义）。

@@ -307,6 +307,44 @@ async function main() {
     check("中止后耗时从 Elapsed 变 Took", (abortCard.querySelector(".tool-head").textContent ?? "").includes("Took"),
       abortCard.querySelector(".tool-head").textContent);
 
+    // ------------------------------------------------- 滚动：只测"有没有调用"，不测"滚到哪"
+    // happy-dom 没有排版引擎（scrollHeight 恒 0），所以**不能**断言滚动结果；
+    // 但"谁在写 scrollTop"是纯接线问题，可以装一个探针精确锁住。
+    // 这三条合起来才锁得住 R10：单独断言"meta 不写"会被"那我把滚动搬进 busy"绕过去。
+    let scrollWrites = 0;
+    let scrollValue = 0;
+    Object.defineProperty(doc.getElementById("transcript"), "scrollTop", {
+      configurable: true,
+      get: () => scrollValue,
+      set: (value) => {
+        scrollWrites += 1;
+        scrollValue = value;
+      },
+    });
+    const writesAfter = (fn) => {
+      const before = scrollWrites;
+      fn();
+      return scrollWrites - before;
+    };
+    check("收到 busy 不写 transcript.scrollTop（R10）", writesAfter(() => send({ type: "busy", busy: true })) === 0);
+    check("收到 delta 会写（跟随时必须还在底部）", writesAfter(() => send({ type: "delta", id: "live-x", kind: "text", delta: "字" })) > 0);
+    send({ type: "busy", busy: false });
+    check(
+      "收到 state 会写（快照重放后必须停在底部）",
+      writesAfter(() =>
+        send({
+          type: "state",
+          protocol: protocol.PROTOCOL_VERSION,
+          items: [],
+          truncated: false,
+          queue: { steering: [], followUp: [] },
+          busy: false,
+          cwd: "/w",
+          model: "m/m",
+        }),
+      ) > 0,
+    );
+
     // ---------------------------------------------------------------- 安全（真 DOM）
     console.log("[webview-dom-check] 工具正文的 XSS（走真 DOM 解析）");
     const payload = `<img src=x onerror="alert(1)"><script>alert(2)</script>`;
