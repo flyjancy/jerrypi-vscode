@@ -1,6 +1,7 @@
 # S4 计划：模型与思考等级（含「模型 + 状态」可见性改造）
 
-> 状态：**第 1 轮评审已吸收**（详见 §10）；第 2 轮只审增量。
+> 状态：**三轮评审已完成并全部吸收**（第 1 轮事实/决策、第 2 轮设计、第 3 轮转写核对，详见 §10）。
+> 下一步是等用户确认默认值，然后按 §9 实施。
 > 上游：`docs/PLAN.md` §6 的 S4（G4）；本步新增一条用户要求：**模型与状态要显示在能看到的位置**。
 
 ---
@@ -77,7 +78,7 @@ this.mountInteractiveTui(this.renderer, [
 | 当前模型 | `session.model: Model \| undefined` | `Model = {id, name, api, provider, baseUrl, reasoning, thinkingLevelMap?, input, cost, contextWindow, maxTokens}` |
 | 当前等级 | `session.thinkingLevel` | `ThinkingLevel = off\|minimal\|low\|medium\|high\|xhigh\|max` |
 | 列出可用模型 | `session.modelRuntime.getAvailable(providerId?)` | **有副作用**：无参调用触发一次全量可用性刷新（`queueAvailabilityRefresh` → 每个 provider `checkAuth` + 读凭据），OAuth 上可能走网络 |
-| 立即拿快照 | `session.modelRuntime.getAvailableSnapshot()` | **同步、零 I/O** —— QuickPick 先用它立刻弹出，再用 `getAvailable()` 的结果替换 items |
+| 立即拿快照 | `session.modelRuntime.getAvailableSnapshot()` | **同步、零 I/O**；**本步不用**（`showQuickPick` 弹出后改不了 items，见 D7）—— 留作真机明显卡顿时升级 `createQuickPick` 的备选 |
 | 切换模型 | `session.setModel(model, {persist?})` | `persist` 默认 false；**async 且会 `checkAuth`**；无凭据抛错 |
 | 切换等级 | `session.setThinkingLevel(level, {persist?})` | clamp + 写会话转录 |
 | 支持哪些等级 | `session.getAvailableThinkingLevels()` | **`model === undefined` 时返回全部 7 档**（所以必须先 gate `supportsThinking()`） |
@@ -203,8 +204,18 @@ pi 的 `?` 就是为这个）⑥ **会话重建**（`newSession` 已存在，`on
 要那样做必须换 `window.createQuickPick()`，桩的面积翻倍，而且 `onDidHide`/`onDidAccept`
 的先后顺序自己就容易写错。
 
-**结论（采纳）：`window.showQuickPick(session.modelRuntime.getAvailable())`** ——
-VS Code **原生支持传 Thenable**，等待期间自带加载态。一行拿到全部效果；
+**结论（采纳）：传一个映射后的 Thenable**（第 3 轮核对：`showQuickPick` 只接受
+`string[]` 或**带 `label` 的** `QuickPickItem[]` 的数组/Thenable，**`Model[]` 两者都不是**；
+而且裸传空数组会让 VS Code 显示"无匹配项"，D11 的说明项没地方插）：
+
+```ts
+showQuickPick(
+  modelRuntime.getAvailable().then((models) =>
+    models.length > 0 ? models.map(toQuickPickItem) : [SET_API_KEY_ITEM],
+  ),
+)
+```
+VS Code **原生支持传 Thenable**，等待期间自带加载态（无需 `busy` 字段）。一行拿到全部效果；
 放弃的只是"先显示旧快照"，而在 1ms 的机器上没人看得见，
 在 OAuth 慢机上显示一份**可能已失效的**旧列表反而更糟。
 真机上真出现明显卡顿，再升级到 `createQuickPick`（记在 §11 已知限制里）。
@@ -217,6 +228,8 @@ VS Code **原生支持传 Thenable**，等待期间自带加载态。一行拿�
   `getAvailableThinkingLevels()` 会返回**全部 7 档** —— 不 gate 就会列出 7 个假等级。
 - gate 通过后**原样**列 `getAvailableThinkingLevels()`（**允许空洞**：flash 有 `low`、v4-pro 没有）。
 - `off` 一行按 pi 的措辞写作 `thinking off`。
+- **当前档位要标出来**（第 3 轮核对发现我改写时把这条丢了）：与模型选择器同一种写法 ——
+  **`$(check)` 前缀或 `description: "当前"`**（不是 `picked`，见 §6 B1）。
 - 选中后 `setThinkingLevel(level)` → **回读 `session.thinkingLevel`** 再显示。
 - `supportsThinking() === false` 的分支：**用"没有模型的真会话"覆盖**（比喂假模型真实），
   评审指出这是真实可达状态。
@@ -284,7 +297,7 @@ provider/等级/窗口/成本（**价格要标单位 `$X / 1M tokens`** —— �
 - **只在 controller 已 ensure 之后创建**，**不要为了显示它而提前建会话**（否则 VS Code 启动
   就会加载 pi 运行时）；
 - **它现在没法自动断言** —— 仓库里没有任何 fake-`vscode` 桩（controller-check 把 `vscode`
-  设为 external 且刻意不碰这条路径）→ 见 §9 第 2 步：**桩作为独立提交做出来**。
+  设为 external 且刻意不碰这条路径）→ 见 §9 **第 3 步**：**桩作为独立提交做出来**。
 
 ### D14 数字格式化 —— 采纳 + 边界修正
 
@@ -331,7 +344,7 @@ C（只写已知限制 —— 把十行的修复包装成文档）、以及我�
 | --- | --- | --- |
 | R1 | 动版式碰到 S2/S3 已验收行为 | 测试台加**结构位置断言**；Mac 动作②重跑滚动/中止 |
 | R2 | QuickPick 抢焦点 | D10 的四条焦点规则（含"Esc 也要回焦点"） |
-| R3 | `getAvailable()` 慢 | 实测 1ms，但仍按 D7 用 snapshot 立即弹窗 + 异步替换 |
+| R3 | `getAvailable()` 慢 | 实测 1ms；按 D7 **传 Thenable**，VS Code 自带加载态（不再用 snapshot 先弹窗） |
 | R4 | 等级列表有空洞 | D8 原样使用 `getAvailableThinkingLevels()`，断言覆盖空洞 |
 | R5 | `percent` 为 `null` 或被压缩 | 显示 `?`；断言 `null` 分支不产生 `NaN%`/`null%` |
 | R6 | 模型 id/provider 是外部字符串 | 按文本转义；断言模型名里带 `<img>` 不生成元素 |
@@ -453,7 +466,10 @@ W4（"重开后模型正确" —— 由 `snapshot()` 带 meta 的断言覆盖，
    —— 那种断言退化成"实现的镜像"，正是 S3 栽过的"断言了 bug 本身"。
 4. **`fix(webview): stop scrolling to the bottom on every status render`** —— **单独一个提交**：
    `main.ts` 删掉 `renderStatus()` 里的 `scrollToBottom()` + `applyState()` 末尾**显式补一次** +
-   §6 的 R10 三条断言。它是既有行为的回归修复，单独成提交才能被单独 revert 和引用
+   §6 的 R10 断言里的**两条**：`busy` **不写** `scrollTop`（**修之前是真红**：现在 `case "busy"`
+   会经 `renderStatus()` 走到 `scrollToBottom()`）与 `state` **写**（修完的回归护栏）。
+   **`meta` 不写那条留到第 6 步** —— 第 3 轮核对指出：`meta` 的前端处理要到第 6 步才存在，
+   放在第 4 步它必然恒绿，就违反了"红必须是断言失败"这条纪律。它是既有行为的回归修复，单独成提交才能被单独 revert 和引用
    （S3 的 `fix:` 提交都是这么切的）。
 5. **`feat(controller)`** —— 组装/去重/`lastMeta` 清理、D5 的八个刷新点、D7 的
    `showQuickPick(getAvailable())`、QuickPick 与两个命令、D13 状态栏项、D15 的 A 方案（含三条补丁）；
@@ -558,6 +574,21 @@ D14 的 8 个边界值它重算过全对。但指出 **2 处"采纳方式不对"
 
 ---
 
+### 10.1 第 3 轮（**只核对转写，不审设计**）—— 已完成
+
+把第 2 轮的 B1–B14 逐条对着 §4/§5/§6/§9 的实际文字核对。结论：**没有新设计问题**，
+但查出 **7 处转写漏洞**，全部已修（下面记录，便于复查）：
+
+| # | 漏洞 | 修法 |
+| --- | --- | --- |
+| C1 | **D8 把"当前档位怎么标记"整条弄丢了**（B1 的连带伤害：我只在 §6 改了字段，没注意到 D8 那句被删） | D8 补回：`$(check)` 前缀或 `description:"当前"` |
+| C2 | **D7 的代码行字面上是错的**：`showQuickPick` 只收 `string[]` / **带 `label` 的 `QuickPickItem[]`**，`Model[]` 两者都不是；且裸传空数组会让 VS Code 显示"无匹配项"，D11 的说明项没地方插 | 改成映射后的 Thenable（含空列表分支），写进 D7 |
+| C3 | D13 里"见 §9 **第 2 步**"是**过期引用**（B13 重排后桩在第 3 步） | 改为第 3 步 |
+| C4 | §3.3 的 `getAvailableSnapshot()` 备注仍写着"先弹窗再替换 items"，**与 D7 打架** | 改为"本步不用…留作升级 `createQuickPick` 的备选" |
+| C5 | R3 的对策也停在旧方案 | 改为"按 D7 传 Thenable" |
+| C6 | §9 第 4 步里"收到 `meta` 不写 scrollTop"在**那个提交点是恒绿的**（`meta` 的前端处理第 6 步才有）→ 违反刚立的"红必须是断言失败" | 第 4 步只留 `busy 不写`（真红）+ `state 写`；`meta 不写` 挪到第 6 步 |
+| C7 | 文档结构错位（§10.1 掉到了 §12 后面）+ 头部状态行过期 | 挪回这里；头部改为"三轮评审已完成" |
+
 ## 11. 待记录的问题（实施期发现即追加）
 
 （暂无）
@@ -565,9 +596,3 @@ D14 的 8 个边界值它重算过全对。但指出 **2 处"采纳方式不对"
 ## 12. 实施与验收结果
 
 （待填）
-
-### 10.1 第 3 轮（**只核对转写，不审设计**）
-
-把第 2 轮的 B1–B14 逐条对着 §4/§5/§6/§9 的实际文字核对一遍，确认我没有曲解或漏改
-（第 1 轮的吸收曾被查出 2 处"采纳方式不对"，所以这次专门核一遍）。
-若核对发现的是**新的设计问题**而非转写问题，则停下来找用户，不再自行吸收。
