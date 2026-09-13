@@ -273,30 +273,55 @@ async function main() {
 
 
       messages.length = 0;
+      // 中止路径（探针 H）：已流出的正文必须还在。
+      //
+      // 这一节**依赖模型真的照跑那条长命令**。第一版写死"等 2500ms 再断言"，
+      // 结果模型有一次没照做（换了命令或跑得很快），一排断言全挂 —— 那是**假警报**，
+      // 比不测更糟（会让人去"修"一个不存在的 bug）。改成轮询等一个"确实在执行中的
+      // 工具行"，等不到就 SKIP 并打印原因。
+      messages.length = 0;
+      const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const abortable = streamController.prompt(
         'Run this exact bash command: for i in $(seq 1 20); do echo "中止行 $i"; sleep 0.5; done',
         "auto",
       );
-      await new Promise((resolve) => setTimeout(resolve, 2500));
-      const midSnapshot = streamController.snapshot();
-      const runningRow = midSnapshot.items.find((item) => item.kind === "tool" && item.pending === true);
-      check("执行中重开：已流出的正文还在（C1/N1 家族第四处）",
-        typeof runningRow?.text === "string" && runningRow.text.includes("中止行"),
-        JSON.stringify(runningRow?.text?.slice(0, 60)));
-      check("执行中重开：运行中的卡片也有可点路径（评审第 2 轮第 4 条）", Array.isArray(runningRow?.openablePaths) === false || runningRow.openablePaths.length >= 0);
-      check("执行中快照的 busy=true", midSnapshot.busy === true);
-      await streamController.abort();
-      await abortable.catch(() => {});
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const afterAbort = new View();
-      for (const message of messages) afterAbort.apply(message);
-      const abortedRow = afterAbort.byKind("tool").at(-1);
-      check("中止后：正文没有丢（探针 H 的回归点）",
-        textOf(abortedRow).includes("中止行"),
-        JSON.stringify(textOf(abortedRow).slice(0, 80)));
-      check("中止后：状态是错误", abortedRow?.isError === true);
-      check("中止后：正文里带 pi 自己的 Command aborted", textOf(abortedRow).includes("Command aborted"));
-      check("中止后：不显示耗时之外的东西（endedAt 有值）", typeof abortedRow?.endedAt === "number");
+      let midSnapshot;
+      let runningRow;
+      const waitUntil = Date.now() + 25000;
+      while (Date.now() < waitUntil) {
+        midSnapshot = streamController.snapshot();
+        runningRow = midSnapshot.items.find((item) => item.kind === "tool" && item.pending === true);
+        if (runningRow !== undefined) break;
+        await sleepMs(250);
+      }
+      if (runningRow === undefined) {
+        console.log("      · SKIP：模型这次没有执行长命令（等不到 pending 的工具行）—— 本节 4 条断言跳过");
+        await streamController.abort().catch(() => {});
+        await abortable.catch(() => {});
+      } else {
+        check("执行中重开：已流出的正文还在（C1/N1 家族第四处）",
+          typeof runningRow.text === "string" && runningRow.text.includes("中止行"),
+          JSON.stringify(runningRow.text?.slice(0, 60)));
+        check("执行中快照的 busy=true", midSnapshot.busy === true);
+        await streamController.abort();
+        await abortable.catch(() => {});
+        // 等它落地：中止的收尾是几条事件，不是同步完成的。
+        let abortedRow;
+        const settleDeadline = Date.now() + 5000;
+        while (Date.now() < settleDeadline) {
+          const view = new View();
+          for (const message of messages) view.apply(message);
+          abortedRow = view.byKind("tool").at(-1);
+          if (abortedRow !== undefined && abortedRow.pending !== true) break;
+          await sleepMs(100);
+        }
+        check("中止后：正文没有丢（探针 H 的回归点）",
+          textOf(abortedRow).includes("中止行"),
+          JSON.stringify(textOf(abortedRow).slice(0, 80)));
+        check("中止后：状态是错误", abortedRow?.isError === true);
+        check("中止后：正文里带 pi 自己的 Command aborted", textOf(abortedRow).includes("Command aborted"));
+        check("中止后：有 endedAt（耗时能显示）", typeof abortedRow?.endedAt === "number");
+      }
 
       // 帧竞态：最终 item 之后不得再有同一 id 的 pending 帧（评审第 2 轮第 6 条）
       const finalSeq = new Map();
