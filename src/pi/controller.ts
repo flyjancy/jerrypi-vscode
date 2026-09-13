@@ -14,7 +14,7 @@
 //   3. **空闲以 `agent_settled` 为准**，但 `agent_settled` 不是万能的：扩展命令由
 //      `prompt()` 内部直接执行、不启动 agent run，因此永远不会settle —— 必须在
 //      `prompt()` 返回后与 `session.isIdle` 对账一次（否则状态行永久卡在"生成中"）。
-import { isAbsolute, join } from "node:path";
+import { isAbsolute } from "node:path";
 import type {
   AgentSession,
   AgentSessionEvent,
@@ -39,6 +39,7 @@ import {
   type ToolCallIndex,
 } from "./serialize";
 import { createSessionHost, type SessionHost } from "./session";
+import { resolveSessionDir, sessionsRootOf } from "./sessions";
 import { getModelRuntime, type ApiKeyStore } from "./runtime";
 
 /** delta 合帧窗口：合并相邻增量**不改变内容与顺序**，只是少几千次 IPC 往返。 */
@@ -64,10 +65,15 @@ export interface SessionHostControllerOptions {
   /** 发往 webview 的消息出口。 */
   onMessage: (message: ServerMessage) => void;
   /**
-   * 会话文件的存放目录，默认 `<agentDir>/sessions`。
+   * 会话的**根**目录（即 `<agentDir>/sessions` 这一层），默认取 agentDir 下的 sessions。
    * 单独拿出来是为了让本地端到端测试能用临时目录，不去动用户的 `~/.pi/agent`。
+   *
+   * ⚠️ **它是根，不是 pi 的 `sessionDir` 参数**：pi 那个参数要的是"直接装 jsonl 的目录"
+   * （per-cwd 的编码子目录），差一层就会把会话写到没人看得见的地方 ——
+   * 细节与实测见 `src/pi/sessions.ts` 的文件头注释。名字从 `sessionsDir` 改成
+   * `sessionsRoot` 就是 S5 为了让编译器抓出这个误用（docs/S5-plan.md 的 D2）。
    */
-  sessionsDir?: string;
+  sessionsRoot?: string;
   /** 额外加载的 pi 扩展（测试用；后续的 `jerrypi.extensionPaths` 设置也会走这里）。 */
   additionalExtensionPaths?: string[];
 }
@@ -224,9 +230,11 @@ export class SessionHostController {
     const agentDir = this.options.agentDir ?? pi.getAgentDir();
     // 每次创建 ModelRuntime 之后都要重新注入 key：pi 的 setRuntimeApiKey 只写内存。
     const modelRuntime = await getModelRuntime(pi, agentDir, keys);
+    // **必须经 resolveSessionDir**：pi 的 `sessionDir` 参数是 per-cwd 的目录，不是根。
+    const sessionsRoot = this.options.sessionsRoot ?? sessionsRootOf(agentDir);
     const sessionManager: SessionManager = pi.SessionManager.create(
       cwd,
-      this.options.sessionsDir ?? join(agentDir, "sessions"),
+      resolveSessionDir(cwd, sessionsRoot),
     );
 
     const host = await createSessionHost({

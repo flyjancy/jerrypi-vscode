@@ -11,11 +11,11 @@
 
 ## 1. 现在
 
-**进行中**：无 —— S4 已关闭、S5 计划尚未开始（2026-09-13）
+**进行中**：**S5 第 1 步已完成**（会话目录语义修正；红→绿见某 §11），下一步第 2 步（启动即恢复 + 会话替换后重放）（2026-09-13）
 
 | | |
 | --- | --- |
-| 阶段 | **S4 已关闭**；**S5（会话管理）未开始**（计划还没写） |
+| 阶段 | **S4 已关闭**；**S5（会话管理）实施中** —— 计划已定稿并全部拍板（`docs/S5-plan.md`），按某 §9 逐步做 |
 | 最新发布 | **0.1.6**（2026-09-13，预发布） |
 | 发布核验 | `node scripts/compare-vsix.mjs 0.1.6` → **338 个文件逐个字节相同**；tag `v0.1.6`；留档 `~/jerrypi-releases/jerrypi-0.1.6.vsix` |
 | 真机验收 | Mac（2 个动作）✅ ／ Windows（W0–W3）✅ —— 明细 S4-plan §12.3 |
@@ -32,8 +32,9 @@
 | `node scripts/tool-text-check.mjs` | 69 |
 | `node scripts/webview-dom-check.mjs` | 66 |
 | `node scripts/host-check.mjs` | 39 |
-| `npm run check:controller`（真模型，**不进 CI**） | 59/59 |
-| `npm run package` + `node scripts/check-vsix.mjs <vsix>` | 338 文件 / 5.74 MB（门禁 30 MB） |
+| `npm run check:controller`（真模型，**不进 CI**） | **62/62**（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
+| `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | **14 项（12 gating + T5c/T12 advisory）GATE PASS** |
+| `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **339 文件 / 5.74 MB**（门禁 30 MB）。338 那个基线已过时：多出的 1 个是 `media/jerrypi-mark-j.svg`（20:44 出现的未跟踪文件，见 S5-plan §11 的 1-3） |
 
 ## 2. 欠着的事（已知、刻意未做或暂时做不到）
 
@@ -52,10 +53,18 @@
 
 ## 3. 下一步（S5：会话管理）
 
-1. 写 `docs/S5-plan.md`（会话列表 / 新建 / 恢复；写入 `~/.pi/agent/sessions/`，与 pi CLI `--resume` 互通）
-2. 送 Claude 评审（**≤3 轮**，第 3 轮只做转录核对）
-3. 把 D1–Dn 的默认值摆给用户确认
-4. **用户说"可以"之后**才动代码；实现顺序按该计划的 §9（先写断言、看红，再实现）
+**计划已定稿：`docs/S5-plan.md`**（三轮评审已完成，30 条意见全部处置，未解决分歧：无）。
+里面有一条硬发现：**我们现在把会话写在 `~/.pi/agent/sessions/` 的根上（平铺），
+而 pi 的规范位置是 `<agentDir>/sessions/--<编码 cwd>--/`** —— 所以扩展写的会话
+`pi --resume` 看不到，G3 的"互通"此刻**不成立**。S5 第一件事就是修它（计划 §3.1 有实测数据）。
+
+1. ✅ 写 `docs/S5-plan.md`
+2. ✅ 三轮评审（第 1 轮 5B/5S/6N、第 2 轮 4B/5S/6N、第 3 轮转写核对）
+3. ✅ **Q1–Q6 已全部拍板**（2026-09-13，均按默认；明细见某 §13）
+4. ⏳ **实施中**，按某 §9 的 7 步；每步先写断言、看红、再实现。
+   **第 1 步 ✅**（会话目录语义修正）：`src/pi/sessions.ts` 新建；`sessionsDir`→`sessionsRoot`；
+   自测新增 T10/T11/T12；`controller-check` 62/62、闸门 14/14 GATE PASS、全套门禁绿。
+   下一步：第 2 步（启动即 `continueRecent` + 会话替换后重放，含修掉 §3.7 缺口 A）
 
 ## 4. 发布流程（每次都一样）
 

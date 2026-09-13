@@ -1,4 +1,4 @@
-// S1 可行性闸门：T1–T9 + GATE 判定。
+// S1 可行性闸门：T1–T12 + GATE 判定（T5c 与 T12 是 advisory，不参与判定）。
 //
 // 输出契约（PLAN.md 第 6 节 S1）：
 //   flyjancy.jerrypi <扩展版本> selftest-v1 <平台> node=<版本>
@@ -7,16 +7,16 @@
 //   ...
 //   GATE PASS | GATE BLOCKED <失败项列表>
 //
-// 判定规则：**除 T5c 外，任一 required 项非 PASS 即 GATE BLOCKED；SKIP 不算通过。**
-// T5c 是 advisory，其 FAIL/SKIP 都不参与判定。
+// 判定规则：**除 T5c / T12 外，任一 required 项非 PASS 即 GATE BLOCKED；SKIP 不算通过。**
+// T5c（模型驱动的 bash 中止）与 T12（终端那份 pi 的会话目录比对）是 **advisory**。
 //
 // 设计约束：
 //   - 不污染用户环境：全部临时目录在 os.tmpdir() 下，最后统一清理；
 //   - 每项独立超时；每项结束立刻写一行 Output（最坏情况约 16 分钟，中途静默无法定位）；
 //   - 模型相关项（T4/T6/T7/T9）各重试 1 次，并把 E_MODEL_* 与能力错误分开记录。
-import { accessSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, appendFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { crc32, deflateSync } from "node:zlib";
@@ -33,6 +33,7 @@ import {
 import type { ApiKeyStore } from "./runtime";
 import { getModelRuntime } from "./runtime";
 import { createSessionHost, type SessionHost } from "./session";
+import { resolveSessionDir, sessionsRootOf } from "./sessions";
 import { createSelfTestUIContext } from "./selftest-ui";
 
 export const SELFTEST_TAG = "selftest-v1";
@@ -43,6 +44,15 @@ export interface SelfTestOptions {
   extensionVersion: string;
   vscodeVersion: string;
   agentDir: string;
+  /**
+   * 扩展宿主当前的 cwd（= VS Code 第一个工作区目录，没打开工作区时是用户主目录）。
+   *
+   * T10/T11/T12 需要它：那三条验的是"我们的会话目录推导与 pi 一致"，
+   * 而 `SessionManager.create(cwd)` 不传 `sessionDir` 时会 **mkdirSync** ——
+   * 拿临时 cwd 去跑会在用户真实的 agentDir 下留下垃圾目录（评审 B3），
+   * 而真实 cwd 的那个目录本来就在（我们的会话就住那里）。
+   */
+  cwd: string;
   keys: ApiKeyStore;
   sink: EventSink;
 }
@@ -57,7 +67,7 @@ interface ItemResult {
 }
 
 /** 参与 GATE 判定的项（T5c 是 advisory）。 */
-const REQUIRED_ITEMS = ["T1", "T2", "T3", "T4", "T5a", "T5b", "T6", "T7", "T8", "T9"] as const;
+const REQUIRED_ITEMS = ["T1", "T2", "T3", "T4", "T5a", "T5b", "T6", "T7", "T8", "T9", "T10", "T11"] as const;
 
 const MIN_NODE = [24, 15, 0] as const;
 
@@ -70,6 +80,10 @@ const TIMEOUTS: Record<string, number> = {
   T5a: 30_000,
   T5b: 30_000,
   T5c: 90_000,
+  // 不需要网络，只需要算路径 / 写一个自造会话
+  T10: 15_000,
+  T11: 30_000,
+  T12: 30_000,
   T6: 120_000,
   T7: 60_000,
   T8: 30_000,
@@ -286,13 +300,17 @@ class SelfTestRun {
     // （switchSession 内部会断言会话的 cwd 存在）。
     const cwd = join(this.tempRoot, "cwd");
     const agentDir = this.options.agentDir;
-    const sessionDirR = join(this.tempRoot, "sessions-r");
-    const sessionDirR2 = join(this.tempRoot, "sessions-r2");
+    // 临时会话目录：**必须经 resolveSessionDir** 拿 per-cwd 目录。
+    // 以前这里直接把 `<tempRoot>/sessions-r` 当 pi 的 `sessionDir` 传（那就是 S5 修的 bug 本身）。
+    const sessionsRootR = join(this.tempRoot, "sessions-r");
+    const sessionsRootR2 = join(this.tempRoot, "sessions-r2");
+    const sessionDirR = resolveSessionDir(cwd, sessionsRootR);
+    const sessionDirR2 = resolveSessionDir(cwd, sessionsRootR2);
     const fixtureDir = join(this.tempRoot, "fixture");
     const markerSession = join(this.tempRoot, "session-start.marker");
     const markerCommand = join(this.tempRoot, "command.marker");
     const markerWrite = join(this.tempRoot, "write.marker");
-    for (const dir of [cwd, sessionDirR, sessionDirR2, fixtureDir]) {
+    for (const dir of [cwd, sessionsRootR, sessionsRootR2, fixtureDir]) {
       mkdirSync(dir, { recursive: true });
     }
 
@@ -463,6 +481,12 @@ class SelfTestRun {
         },
         { retries: 1 },
       );
+
+      // ---- T10/T11/T12（S5 新增）：会话目录的推导必须与 pi 一致，且 CLI 能列出来
+      await this.item("T10", () => this.testSessionDirGuard());
+      await this.item("T11", () => this.testCliListingInterop());
+      // T12 是 advisory（不参与 GATE）：它要去问**用户终端里那份 pi**，找不到就 SKIP
+      await this.item("T12", () => this.testUserPiDrift());
     } finally {
       await hostR2?.dispose().catch(() => undefined);
       await hostR?.dispose().catch(() => undefined);
@@ -480,6 +504,145 @@ class SelfTestRun {
       fail("E_HOST_MISSING", "前置项未建立会话宿主");
     }
     return host;
+  }
+
+  // -------------------------------------------------------------------------
+  // T10–T12（S5）：会话目录推导与 pi / 终端那份 pi 的一致性
+  // -------------------------------------------------------------------------
+
+  /** 三条目录断言只在 agentDir 是 pi 的默认目录时有意义（S6 的自定义 agentDir 另说）。 */
+  private requireDefaultAgentDir(): void {
+    const { agentDir, pi } = this.options;
+    if (resolve(agentDir) !== resolve(pi.getAgentDir())) {
+      throw new SelfTestSkip(
+        "E_CUSTOM_AGENT_DIR",
+        `agentDir=${agentDir} 不是 pi 的默认目录，默认布局断言不适用（S6 的自定义 agentDir 场景）`,
+      );
+    }
+  }
+
+  /**
+   * T10：**目录漂移守卫** —— 我们算出来的 per-cwd 目录必须就是 pi 自己的默认目录。
+   *
+   * 为什么需要它：`resolveSessionDir` 是**复刻** pi 的编码规则（`getDefaultSessionDir`
+   * 没从 bundle 导出）。pi 哪天改了规则，我们就会再一次把会话写到没人看得见的地方，
+   * 而且是静默的 —— 这条断言就是那个响声。
+   */
+  private async testSessionDirGuard(): Promise<string> {
+    this.requireDefaultAgentDir();
+    const { cwd, agentDir, pi } = this.options;
+    const ours = resolveSessionDir(cwd, sessionsRootOf(agentDir));
+    // 用真实 cwd：下面这两个 create 都会 mkdirSync，临时 cwd 会在用户真实 agentDir 下留垃圾。
+    const piDefault = pi.SessionManager.create(cwd).getSessionDir();
+    if (ours !== piDefault) {
+      fail("E_SESSION_DIR_DRIFT", `我们算的 ${ours} ≠ pi 自己算的 ${piDefault}`);
+    }
+    const probe = pi.SessionManager.create(cwd, ours);
+    if (!probe.usesDefaultSessionDir()) {
+      fail("E_SESSION_DIR_NOT_DEFAULT", `pi 认为 ${ours} 不是默认会话目录`);
+    }
+    return `ours==pi：${ours}；usesDefaultSessionDir()=true`;
+  }
+
+  /**
+   * T11：**模块级互通** —— 用 pi 的 CLI 算法（`list(cwd)` 不传 sessionDir）
+   * 能把我们写下的会话列出来。不需网络、不需凭据。
+   *
+   * 会话真的写在**用户真实的 agentDir** 下（要验的就是那个位置），所以最后要收尾删除：
+   * 只删我们自己建的那个编码目录，而且带一个"必须在 sessions 根之下"的守卫。
+   */
+  private async testCliListingInterop(): Promise<string> {
+    this.requireDefaultAgentDir();
+    const { agentDir, pi } = this.options;
+    const interopCwd = join(this.tempRoot, "interop-cwd");
+    mkdirSync(interopCwd, { recursive: true });
+    const dir = resolveSessionDir(interopCwd, sessionsRootOf(agentDir));
+    try {
+      const manager = pi.SessionManager.create(interopCwd, dir);
+      // pi 在第一条 assistant 消息之前不落盘，所以两条都要造（不调模型）。
+      manager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: `jerrypi selftest interop ${Date.now()}` }],
+        timestamp: Date.now(),
+      });
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        api: "jerrypi-selftest",
+        provider: "jerrypi-selftest",
+        model: "selftest",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const file = manager.getSessionFile();
+      if (typeof file !== "string" || file.length === 0) {
+        fail("E_SESSION_NOT_PERSISTED", "自造会话没有路径（pi 的落盘契约变了？）");
+      }
+      if (!existsSync(file)) {
+        fail("E_SESSION_FILE_MISSING", `自造会话未落盘：${file}`);
+      }
+      // **CLI 的算法**：`pi --resume/-c` 走的也是 `list(cwd)`（不传 sessionDir）。
+      const listed = await pi.SessionManager.list(interopCwd);
+      if (!listed.some((info) => info.path === file)) {
+        fail("E_INTEROP_LIST", `pi 的 list(cwd) 没看到 ${file}（它列了 ${listed.length} 条）`);
+      }
+      return `pi 的 list(cwd) 看到了它：${basename(file)}（${dir}）`;
+    } finally {
+      const root = resolve(sessionsRootOf(agentDir));
+      if (resolve(dir).startsWith(root + sep)) rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  /**
+   * T12（**advisory**，不参与 GATE）：直接去问**用户终端里那份 pi** 算出来的目录。
+   *
+   * 为什么需要它：T10/T11 跑的是我们自己打包的那份 pi（`pi-runtime/`），
+   * 而用户终端里的 `pi` 是**另一份独立安装**（自己会升级）—— 它改了编码规则时，
+   * T10/T11 照样全绿，而互通已经断了。所以这里 import 它自己的未打包源码问一次。
+   * 找不到 / 不是 JS 入口 / 没有未打包源码 → SKIP（受限机就是这样，没有 pi）。
+   */
+  private async testUserPiDrift(): Promise<string> {
+    const { cwd, agentDir } = this.options;
+    const exe = findOnPath("pi");
+    if (exe === undefined) throw new SelfTestSkip("E_NO_PI", "PATH 上没有 pi（受限机就是这样）");
+    let real: string;
+    try {
+      real = realpathSync(exe);
+    } catch {
+      throw new SelfTestSkip("E_PI_REALPATH", `${exe} 无法解析真实路径`);
+    }
+    if (!real.endsWith(".js")) {
+      throw new SelfTestSkip("E_PI_NOT_JS", `PATH 上的 pi 不是 JS 入口（${real}）`);
+    }
+    const pkgRoot = resolve(dirname(real), "..", "..");
+    const modulePath = join(pkgRoot, "dist", "core", "session-manager.js");
+    if (!existsSync(modulePath)) {
+      throw new SelfTestSkip("E_PI_NO_SOURCES", `那份 pi 没有未打包源码（${modulePath}）`);
+    }
+    const mod = (await import(pathToFileURL(modulePath).href)) as {
+      getDefaultSessionDir?: (cwd: string, agentDir?: string) => string;
+    };
+    if (typeof mod.getDefaultSessionDir !== "function") {
+      throw new SelfTestSkip("E_PI_API", "那份 pi 没有导出 getDefaultSessionDir");
+    }
+    const theirs = mod.getDefaultSessionDir(cwd, agentDir);
+    const ours = resolveSessionDir(cwd, sessionsRootOf(agentDir));
+    if (ours !== theirs) {
+      fail(
+        "E_CLI_DRIFT",
+        `⚠️ 两份 pi 算出来的会话目录不一致：我们 ${ours}｜终端那份 pi ${theirs}` +
+          "（互通已断，请重跑 docs/S5-plan.md §7 的动作②）",
+      );
+    }
+    return `与终端那份 pi（${real}）一致：${theirs}`;
   }
 
   private computeGate(): string {
@@ -1000,6 +1163,31 @@ function countMarkerLines(path: string, needle: string): number {
   return readMarker(path)
     .split("\n")
     .filter((line) => line.trim() === needle).length;
+}
+
+/**
+ * 在 PATH 上找一个可执行的文件（**不 spawn**，只查文件）。
+ * 只给 T12（advisory）用：找不到就 SKIP，不会因此失败。
+ */
+function findOnPath(name: string): string | undefined {
+  const exts = process.platform === "win32" ? [".cmd", ".exe", ""] : [""];
+  // PATH 的分隔符是 `delimiter`（POSIX `:`，Windows `;`），**不是 `sep`**（`/`）。
+  // 踩过：用 `sep` 拆的结果是一堆无效条目 → T12 静默 SKIP（看起来像"这台机器没有 pi"）。
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (dir === "") continue;
+    for (const ext of exts) {
+      const candidate = join(dir, `${name}${ext}`);
+      try {
+        // **必须用 statSync（跟符号链接）**：npm/fnm 装在 PATH 上的 `pi` 通常是指向
+        // `dist/bundle/cli.js` 的符号链接，`lstatSync().isFile()` 会返回 false
+        // → T12 静默 SKIP（看起来像"这台机器没装 pi"，而其实装了）。
+        if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+      } catch {
+        // 权限/竞态：忽略这个候选
+      }
+    }
+  }
+  return undefined;
 }
 
 function sleep(ms: number): Promise<void> {

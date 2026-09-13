@@ -110,9 +110,9 @@ async function main() {
   // 全程落在临时目录里：只借用凭据，不碰用户的 settings / 扩展 / 会话历史。
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-ctl-"));
   const agentDir = path.join(root, "agent");
-  const sessionsDir = path.join(root, "sessions");
+  const sessionsRoot = path.join(root, "sessions");
   const cwd = path.join(root, "cwd");
-  for (const dir of [agentDir, sessionsDir, cwd]) fs.mkdirSync(dir, { recursive: true });
+  for (const dir of [agentDir, sessionsRoot, cwd]) fs.mkdirSync(dir, { recursive: true });
   fs.copyFileSync(path.join(sourceAgentDir, "auth.json"), path.join(agentDir, "auth.json"));
 
   const log = { appendLine: () => {} };
@@ -127,7 +127,7 @@ async function main() {
     pi,
     cwd,
     agentDir,
-    sessionsDir,
+    sessionsRoot,
     keys: { listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {} },
     uiContext: createSelfTestUIContext(log),
     log,
@@ -159,6 +159,26 @@ async function main() {
     check("ensure() 后 ready", controller.ready === true);
     check("初始快照为空且不忙", empty.items.length === 0 && empty.busy === false);
 
+    // ---------------------- 0. 会话目录：必须是 pi 的 per-cwd 编码目录（S5 第 1 步的断言）
+    //
+    // 依据 docs/S5-plan.md §3.1：`sessionDir` 参数是"直接装 jsonl 的目录"，**不是** sessions 根。
+    // 这里**故意自己复刻一遍编码规则**、不复用生产的 `resolveSessionDir`：
+    // 断言要独立于被测实现，否则实现改了规则、断言跟着改，两边一起错（与 S1 的隔离 import 同理）。
+    // `create()` 之后路径就已确定（构造函数里走 `newSession()`），所以这时**文件还不存在**也应该有值。
+    const encodedCwd = `--${path.resolve(cwd).replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+    const expectedSessionsDir = path.join(sessionsRoot, encodedCwd);
+    const sessionFile = controller.session?.sessionManager?.getSessionFile();
+    check(
+      "会话路径在落盘前就已确定",
+      typeof sessionFile === "string" && sessionFile.length > 0,
+      String(sessionFile),
+    );
+    check(
+      "会话写在 pi 的 per-cwd 编码目录里（不是 sessions 根）",
+      typeof sessionFile === "string" && path.dirname(sessionFile) === expectedSessionsDir,
+      `期望 ${expectedSessionsDir}｜实际 ${typeof sessionFile === "string" ? path.dirname(sessionFile) : "(无)"}`,
+    );
+
     // ---------------------------------------------------- 1. 一轮对话 + 流式中重开面板
     messages.length = 0;
     deltasSeen = 0;
@@ -167,6 +187,13 @@ async function main() {
     liveIdAtFirstDelta = "";
     await controller.prompt("请写一段 150 字左右的中文介绍，主题是海洋。", "auto");
     const view = collect();
+    check(
+      "第一轮回复后文件真的落在同一个目录（路径不漂）",
+      typeof sessionFile === "string" &&
+        fs.existsSync(sessionFile) &&
+        path.dirname(sessionFile) === expectedSessionsDir,
+      String(sessionFile),
+    );
     const assistants = view.byKind("assistant");
     check("upsert 之后只剩一个 assistant 节点（N1 回归）", assistants.length === 1, JSON.stringify(view.order));
     check("最终文本非空（不是空壳）", textOf(assistants[0]).length > 20, JSON.stringify(textOf(assistants[0]).slice(0, 40)));
@@ -213,7 +240,7 @@ async function main() {
     let streamFrames = 0;
     // 用一个独立的控制器实例，理由：这一组要单独量测消息帧数与字节数。
     const streamController = new SessionHostController({
-      pi, cwd, agentDir, sessionsDir,
+      pi, cwd, agentDir, sessionsRoot,
       keys: { listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {} },
       uiContext: createSelfTestUIContext(log),
       log,
@@ -496,7 +523,7 @@ async function main() {
         "utf8",
       );
       const second = new SessionHostController({
-        pi, cwd, agentDir: agentDir2, sessionsDir: path.join(root, "sessions2"),
+        pi, cwd, agentDir: agentDir2, sessionsRoot: path.join(root, "sessions2"),
         keys: { listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {} },
         uiContext: createSelfTestUIContext(log),
         log,

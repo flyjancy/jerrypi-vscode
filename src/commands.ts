@@ -10,6 +10,7 @@ import type { SessionHostController } from "./pi/controller";
 import { loadPi } from "./pi/loader";
 import { createApiKeyStore, DEFAULT_PROVIDER, injectApiKey, SUGGESTED_PROVIDERS } from "./pi/runtime";
 import { runSelfTest } from "./pi/selftest";
+import { workspaceCwd } from "./host/workspace";
 
 const CUSTOM_PROVIDER = "其他（手动输入 provider id）";
 
@@ -41,6 +42,8 @@ export function registerCommands(
           extensionVersion: String(context.extension.packageJSON.version ?? "0.0.0"),
           vscodeVersion: vscode.version,
           agentDir: module.getAgentDir(),
+          // T10/T11/T12 必需：它们对比的是"真实 cwd 的会话目录"，见 SelfTestOptions.cwd 的注释
+          cwd: workspaceCwd().cwd,
           keys,
           sink: output,
         });

@@ -13,6 +13,11 @@
 src/**
 scripts/**
 docs/**
+# 仓库自己的开发用 pi 项目设置（被 git 跟踪，但不是扩展的一部分）：
+# pi 的项目级设置只从**工作区 cwd** 下的 .pi/ 读，从扩展目录读不到它，
+# 所以进包只是死重。dfbac0f（2026-09-13 19:11）加了它之后包里多出一个文件
+# （338 → 339），S5 第 1 步顺手排除（见 docs/S5-plan.md §11）。
+.pi/**
 esbuild.mjs
 tsconfig*.json
 PLAN.md
