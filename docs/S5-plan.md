@@ -543,7 +543,7 @@ export function formatSessionTime(then: Date, now: Date): string;               
 | R6 | 我们改动语义后，`scripts/controller-check.mjs` / `selftest.ts` 的临时目录**仍然用旧写法** → 测试全绿但产品是坏的 | D2 的重命名强制编译失败 + §6 里"断言必须走 `resolveSessionDir`" |
 | R7 | 版本漂移：`agent-session-runtime.js` 的 `switchSession` 将来改成 `open(path, sessionDir)`（不再用父目录） | 不依赖它：我们的列表只含当前目录，且 D6 的重放断言会在行为变化时先红 |
 | R8 | **多个写者共用同一个 `.jsonl`**（评审 S5）：两个 VS Code 窗口开同一个文件夹、或面板与终端 `pi` 同时在场 —— D4 会让它们接管同一个文件；`_persist` 是 `appendFileSync`，各自的 `leafId` 在内存里独立 → 文件里长成两条交错的支 | 不改设计（避开它就得放弃与 CLI 互通，那是 G3）；但**说清楚**：① README 记一条"同一个项目的会话不要两边同时写"；② §7 动作② 指示用户跑完 `pi` 后**重新选一次会话**再接着打字；③ 风险点上加一句：旧版本会话文件被 `migrateToCurrentVersion` 触发 `_rewriteFile()`（`session-manager.js:677`，`openSync(…, "w")`）时**会真的覆盖**另一侧的追加 —— 所以"同时在场且版本不同"是最坏组合。**评审 S4 提醒还漏了最便宜的一档（检测，而不是加锁）**：记下该 `.jsonl` 的 `size+mtime`，在下一次 `prompt` 前比一次，变了就提醒"这个会话被另一个写者改过，建议重新选一次" —— 一次 `statSync` 的成本，正好把②那条人工纪律变成程序能提醒的事。**S5 不做，记为候选（写进本表就是不让 A9 看起来在回避它）** |
-| R10 | （评审 N6）Windows 的盘符大小写：`workspace.ts:16` 用 `folder.uri.fsPath`（实测 VS Code 给小写 `c:\…`），CLI 的 `process.cwd()` 通常大写；`sessionCwdMatches` 是**严格字符串比较**（`session-manager.js:393-394`） | 今天的默认 agentDir 下我们**不受影响**（`filterCwd` 为 false，见 D1）—— 但**S6 一旦允许自定义 agentDir，`filterCwd` 就变成 true**，CLI 写的会话会被整批过滤掉。所以：写进风险表 + §8 W0 的期望里点名，并在 D1 的实现里加一条注释（“这个参数将来会变成过滤器”） |
+| R10 | （评审 N6）Windows 的盘符大小写：`workspace.ts:16` 用 `folder.uri.fsPath`（**W0 实测**：VS Code 给小写 `c:\…`，而 `os.tmpdir()` 是 `C:\…` —— 同一台机器上两种写法都存在），CLI 的 `process.cwd()` 通常大写；`sessionCwdMatches` 是**严格字符串比较**（`session-manager.js:393-394`） | 今天的默认 agentDir 下我们**不受影响**（`filterCwd` 为 false，见 D1）—— 但**S6 一旦允许自定义 agentDir，`filterCwd` 就变成 true**，CLI 写的会话会被整批过滤掉。所以：写进风险表 + §8 W0 的期望里点名，并在 D1 的实现里加一条注释（“这个参数将来会变成过滤器”） |
 
 ---
 
@@ -1000,7 +1000,20 @@ typecheck ✅｜`npm run self-test` 9/9｜`check:controller` **81/81**（+2：R9
 1. **"原会话会被中断，但是恢复回去还在被中断的样子"** → 无头复现（探针 + 把重放快照喂给真 webview）证明**重放没有 bug**：那三行（`✗ bash` / 排队的 `s` / `This operation was aborted`）是 pi 自己对一次中止的**忠实记录**。真该改的是确认框文案 —— 已补上"排队中的消息也会一并被处理"。
 2. **输入法拼音回车被当成发送** → 真 bug（`keydown` 没有 `isComposing` 守卫），已修 + 4 条断言。
 
-**Windows（W0/W1）—— ⏳ 待用户回报**（0.1.7 已上传 Marketplace 并核验）
+**Windows（W0/W1）—— ✅ PASS（2026-09-13，0.1.7 从 Marketplace 装）**
+
+| 项 | 结果 |
+| --- | --- |
+| W0 `Pi: Run Self-Test` | **`GATE PASS`：13 PASS / 0 FAIL / 1 SKIP**（`T12 SKIP E_NO_PI` 是预期的 —— 那台机器没有 `pi`）。T10/T11 在 Windows 路径上**都过**：`ours==pi：C:\Users\fengrui\.pi\agent\sessions\--c--Users-fengrui-Desktop-test-jerrypi--`、`pi 的 list(cwd) 看到了它` |
+| W1 重启 VS Code → 点一次会话列表 | ✅ 面板**自动**接过上一会话；列表里有刚聊的、选中后转写换成那个、**能直接打字** |
+| 目标机上的新布局 | Output 里那行 `[controller] 会话文件：C:\Users\fengrui\.pi\agent\sessions\--c--Users-fengrui-Desktop-test-jerrypi--\…jsonl` —— **第 1 步的修复在真机上生效**（新布局，不再是平铺） |
+
+**W0 里顺带得到的一条 R10 证据**（评审 N6 提过、这次实测到了）：同一台机器上
+VS Code 给的工作区路径是**小写盘符** `c:\Users\fengrui\Desktop\test-jerrypi`（→ 编码成 `--c--…--`），
+而 `os.tmpdir()` 给的是**大写** `C:\Users\…\AppData\Local\Temp\…`（→ `--C--…--`）。
+两个都对（T10/T11 各自与自己那侧一致），但**若将来同一条路径出现两种写法**，
+`sessionCwdMatches` 的严格字符串比较会把会话滤掉 —— 那正是 R10 记的、S6 允许自定义 agentDir
+之后才会咬人的窗口。**今天不影响用户**：受限机上没有 `pi`，"面板 ↔ CLI 互通"在那台机器上本来就无从谈起。
 
 ### 12.4 已知未覆盖
 
