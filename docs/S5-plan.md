@@ -949,12 +949,69 @@ typecheck ✅｜`npm run self-test` 9/9｜`check:controller` **81/81**（+2：R9
 
 ## 12. 实施与验收结果
 
-### 12.1 自动检查
+### 12.1 自动检查（**全部绿**，2026-09-13）
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck`（两套 tsconfig） | ✅ |
+| `npm run self-test` | **9/9**（其中 protocol 112 / render 114 / tool-text 87 / dom 75 / host 57） |
+| `npm run check:controller`（真模型，不进 CI） | **82/82** —— 含**一条真 spawn `pi -c -p` 的 CLI 互通检查**（判据是"会话文件有没有被 CLI 继续写"，不看模型措辞） |
+| `Pi: Run Self-Test`（无头跑过，也由用户在 Windows 上跑） | **14 项（12 gating + T5c/T12 advisory）GATE PASS** |
+| `npm run package` + `check-vsix` | **338 文件 / 5.75 MB**（门禁 30 MB） |
+| Marketplace 核验 | `node scripts/compare-vsix.mjs 0.1.7` → **338 个文件逐个字节相同**，连整体 `.vsix` 字节也相同（6,025,710 字节 / `04c60b7b…`）；留档 `~/jerrypi-releases/jerrypi-0.1.7.vsix` |
+
 ### 12.2 提交切分（实际）
+
+| 提交 | 内容 |
+| --- | --- |
+| `fd10b14` | fix: write sessions into pi's per-cwd session dir (S5 step 1) |
+| `c92e6a2` | docs: fix STATUS typos and record the step-1 workspace state |
+| `d1245ae` | docs: put Mac acceptance before the release in the S5 step order |
+| `acca026` | docs: add AGENTS.md and a pi-traps index; keep both out of the VSIX |
+| `96251ae` | docs(s5): cut the manual acceptance work from 3+4 to 2+2 |
+| `6714455` | docs: merge the two PLAN files into docs/PLAN.md (user decision A) |
+| `80a00c3` | docs: stop writing progress into PLAN.md and drop the volatile hash from STATUS |
+| `77196c1` | chore(media): add two jerrypi logo candidates for later selection |
+| `cf21dbe` | feat(sessions): resume the last session on start, replay after a swap (S5 step 2) |
+| `048692d` | feat(sessions): confirm before switching while busy, readable errors (S5 step 3) |
+| `7113d1d` | feat(sessions): session list, clickable session name, protocol v4 (S5 step 4) |
+| `fad94fc` | docs: README + PLAN corrections for sessions, and the R9 diagnostic (S5 step 5) |
+| `55dbbc2` | chore(release): bump to 0.1.7, package, and make F5 useful for acceptance (S5 step 6) |
+| `bfd9116` | fix(ui): spell out the full consequence in the busy-switch confirm dialog |
+| `1887099` | docs: record the user's decision (keep the abort record faithful) and sync README |
+| `fb6b179` | fix(webview): do not send on Enter while an IME composition is active |
+| `7fe2eed` | fix(sessions): canonicalize the cwd so the CLI and the panel agree |
+| `4c985fe` | docs(status): refresh the entry point after the Mac acceptance |
+
+（另外 `77196c1` 是**用户**自己提交的 logo 候选素材，不属于 S5；两个候选已从 VSIX 里排除，见 §11 的 6-2。）
+
 ### 12.3 人工验收
+
+**Mac（用户 2 个动作）—— ✅ PASS（2026-09-13）**
+
+| 项 | 结果 |
+| --- | --- |
+| 动作① 真机交互（新建 → 忙时切会话 → 取消/继续 → 空闲时切到另一个会话 → 直接打字） | ✅ 通过。用户同时报回两个问题，都已处理（见下） |
+| 动作② 版式（窄栏下 `会话名 · 模型 · 等级 · 0.0%/1.0M` 不换行/不挤压） | ✅ 通过 |
+| 顺手看：启动是否自动接过上一会话 | ✅（面板起来就显示上一段对话） |
+
+**用户在验收期报回的两个问题**（都已查证 + 修 + 加断言，详见 §11 的"第 6 步 · Mac 验收期"）：
+
+1. **"原会话会被中断，但是恢复回去还在被中断的样子"** → 无头复现（探针 + 把重放快照喂给真 webview）证明**重放没有 bug**：那三行（`✗ bash` / 排队的 `s` / `This operation was aborted`）是 pi 自己对一次中止的**忠实记录**。真该改的是确认框文案 —— 已补上"排队中的消息也会一并被处理"。
+2. **输入法拼音回车被当成发送** → 真 bug（`keydown` 没有 `isComposing` 守卫），已修 + 4 条断言。
+
+**Windows（W0/W1）—— ⏳ 待用户回报**（0.1.7 已上传 Marketplace 并核验）
+
 ### 12.4 已知未覆盖
 
----
+| 项 | 为什么 | 记在哪 |
+| --- | --- | --- |
+| 滚动行为（贴底跟随 / 向上滚不被拽回） | 无头 DOM 没有排版引擎 | S4 §12.4 |
+| `>70%` / `>90%` 的**颜色** | 只在纯函数层断言，没在真机构造过 70% 上下文 | S4 §12.4 |
+| **多写者**（两个窗口 / 面板 + 终端同时写同一个会话） | 只在测试里"顺带发生过"（§11 的 2-5），真机上没刻意造；检测方案记为候选（R8） | §5 的 R8 · STATUS 的欠账 |
+| **符号链接路径**下的会话目录 | 新增了回归测试（`controller-check` 里那条真 spawn 刻意用非物理 cwd），但只在 macOS 的 `/var → /private/var` 上验过；Windows 盘符大小写另算（R10，W0 里顺手看） | §5 的 R2 / R10 |
+| **旧位置**（≤0.1.6 平铺 / 符号链接写法）的会话不会被自动搬 | 刻意的：不替用户移动历史文件，只给恢复命令 | §4 D3 · README 已知限制 |
+| 「真·后台并行」（切走让旧会话继续跑） | 划出 S5（要"多会话宿主"），记为后续候选 | §2 · §4 D7 |
 
 ## 13. 待用户拍板（**2026-09-13 已全部拍板：Q1–Q6 均按默认**）
 
