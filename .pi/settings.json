@@ -1,0 +1,6 @@
+{
+  "compaction": {
+    "reserveTokens": 65536,
+    "keepRecentTokens": 100000
+  }
+}

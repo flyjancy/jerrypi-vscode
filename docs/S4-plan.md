@@ -647,7 +647,40 @@ package：338 文件 / 5.74 MB（19% 的 30MB 门禁）
 （两行说的是同一件事，红色那行已经把原因说全）。配 5 条 render-check 断言
 （toolUse 不补、aborted 写"已被中止"、有错误信息时不补、错误信息本身仍显示）。
 
-**Windows（W0–W2）**：待做。
+**Windows —— ✅ PASS**
+
+| 项 | 结果 |
+| --- | --- |
+| W0 `Pi: Run Self-Test` | ✅ **GATE PASS 11/11**（0.1.6 / win32 / node 24.18.1）。T5b `abortBash 93ms cancelled=true`、T1 列出 3 个可用模型（`deepseek-v4-flash` / `-flash-vision-exp` / `-pro`）、`[controller] 模型：openai/gpt-5.5 → 已改为 deepseek/deepseek-v4-flash（指定模型，不用 pi 的默认）` |
+| W1 版式 + 状态栏 + 切模型 | ✅ 一行放得下、不换行、等级与百分比没被挤掉；切完直接打字有焦点（含 Esc 取消后）；右下状态栏同步且可点；重开 webview 后仍显示所选模型 |
+| W2 切模型后继续对话 | ✅ 回复"我当前运行的模型是 deepseek 提供的 `deepseek-v4-flash-vision-exp`（推理等级 high）"，与该行显示一致；**窄栏（半边侧边栏）下也没换行** |
+| W3 中止 | ✅ `第 1–10 行` 保留 + `Command aborted` + 红字 `This operation was aborted`；**`（本次回复没有内容：error）` 已不再出现** |
+
+**发布**：0.1.6 上传到 Marketplace 后用 `scripts/compare-vsix.mjs 0.1.6` 核对 ——
+**338 个文件逐个字节相同**（这次连整体 `.vsix` 字节都相同，6,015,225 字节 /
+`1385277c…`）；留档 `~/jerrypi-releases/jerrypi-0.1.6.vsix`。tag `v0.1.6`。
+
+### 12.5 用户提出的疑问：Windows 的模型列表比 Mac 少一个
+
+Windows 的列表是 3 个（`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`、
+`deepseek-v4-pro`），Mac 是 4 个（多一个 `deepseek-flash`）。
+
+**结论：这是两台机器上 pi 自己的数据差异，不是扩展的行为差异。**
+
+- 面板与自测**都直接用 `getAvailable()`**，零硬编码、零过滤；host-check 有一条断言锁
+  "QuickPick 的 items 与 `getAvailable()` 顺序一致"。
+- 内置 pi **会读 `<agentDir>/models-store.json`**（pi 自己维护的模型目录缓存；
+  在 `pi-runtime/dist/bundle/chunks/chunk-JVUZSMYM.js` 里可见引用）。
+- Mac 的 store 里已有新名 `deepseek-flash`（+ `deepseek-v4-pro`），所以 4 个；
+  Windows 那份 store 里没有，所以 3 个。用户的 `models.json` 注释也印证了这层关系：
+  "`deepseek-v4-flash`：旧模型名，官方已下线，但请求仍由 DeepSeek-V4.1-Flash 提供服务"。
+- 想让 Windows 跟上：在那台机器上跑一次 pi CLI（会刷新 store），或把 Mac 的
+  `models-store.json` 复制过去。已写进 README 的已知限制（一句话，避免下一个人也困惑）。
+
+**版本字节可复现性**：本次 0.1.6 的 Marketplace 下载与本地构建**整体字节相同**，
+与 0.1.5 那次"只有 zip mtime 不同"不一致 —— 说明 zip 内 mtime 是否相同取决于
+构建与上传之间的时间是否跨秒。`compare-vsix.mjs` 仍然按内容比对（逐文件 SHA-256），
+不依赖这一点。
 
 ### 12.4 已知未覆盖
 
