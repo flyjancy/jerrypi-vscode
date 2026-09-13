@@ -812,3 +812,48 @@ M1–M9 已由用户逐项确认（截图见会话记录）。**M10–M14 未逐
 
 **风险**：若那台机器上真出问题，修完要再发一版（0.1.6）—— 这个代价我们付过 4 次
 （0.1.1–0.1.4），是可接受的。
+
+### 12.10 Windows 验收结果（0.1.5，win32，node 24.18.1，VS Code 1.137.0）
+
+**W0 `Pi: Run Self-Test` → `GATE PASS`（11 PASS / 0 FAIL / 0 SKIP）** ——
+T1–T9 全过，含 T5b（abortBash 96ms 返回，cancelled=true）、T5c（工具调用 2061ms 结束）、
+T8（worker 往返 1000×1000）、T9（newSession / switchSession）。
+**结论：S3 对 `serialize.ts`/`controller.ts` 的改动没有破坏受限机上的运行路径。**
+
+| 项 | 结果 |
+| --- | --- |
+| W1 基本形态 | ✅ 有样式、流式、markdown 正常 |
+| W2 流式 + 运行中点路径 | ✅ 流式正常；**bash 卡片没有路径链接**（见下） |
+| W3 中止不丢正文 | ✅ 卡片变 `✗`、已流出的行仍在、状态回「空闲」 |
+| W4 截断 + 完整输出路径 | ✅（Windows 路径形态，`C:\…\AppData\Local\Temp\pi-bash-*.log`） |
+| W5 重开 + 点历史路径 | ✅ |
+| W6 XSS | ✅ 不弹窗，原样显示为文字 |
+
+**W2 的发现（我的测试说明书写错了，不是代码错）**：
+W2 让用户"点运行中卡片标题里的蓝色路径"——但那条命令是 **bash**，
+而 **bash 卡片按设计就没有路径**（D7：只从 `args.path` 与 `details.fullOutputPath` 取路径，
+**绝不正则 bash 命令**）。用户的判断"这一步本来也不该有链接"**是对的**，
+实测反而确认了 D7 生效。
+
+连带结论：**M14（运行中的卡片点路径）在真机上是不可达的场景** ——
+带路径的工具（read/write/edit）都是亚秒级完成，抓不到"运行中"那一瞬；
+bash 虽然能跑很久但没有路径。所以 M14 由两层自动断言守着（源码级：两处铸造路径；
+DOM 级：pending 行渲染可点链接且点击发出 `openFile`），**Manual 版本标注为不可达**。
+
+**W3 的发现（措辞错，不是布局错）**：我写的是"**底部**状态行回空闲"，
+实际状态行在**面板最上面**（`webviewHtml.ts:59` 的 `#status` 在 `#transcript` 之前）。
+队列栏（`#queue`，第 61 行）确实在**输入框上方**。这是 S2 定的布局并已被验收过；
+用户的备注只是指出与我写的"底部"不符。**已确认无需改动**（对齐 pi 的取舍见 §12.11）。
+
+### 12.11 Marketplace 产物核验（0.1.5）
+
+```
+Marketplace 下载 5961264 B（gzip）→ 解压 6009856 B
+SHA-256: 5e03d0fc2b0323cc29bd47f0be272b1a3e6bdaf9b188005afa430241872be5a0
+本地构建 SHA-256: 同一个值
+```
+**⚠️ 教训**：`curl` 直接下载 Marketplace 的 vsix 拿到的是 **gzip 流**
+（响应头不是 `Content-Encoding`，所以 curl 不会自动解压；`file` 会显示
+`gzip compressed data … original size modulo 2^32 6009856`）。
+0.1.5 一开始就因此被判"不一致、疑似上传了旧包"，虚惊一场。
+**以后核对发版产物：先 `gunzip -c`，或者直接看 `file` 输出的 original size。**
