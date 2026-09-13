@@ -114,6 +114,9 @@ interface SessionView {
   getSteeringMessages(): readonly string[];
   getFollowUpMessages(): readonly string[];
   setModel(model: never, options?: { persist?: boolean }): Promise<void>;
+  setThinkingLevel(level: never, options?: { persist?: boolean }): void;
+  getAvailableThinkingLevels(): readonly string[];
+  modelRuntime: { getAvailable(providerId?: string): Promise<readonly unknown[]> };
 }
 
 export class SessionHostController {
@@ -121,6 +124,24 @@ export class SessionHostController {
   private host: SessionHost | undefined;
   private ensuring: Promise<void> | undefined;
   private disposed = false;
+
+  /**
+   * 上一次广播出去的 meta 的指纹（去重）。
+   *
+   * `message_end` 每条消息都来（含工具结果），不做去重会让前端每轮重绘十几次。
+   * **快照之后必须清掉**（同 `lastBusy`）：否则重开面板时第一条相同的 meta 会被
+   * 当成重复而丢掉，面板就会一直显示旧模型。
+   */
+  private lastMeta: string | undefined;
+  /**
+   * 用户在**面板里**选过的模型（S4 的 D15）。
+   *
+   * 只活在内存里：一旦落盘（`workspaceState`/`globalState`）它就是第三份"默认模型"
+   * 设置，S6 得同时和 pi 的 settings 与它对账。规则写死为
+   * **"你在面板里选过模型，本窗口就一直用它，直到你再换或重开窗口"** ——
+   * 面板里点的那一下是用户最近、最明确的一次表态。
+   */
+  private panelModel: unknown;
 
   /** 进行中的那条 assistant 消息的 id（唯一权威，见文件头注释 2）。 */
   private activeAssistantId: string | undefined;
@@ -225,11 +246,30 @@ export class SessionHostController {
       // 面板不钉模型：用户选过就听用户的（见 alignPanelModel 的注释）。
       // 挂在 onRebind 上是因为 `newSession()` 之后 pi 会重新解析模型，建会话时做一次不够。
       onRebind: async (session) => {
+        // D15：面板里选过的模型**优先**（用户在面板点的那一下是最近、最明确的表态）。
+        // 凭据可能在两次会话之间失效，所以这里要真的试一次：失败就退回下面的兜底，
+        // 并且**要告诉用户**（否则看起来像"我选的模型被吞了"）。
+        if (this.panelModel !== undefined) {
+          try {
+            await session.setModel(this.panelModel as never);
+            this.options.log.appendLine(
+              `[controller] 模型：沿用你在面板里选的（${this.sessionMeta(session).model}）`,
+            );
+            this.publishMeta();
+            return;
+          } catch (error) {
+            const text = error instanceof Error ? error.message : String(error);
+            this.options.log.appendLine(`[controller] 面板里选的模型现在不可用：${text}`);
+            this.notice("warn", `上次选的模型现在不可用，已回退：${text}`);
+            this.panelModel = undefined;
+          }
+        }
         const detail = await alignPanelModel(
           session as unknown as Parameters<typeof alignPanelModel>[0],
           modelRuntime as { getAvailable(): Promise<readonly unknown[]> },
         );
         this.options.log.appendLine(`[controller] 模型：${detail}｜cwd=${cwd}｜agentDir=${agentDir}`);
+        this.publishMeta();
       },
     });
     this.host = host;
@@ -265,7 +305,10 @@ export class SessionHostController {
     // 用同一个回调覆盖所有路径：pi 在**接受**（入队或开始处理）时回调 true。
     // 不能等 `prompt()` 的 promise —— 它要到整轮结束才 resolve，队列里的消息更久。
     const preflightResult = (success: boolean): void => {
-      if (success) this.emit({ type: "promptAccepted" });
+      if (!success) return;
+      this.emit({ type: "promptAccepted" });
+      // 用户消息一进 `messages`，`getContextUsage()`（= estimateContextTokens）就变了。
+      this.publishMeta();
     };
     if (session.isStreaming) {
       await session.prompt(text, { streamingBehavior, preflightResult });
@@ -351,6 +394,66 @@ export class SessionHostController {
       contextWindow: 0,
       contextUsage: null,
     };
+  }
+
+  /**
+   * 广播一次元信息（去重由 `emit()` 负责）。
+   *
+   * 刷新点（S4 的 D5）：`message_end`、`tool_execution_end`、`agent_settled`、
+   * `compaction_start` / `compaction_end`、用户消息被接受、
+   * `thinking_level_changed`、切换模型/等级之后、会话重建之后。
+   * **不轮询**：上下文用量只在上述时刻变化。
+   */
+  private publishMeta(): void {
+    if (this.host === undefined) return;
+    this.emit({ type: "meta", meta: this.sessionMeta(this.view()) });
+  }
+
+  /** 面板要用的"当前模型/等级"信息（给宿主的 QuickPick 用，避免它摸 session）。 */
+  pickerContext(): {
+    model: string;
+    thinkingLevel: string;
+    supportsThinking: boolean;
+    levels: readonly string[];
+  } {
+    if (this.host === undefined) {
+      return { model: "", thinkingLevel: "off", supportsThinking: false, levels: [] };
+    }
+    const session = this.view();
+    return {
+      model: this.sessionMeta(session).model,
+      thinkingLevel: this.sessionMeta(session).thinkingLevel,
+      // **顺序不能反**：`supportsThinking()` 为 false 时（含"还没有模型"）
+      // `getAvailableThinkingLevels()` 会返回全部 7 档假数据。
+      supportsThinking: session.supportsThinking(),
+      levels: session.supportsThinking() ? [...session.getAvailableThinkingLevels()] : [],
+    };
+  }
+
+  /** 可用模型列表（已按有效凭据过滤）。宿主用它填 QuickPick。 */
+  async listAvailableModels(): Promise<readonly unknown[]> {
+    await this.ensure();
+    if (this.host === undefined) return [];
+    return this.view().modelRuntime.getAvailable();
+  }
+
+  /**
+   * 面板里选了一个模型：记住它（D15）、切过去、广播 meta。
+   *
+   * `setModel` 是 async 且会 `checkAuth`，失败时**不广播**（别把半截状态推给前端）。
+   */
+  async applyPanelModel(model: unknown): Promise<void> {
+    const session = this.view();
+    await session.setModel(model as never);
+    this.panelModel = model;
+    this.publishMeta();
+  }
+
+  /** 面板里选了一个思考等级。pi 会 clamp，所以**回读**生效值。 */
+  applyThinkingLevel(level: string): void {
+    const session = this.view();
+    session.setThinkingLevel(level as never);
+    this.publishMeta();
   }
 
   /**
@@ -447,6 +550,8 @@ export class SessionHostController {
     // 服务端的 lastBusy 仍是上一次的值 → 之后真正的 busy:false 被当成重复而丢掉"，
     // 面板就会一直卡在"生成中…"直到下一次状态变化。
     this.lastBusy = undefined;
+    // 同 `lastBusy`：快照已经把 meta 一起给了前端，因此"上次发过的 meta"必须忘掉。
+    this.lastMeta = undefined;
     return {
       items,
       truncated,
@@ -483,6 +588,8 @@ export class SessionHostController {
         return;
       case "message_end":
         this.onMessageEnd(event.message as { role?: string });
+        // 用量通常在这里变（assistant 的 usage 落地）。
+        this.publishMeta();
         return;
       case "tool_execution_start":
         this.onToolExecutionStart(event as unknown as { toolCallId: string; toolName: string; args: unknown });
@@ -492,6 +599,7 @@ export class SessionHostController {
         return;
       case "tool_execution_end":
         this.onToolExecutionEnd(event as unknown as { toolCallId: string });
+        this.publishMeta();
         return;
       case "queue_update":
         this.emit({ type: "queue", steering: [...event.steering], followUp: [...event.followUp] });
@@ -502,6 +610,8 @@ export class SessionHostController {
       case "agent_settled":
         this.settlePendingTools();
         this.emit({ type: "busy", busy: false });
+        // 兜底对账：一整轮结束之后用量一定变了。
+        this.publishMeta();
         return;
       case "agent_end": {
         const willRetry = (event as { willRetry?: boolean }).willRetry === true;
@@ -510,12 +620,20 @@ export class SessionHostController {
       }
       case "compaction_start":
         this.notice("info", "上下文压缩中…");
+        this.publishMeta();
         return;
       case "compaction_end": {
         const aborted = (event as { aborted?: boolean }).aborted === true;
         this.notice("info", aborted ? "上下文压缩已中止" : "上下文压缩完成");
+        // 压缩后 `percent` 会变成 null（pi 的 `?` 就是为这个状态准备的）——
+        // 不广播的话面板会一直显示压缩前的旧数字。
+        this.publishMeta();
         return;
       }
+      case "thinking_level_changed":
+        // pi 自己也会改等级（clamp、`/model` 之类），只信事件。
+        this.publishMeta();
+        return;
       case "auto_retry_start": {
         const attempt = (event as { attempt?: number; maxAttempts?: number }).attempt ?? 0;
         const max = (event as { maxAttempts?: number }).maxAttempts ?? 0;
@@ -526,8 +644,8 @@ export class SessionHostController {
         this.notice("info", `自动重试${(event as { success?: boolean }).success === true ? "成功" : "失败"}`);
         return;
       default:
-        // 其余事件（entry_appended / session_info_changed / thinking_level_changed /
-        // summarization_* / bash_execution_update）S2 不用，留给后续步骤。
+        // 其余事件（entry_appended / session_info_changed / summarization_* /
+        // bash_execution_update）暂不使用，留给后续步骤。
         return;
     }
   }
@@ -771,6 +889,11 @@ export class SessionHostController {
     return `live-${this.liveCounter}`;
   }
 
+  /** 宿主侧（选择器等）要往面板发一条提示时的入口。 */
+  notifyUser(level: "info" | "warn" | "error", text: string): void {
+    this.notice(level, text);
+  }
+
   private notice(level: "info" | "warn" | "error", text: string): void {
     this.noticeCounter += 1;
     // **必须**用 notice- 前缀：提示不是消息、没有下标，写成 msg-<length-1>
@@ -813,6 +936,11 @@ export class SessionHostController {
 
   private emit(message: ServerMessage): void {
     if (this.disposed) return;
+    if (message.type === "meta") {
+      const fingerprint = JSON.stringify(message.meta);
+      if (this.lastMeta === fingerprint) return;
+      this.lastMeta = fingerprint;
+    }
     if (message.type === "busy") {
       // busy 会从多个来源到达（乐观置位、agent_start、agent_settled、prompt 对账），
       // 同一个值重复发只是让前端白重绘一次。

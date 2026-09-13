@@ -39,15 +39,21 @@ function equal(name, actual, expected) {
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-tool-text-"));
 const outfile = path.join(tempDir, "toolText.mjs");
 await esbuild.build({
-  entryPoints: [path.join(REPO_ROOT, "src/shared/toolText.ts")],
+  // 一个 entry 打包两个模块：`format.ts` 的数字格式化也只在这里断言
+  // （S4 的 D14：新建一个脚本容易忘记挂进 self-test，CI 就根本不跑）。
+  entryPoints: [path.join(REPO_ROOT, "src/shared/toolText.ts"), path.join(REPO_ROOT, "src/shared/format.ts")],
   bundle: true,
   platform: "node",
   format: "esm",
   target: "node22",
-  outfile,
+  // 多 entry 必须用 outdir（esbuild 的硬要求）。注意 outdir 模式下 esbuild 默认输出 `.js`，
+  // 而临时目录里没有 package.json、Node 会把 `.js` 当 CJS → 必须显式要 `.mjs`。
+  outdir: tempDir,
+  outExtension: { ".js": ".mjs" },
   logLevel: "silent",
 });
 const toolText = await import(pathToFileURL(outfile).href);
+const format = await import(pathToFileURL(path.join(tempDir, "format.mjs")).href);
 
 // ------------------------------------------------------------ utf8Length
 console.log("[tool-text-check] utf8Length");
@@ -203,6 +209,35 @@ console.log("[tool-text-check] clipToolText");
     twice.clipped === true || twice.text.includes("已省略"),
     JSON.stringify(twice.text.slice(-40)),
   );
+}
+
+// ------------------------------------------------------------ formatTokens（S4 D14）
+// 这些值不是"看着像"写下来的，是直接跑 pi 的 footer.js 量出来的 —— 其中两个反直觉：
+// `999999 → "1000k"`（不是 1.0M）与 `9999 → "10.0k"`（不是 10k）。
+console.log("[tool-text-check] formatTokens");
+{
+  const cases = [
+    [0, "0"],
+    [999, "999"],
+    [1000, "1.0k"],
+    [9999, "10.0k"],
+    [10000, "10k"],
+    [999999, "1000k"],
+    [1000000, "1.0M"],
+    [9999999, "10.0M"],
+    [10000000, "10M"],
+  ];
+  for (const [input, expected] of cases) {
+    equal(`formatTokens(${input})`, format.formatTokens(input), expected);
+  }
+}
+
+console.log("[tool-text-check] formatContextUsage");
+{
+  equal("42.3% 带窗口", format.formatContextUsage(42.3, 1000000), "42.3%/1.0M");
+  equal("percent=null → ?/1.0M（**没有百分号**）", format.formatContextUsage(null, 1000000), "?/1.0M");
+  equal("窗口为 0 → 空串（调用方改显示未选择模型，不要 ?/0）", format.formatContextUsage(0, 0), "");
+  equal("percent=0 → 0.0%（不是 ?）", format.formatContextUsage(0, 1000000), "0.0%/1.0M");
 }
 
 console.log(`TOOL-TEXT-CHECK ${failures === 0 ? "OK" : "FAILED"} (${checks} checks)`);

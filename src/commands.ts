@@ -13,10 +13,17 @@ import { runSelfTest } from "./pi/selftest";
 
 const CUSTOM_PROVIDER = "其他（手动输入 provider id）";
 
+/** 选择器入口（由 ChatViewProvider 提供；命令面板与面板点击共用同一套逻辑）。 */
+export interface PickerCommands {
+  runModelPicker(fromPanel: boolean): Promise<void>;
+  runThinkingPicker(fromPanel: boolean): Promise<void>;
+}
+
 export function registerCommands(
   context: vscode.ExtensionContext,
   output: vscode.OutputChannel,
   controller?: SessionHostController,
+  pickers?: PickerCommands,
 ): void {
   const extensionPath = context.extensionUri.fsPath;
   const keys = createApiKeyStore(context);
@@ -94,6 +101,15 @@ export function registerCommands(
         const message = error instanceof Error ? error.message : String(error);
         void vscode.window.showErrorMessage(`jerrypi: 保存 API key 失败：${message}`);
       }
+    }),
+
+    vscode.commands.registerCommand("jerrypi.selectModel", async () => {
+      // 从命令面板发起：`fromPanel: false` —— 用户的焦点可能在编辑器里，**不要抢**。
+      await pickers?.runModelPicker(false);
+    }),
+
+    vscode.commands.registerCommand("jerrypi.selectThinkingLevel", async () => {
+      await pickers?.runThinkingPicker(false);
     }),
 
     vscode.commands.registerCommand("jerrypi.newSession", async () => {

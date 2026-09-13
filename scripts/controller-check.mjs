@@ -268,8 +268,17 @@ async function main() {
         `      · 量测（大输出）：${streamFrames} 帧 / ${(streamBytes / 1024).toFixed(1)} KB / ${bigMs}ms ` +
         `→ ${(streamBytes / 1024 / (bigMs / 1000)).toFixed(0)} KB/s；最终正文 ${Buffer.byteLength(textOf(bigRow0), "utf8")} 字节`,
       );
-      check("大输出：最终正文里能看到 pi 的截断脚注",
-        textOf(bigRow0).includes("Full output:"), JSON.stringify(textOf(bigRow0).slice(-100)));
+      // 这里的期望值在 S3 的 M5 之后**反了**：pi 会把
+      // `[Showing … Full output: <path>]` 写进正文，而我们另外渲染"已截断/完整输出"两行
+      // （照 pi 的 renderResult），所以序列化后的正文里**必须没有**这段脚注 ——
+      // 留着就是同一件事说三遍，而且它会占掉折叠预览 5 个名额里的 2 个。
+      // 第一版断言写的是"能看到脚注"，与 M5 的需求相反；它在 S3 之后再没绿过
+      // （实测在 fe3a659 上同样是红的 —— 是陈旧断言，不是回归）。
+      check("大输出：正文里**没有** pi 的重复脚注（我们另外渲染两行）",
+        !textOf(bigRow0).includes("Full output:"), JSON.stringify(textOf(bigRow0).slice(-100)));
+      check("大输出：正文确实被 pi 截断过（体积接近 50KB 上限）",
+        Buffer.byteLength(textOf(bigRow0), "utf8") > 40 * 1024,
+        String(Buffer.byteLength(textOf(bigRow0), "utf8")));
 
 
       messages.length = 0;
@@ -288,9 +297,18 @@ async function main() {
       let midSnapshot;
       let runningRow;
       const waitUntil = Date.now() + 25000;
+      // 轮询条件必须包含"**已经流出正文**"：pending 行在 `tool_execution_start`
+      // 就存在了，那时正文还是空的 —— 只等 pending 会在第一帧输出之前就命中，
+      // 于是下面"已流出的正文还在"偶发假红（实测出现过一次）。
       while (Date.now() < waitUntil) {
         midSnapshot = streamController.snapshot();
-        runningRow = midSnapshot.items.find((item) => item.kind === "tool" && item.pending === true);
+        runningRow = midSnapshot.items.find(
+          (item) =>
+            item.kind === "tool" &&
+            item.pending === true &&
+            typeof item.text === "string" &&
+            item.text.includes("中止行"),
+        );
         if (runningRow !== undefined) break;
         await sleepMs(250);
       }
@@ -359,8 +377,13 @@ async function main() {
         JSON.stringify(bigRow?.truncation ?? {}).length < 400,
         `len=${JSON.stringify(bigRow?.truncation ?? {}).length}`);
       check("截断：完整输出路径被保留", typeof bigRow?.fullOutputPath === "string" && bigRow.fullOutputPath.length > 0);
-      check("截断：正文尾部保留 pi 的脚注（我们的上限没有裁掉它）",
-        textOf(bigRow).includes("Full output:"), JSON.stringify(textOf(bigRow).slice(-120)));
+      // 同上：脚注必须**已经剥掉**（M5），但"完整输出"这个信息不能丢 ——
+      // 它在 `fullOutputPath` 里，由卡片自己渲染成可点路径（下一条断言）。
+      check("截断：正文里没有重复脚注，但完整输出路径仍在（M5 的两半）",
+        !textOf(bigRow).includes("Full output:") &&
+          typeof bigRow?.fullOutputPath === "string" &&
+          bigRow.fullOutputPath.length > 0,
+        JSON.stringify(textOf(bigRow).slice(-120)));
       check("截断：正文没有被我们自己的上限裁过", bigRow?.textTruncated === undefined);
 
       // 可点路径白名单（评审第 2 轮第 4、5 条）
@@ -490,6 +513,45 @@ async function main() {
           second.snapshot().model === "deepseek/deepseek-v4-flash-vision-exp", second.snapshot().model);
       } finally {
         await second.dispose().catch(() => {});
+      }
+    }
+
+    // ---------------------------------------------------- 7. 元信息（S4）
+    {
+      const meta = controller.snapshot().meta;
+      check("快照里带 meta 且形状正确（v3 的必填字段）",
+        typeof meta.model === "string" && meta.model !== "" &&
+          typeof meta.provider === "string" && meta.provider !== "" &&
+          typeof meta.thinkingLevel === "string" &&
+          meta.supportsThinking === true &&
+          meta.contextWindow > 0 &&
+          meta.contextUsage !== null &&
+          typeof meta.contextUsage.percent === "number",
+        JSON.stringify(meta));
+      check("等级是 pi 回读出来的生效值（不是我们设进去的）",
+        ["off", "low", "high", "max"].includes(meta.thinkingLevel), meta.thinkingLevel);
+
+      // 注意：`byKind()` 过滤的是 **ChatItem 的 kind**（user/assistant/tool/notice），
+      // 协议消息类型要用 `messages.filter(type)` —— 第一版这里查错了维度，恒为 0。
+      const metaMessages = messages.filter((m) => m.type === "meta");
+      check("一整轮对话期间广播过 meta（用量随消息落地变化）", metaMessages.length > 0, String(metaMessages.length));
+
+      // D15：**面板里选过的模型，本窗口内一直是它** —— 包括 `newSession` 之后。
+      // 没有这条记忆的话，onRebind → alignPanelModel 会把它改回我们的偏好（flash）。
+      await controller.newSession();
+      const models = await controller.listAvailableModels();
+      const vision = models.find((m) => m.id === "deepseek-v4-flash-vision-exp");
+      if (vision === undefined) {
+        console.log("  SKIP 面板模型记忆（D15）：本机没有 flash-vision-exp");
+      } else {
+        await controller.applyPanelModel(vision);
+        check("面板里选模型后 meta 立刻更新",
+          controller.snapshot().meta.model === "deepseek/deepseek-v4-flash-vision-exp",
+          controller.snapshot().meta.model);
+        await controller.newSession();
+        check("D15：新建会话之后**仍然**是面板里选的那个模型（不被兜底改回去）",
+          controller.snapshot().meta.model === "deepseek/deepseek-v4-flash-vision-exp",
+          controller.snapshot().meta.model);
       }
     }
   } finally {

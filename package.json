@@ -56,6 +56,16 @@
         "command": "jerrypi.newSession",
         "title": "New Session",
         "category": "Pi"
+      },
+      {
+        "command": "jerrypi.selectModel",
+        "title": "Select Model",
+        "category": "Pi"
+      },
+      {
+        "command": "jerrypi.selectThinkingLevel",
+        "title": "Select Thinking Level",
+        "category": "Pi"
       }
     ],
     "viewsContainers": {

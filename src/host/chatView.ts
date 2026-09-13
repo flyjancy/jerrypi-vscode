@@ -16,6 +16,8 @@ import type { SessionHostController } from "../pi/controller";
 import { PROTOCOL_VERSION, type ClientMessage, type ServerMessage } from "../shared/protocol";
 import { isExternalUrlAllowed } from "../shared/urlPolicy";
 import { buildWebviewHtml, createNonce } from "./webviewHtml";
+import { pickModel, pickThinkingLevel, type PickerBridge } from "./modelPicker";
+import { MetaStatusBar } from "./statusBar";
 
 export const CHAT_VIEW_ID = "jerrypi.chat";
 
@@ -28,13 +30,46 @@ export interface ChatViewOptions {
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private readonly disposables: vscode.Disposable[] = [];
+  private readonly statusBar = new MetaStatusBar();
 
   constructor(private readonly options: ChatViewOptions) {}
 
   /** 把控制器的协议消息送到面板（面板不在时静默丢弃：重放时会给全量状态）。 */
   readonly post = (message: ServerMessage): void => {
+    // 状态栏跟着 meta 走。**不额外建会话**：第一次 update 才 createStatusBarItem，
+    // 而 meta 只有 controller 已经 ensure 之后才会来。
+    if (message.type === "state" || message.type === "meta") {
+      this.statusBar.update(message.meta);
+    }
     void this.view?.webview.postMessage(message);
   };
+
+  /** 选择器需要的桥（选择器本身不认识 session）。 */
+  private pickerBridge(): PickerBridge {
+    const { controller } = this.options;
+    return {
+      currentModelId: () => controller.pickerContext().model,
+      supportsThinking: () => controller.pickerContext().supportsThinking,
+      currentLevel: () => controller.pickerContext().thinkingLevel,
+      levels: () => controller.pickerContext().levels,
+      listModels: () => controller.listAvailableModels(),
+      applyModel: (model) => controller.applyPanelModel(model),
+      applyLevel: (level) => controller.applyThinkingLevel(level),
+      notify: (text, level) => controller.notifyUser(level, text),
+      focusInput: () => this.post({ type: "focusInput" }),
+    };
+  }
+
+  /** 命令面板入口（`fromPanel: false` —— 那时不抢用户焦点）。 */
+  async runModelPicker(fromPanel: boolean): Promise<void> {
+    await this.options.controller.ensure();
+    await pickModel(this.pickerBridge(), { fromPanel });
+  }
+
+  async runThinkingPicker(fromPanel: boolean): Promise<void> {
+    await this.options.controller.ensure();
+    await pickThinkingLevel(this.pickerBridge(), { fromPanel });
+  }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.disposeView();
@@ -70,6 +105,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   dispose(): void {
     this.disposeView();
+    this.statusBar.dispose();
   }
 
   private disposeView(): void {
@@ -119,6 +155,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             return;
           }
           await vscode.env.openExternal(vscode.Uri.parse(message.href));
+          return;
+        }
+        case "openModelPicker": {
+          await pickModel(this.pickerBridge(), { fromPanel: true });
+          return;
+        }
+        case "openThinkingPicker": {
+          await pickThinkingLevel(this.pickerBridge(), { fromPanel: true });
           return;
         }
         case "openFile": {

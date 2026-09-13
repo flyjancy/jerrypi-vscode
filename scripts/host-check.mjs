@@ -27,7 +27,7 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const STUB_PATH = path.join(SCRIPT_DIR, "fixtures", "vscode-stub.mjs");
 
 const stub = await import(pathToFileURL(STUB_PATH).href);
-const { resetStub, callsOf } = stub;
+const { resetStub, callsOf, queueQuickPickResponse } = stub;
 
 const results = [];
 const check = (name, ok, detail = "") => results.push([name, ok, detail]);
@@ -53,9 +53,18 @@ function makeView() {
       },
     },
     onDidDispose: () => ({ dispose() {} }),
-    /** 真输入：把一条消息喂进 provider 注册的监听器。 */
+    /**
+     * 真输入：把一条消息喂进 provider 注册的监听器。
+     *
+     * **必须多等一个宏任务**：`chatView` 的监听器是
+     * `void this.handleMessage(...)`（fire-and-forget，产品代码故意的 ——
+     * 不能让一条消息把 webview 的消息泵堵住），所以 `await listener(...)`
+     * 立刻返回，而处理链（`pickModel` → `showQuickPick` → `applyModel`）
+     * 还在跑。少这一个等待，所有"await 之后"的断言都会假红。
+     */
     async send(message) {
       await listener(message);
+      await new Promise((resolve) => setTimeout(resolve, 0));
     },
   };
 }
@@ -79,8 +88,24 @@ function makeOutput() {
   };
 }
 
-function makeController(overrides = {}) {
+/** 一个模型目录项的假数据（字段名与 pi 的 Model 一致）。 */
+function makeModel(provider, id, extra = {}) {
   return {
+    provider,
+    id,
+    name: id,
+    reasoning: true,
+    contextWindow: 1_000_000,
+    input: ["text"],
+    cost: { input: 2, output: 8 },
+    ...extra,
+  };
+}
+
+function makeController(overrides = {}) {
+  const calls = { appliedModels: [], appliedLevels: [], notices: [] };
+  const controller = {
+    calls,
     ensure: async () => {},
     snapshot: () => ({
       items: [],
@@ -103,8 +128,21 @@ function makeController(overrides = {}) {
     abort: async () => {},
     clearQueue: () => "",
     isOpenableFile: () => false,
+    // ---- S4 的选择器接口 ----
+    pickerContext: () => ({ model: "", thinkingLevel: "off", supportsThinking: false, levels: [] }),
+    listAvailableModels: async () => [],
+    applyPanelModel: async (model) => {
+      calls.appliedModels.push(model);
+    },
+    applyThinkingLevel: (level) => {
+      calls.appliedLevels.push(level);
+    },
+    notifyUser: (level, text) => {
+      calls.notices.push({ level, text });
+    },
     ...overrides,
   };
+  return controller;
 }
 
 /** 把需要的模块打成一个临时 ESM，`vscode` 换成桩。 */
@@ -294,6 +332,250 @@ await view9.send({ type: "clearQueue" });
 check(
   "队列为空时不发 restoreComposer（避免输入框被清空）",
   view9.posted.every((m) => m.type !== "restoreComposer"),
+);
+
+// ------------------------------------------------- 模型选择器（S4 的 ①②③）
+const MODELS = [
+  makeModel("deepseek", "deepseek-v4-flash"),
+  makeModel("deepseek", "deepseek-v4-flash-vision-exp", { input: ["text", "image"] }),
+  makeModel("other", "some-pro", { reasoning: false, cost: { input: 3, output: 9 } }),
+];
+
+function pickerProvider(overrides = {}) {
+  const controller = makeController({
+    pickerContext: () => ({
+      model: "deepseek/deepseek-v4-flash",
+      thinkingLevel: "high",
+      supportsThinking: true,
+      levels: ["off", "low", "high", "max"],
+    }),
+    listAvailableModels: async () => MODELS,
+    ...overrides,
+  });
+  const output2 = makeOutput();
+  const p = new ChatViewProvider({
+    controller,
+    extensionUri: vscode.Uri.file("/ext"),
+    output: output2,
+  });
+  const v = makeView();
+  p.resolveWebviewView(v);
+  return { provider: p, view: v, controller, output: output2 };
+}
+
+resetStub();
+const p1 = pickerProvider();
+await p1.view.send({ type: "openModelPicker" });
+const quickPicks = callsOf("showQuickPick");
+check("openModelPicker → 弹一次 QuickPick（不再算未知消息）", quickPicks.length === 1, String(quickPicks.length));
+check(
+  "QuickPick 的 items 与 getAvailable() 顺序一致，且当前项带 $(check)",
+  quickPicks[0]?.items.length === MODELS.length &&
+    quickPicks[0]?.items[0].label.startsWith("$(check) ") &&
+    quickPicks[0]?.items[1].label === "deepseek-v4-flash-vision-exp",
+  JSON.stringify((quickPicks[0]?.items ?? []).map((i) => i.label)),
+);
+check(
+  "价格与上下文写进 detail（价格带单位）",
+  /\$2\/\$8 \/ 1M tokens/.test(quickPicks[0]?.items[0].detail ?? "") &&
+    /1\.0M/.test(quickPicks[0]?.items[0].detail ?? "") &&
+    /支持图片/.test(quickPicks[0]?.items[1].detail ?? ""),
+  quickPicks[0]?.items[0].detail,
+);
+check(
+  "面发起的选择器关闭后把焦点还给输入框",
+  p1.view.posted.some((m) => m.type === "focusInput"),
+);
+
+// ③ 选中第 2 项：`setModel` 必须收到**那个 Model 对象**（不是字符串、不是 "provider/id"）
+resetStub();
+const p2 = pickerProvider();
+queueQuickPickResponse((items) => items[1]);
+await p2.view.send({ type: "openModelPicker" });
+check(
+  "选中的是列表里那个 Model 对象本身（防止传成 id 字符串）",
+  p2.controller.calls.appliedModels.length === 1 &&
+    p2.controller.calls.appliedModels[0] === MODELS[1],
+  JSON.stringify(p2.controller.calls.appliedModels.map((m) => typeof m)),
+);
+
+// Esc 取消：什么都不改，但**焦点照样要还**
+resetStub();
+const p3 = pickerProvider();
+await p3.view.send({ type: "openModelPicker" });
+check(
+  "Esc 取消不改模型",
+  p3.controller.calls.appliedModels.length === 0,
+);
+check(
+  "Esc 取消也要还焦点（只写在 if (picked) 里就会丢光标）",
+  p3.view.posted.some((m) => m.type === "focusInput"),
+);
+
+// 命令面板发起：不还焦点
+resetStub();
+const p4 = pickerProvider();
+await p4.provider.runModelPicker(false);
+check(
+  "从命令面板发起时不抢焦点",
+  p4.view.posted.every((m) => m.type !== "focusInput"),
+);
+
+// 空列表：一条说明项，选中它就跳去设 key
+resetStub();
+const p5 = pickerProvider({ listAvailableModels: async () => [] });
+queueQuickPickResponse((items) => items[0]);
+await p5.view.send({ type: "openModelPicker" });
+check(
+  "没有可用模型时给一条可操作的说明项",
+  callsOf("showQuickPick")[0]?.items.length === 1 &&
+    callsOf("showQuickPick")[0].items[0].label.includes("没有可用模型"),
+);
+check(
+  "选中说明项会执行 jerrypi.setApiKey",
+  callsOf("executeCommand")[0]?.id === "jerrypi.setApiKey",
+  JSON.stringify(callsOf("executeCommand")),
+);
+
+// ④ 切换失败：提示里要有 provider/id（否则用户不知道是哪个模型失败了）
+resetStub();
+const p6 = pickerProvider({
+  applyPanelModel: async () => {
+    throw new Error("no auth");
+  },
+});
+queueQuickPickResponse((items) => items[2]);
+await p6.view.send({ type: "openModelPicker" });
+check(
+  "切换失败 → 提示里带 provider/id 与原因",
+  p6.controller.calls.notices.some(
+    (n) => n.text.includes("other/some-pro") && n.text.includes("no auth"),
+  ),
+  JSON.stringify(p6.controller.calls.notices),
+);
+
+// ------------------------------------------------- 思考等级选择器（S4 的 D8）
+resetStub();
+const t1 = pickerProvider();
+await t1.view.send({ type: "openThinkingPicker" });
+const levelItems = callsOf("showQuickPick")[0]?.items ?? [];
+check(
+  "等级列表**原样**带空洞（off/low/high/max，中间没有 medium）",
+  JSON.stringify(levelItems.map((i) => i.label.replace("$(check) ", ""))) ===
+    JSON.stringify(["off", "low", "high", "max"]),
+  JSON.stringify(levelItems.map((i) => i.label)),
+);
+check("当前档位带 $(check)", levelItems[2].label === "$(check) high");
+
+resetStub();
+const t2 = pickerProvider({
+  pickerContext: () => ({ model: "other/some-pro", thinkingLevel: "off", supportsThinking: false, levels: [] }),
+});
+await t2.view.send({ type: "openThinkingPicker" });
+check(
+  "不支持思考的模型给一条明确说明（不是空列表）",
+  (callsOf("showQuickPick")[0]?.items ?? []).length === 1 &&
+    callsOf("showQuickPick")[0].items[0].label.includes("不支持思考等级"),
+  JSON.stringify(callsOf("showQuickPick")[0]?.items ?? []),
+);
+check("不支持时不设等级（不拿 7 档假数据去设置）", t2.controller.calls.appliedLevels.length === 0);
+
+// ------------------------------------------------- 状态栏项（S4 的 D13/⑤）
+resetStub();
+const barController = makeController({
+  snapshot: () => ({
+    items: [],
+    truncated: false,
+    queue: { steering: [], followUp: [] },
+    busy: false,
+    cwd: "/w",
+    model: "deepseek/deepseek-v4-flash",
+    meta: {
+      model: "deepseek/deepseek-v4-flash",
+      provider: "deepseek",
+      modelName: "flash",
+      thinkingLevel: "high",
+      supportsThinking: true,
+      contextWindow: 1_000_000,
+      contextUsage: { tokens: 423_000, percent: 42.3 },
+    },
+  }),
+});
+const barProvider = new ChatViewProvider({
+  controller: barController,
+  extensionUri: vscode.Uri.file("/ext"),
+  output: makeOutput(),
+});
+const barView = makeView();
+barProvider.resolveWebviewView(barView);
+check(
+  "还没有 meta 时不创建状态栏项（不为了显示它提前建会话）",
+  callsOf("createStatusBarItem").length === 0,
+);
+await barView.send({ type: "ready", protocol: 3 });
+const bars = callsOf("createStatusBarItem");
+check("拿到 meta 之后才创建状态栏项", bars.length === 1 && bars[0].alignment === 2);
+// 状态栏文本：驱动端是真的 ready 消息，断言端才是桩。
+resetStub();
+const barProvider2 = new ChatViewProvider({
+  controller: barController,
+  extensionUri: vscode.Uri.file("/ext"),
+  output: makeOutput(),
+});
+const barView2 = makeView();
+barProvider2.resolveWebviewView(barView2);
+await barView2.send({ type: "ready", protocol: 3 });
+const statusText = globalThis.__jerrypiVscodeStub.statusBars[0]?.text ?? "";
+const statusTooltip = globalThis.__jerrypiVscodeStub.statusBars[0]?.tooltip ?? "";
+check(
+  "状态栏文本含模型 id 与 42.3%/1.0M",
+  statusText.includes("deepseek-v4-flash") && statusText.includes("42.3%/1.0M"),
+  statusText,
+);
+check(
+  "状态栏 tooltip 含 provider 与等级",
+  statusTooltip.includes("deepseek") && statusTooltip.includes("high"),
+  statusTooltip.replace(/\n/g, " | "),
+);
+barProvider2.dispose();
+check(
+  "面板 dispose 时状态栏被隐藏（不留在状态栏上误导人）",
+  globalThis.__jerrypiVscodeStub.statusBars[0].hiddenCount > 0,
+);
+
+// 上下文未知（压缩后）：显示 ?/1.0M，**没有百分号**
+resetStub();
+const unknownController = makeController({
+  snapshot: () => ({
+    items: [],
+    truncated: false,
+    queue: { steering: [], followUp: [] },
+    busy: false,
+    cwd: "/w",
+    model: "m/m",
+    meta: {
+      model: "m/m",
+      provider: "m",
+      modelName: "m",
+      thinkingLevel: "off",
+      supportsThinking: false,
+      contextWindow: 1_000_000,
+      contextUsage: { tokens: null, percent: null },
+    },
+  }),
+});
+const unknownProvider = new ChatViewProvider({
+  controller: unknownController,
+  extensionUri: vscode.Uri.file("/ext"),
+  output: makeOutput(),
+});
+const unknownView = makeView();
+unknownProvider.resolveWebviewView(unknownView);
+await unknownView.send({ type: "ready", protocol: 3 });
+check(
+  "压缩后（percent=null）状态栏显示 ?/1.0M（无百分号）",
+  (globalThis.__jerrypiVscodeStub.statusBars[0]?.text ?? "").includes("?/1.0M"),
+  globalThis.__jerrypiVscodeStub.statusBars[0]?.text,
 );
 
 // ----------------------------------------------------------------- 汇总

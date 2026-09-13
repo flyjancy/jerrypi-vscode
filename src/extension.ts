@@ -52,7 +52,7 @@ export function activate(context: vscode.ExtensionContext): void {
     output: channel,
   });
 
-  registerCommands(context, channel, controller);
+  registerCommands(context, channel, controller, provider);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("jerrypi.focusChat", () => {
