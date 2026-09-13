@@ -15,7 +15,7 @@
 
 | | |
 | --- | --- |
-| 阶段 | **S5 已关闭**；**S6（设置与密钥）未开始**（细节：`docs/S5-plan.md` 的 §11/§12） |
+| 阶段 | **S5 已关闭**（S5 的细节：`docs/S5-plan.md` 的 §11/§12）；**S6（设置与密钥）未开始** —— 下一步是写它的计划（见 §3） |
 | 最新发布 | **0.1.7**（2026-09-13，预发布；S5 的全部内容） |
 | 发布核验 | `node scripts/compare-vsix.mjs 0.1.7` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,025,710 字节 / `04c60b7b…`）；tag `v0.1.7`；留档 `~/jerrypi-releases/jerrypi-0.1.7.vsix` |
 | 真机验收 | S4：Mac ✅ ／ Windows ✅（S4-plan §12.3）｜ **S5：Mac ✅ ／ Windows ✅**（`GATE PASS` 13 PASS / 1 SKIP = T12；W0/W1 明细见 S5-plan §12.3） |
@@ -46,6 +46,7 @@
 | CHANGELOG | 按约定从 **0.2.0** 开始写；旧文案可从 `8c944db` 取回 | S3 §12.11 |
 | **旧位置**的会话不会被自动搬 | ≤0.1.6 写的会话平铺在 `~/.pi/agent/sessions/` 根上，面板与 `pi --resume` 都看不到（但没丢：`cd ~ && pi --session-dir ~/.pi/agent/sessions --resume`）；符号链接写法下写过的会话同理。**刻意不替用户搬数据** | README 已知限制 · S5-plan §3.8 / §11 的 6-9 |
 | 多写者检测（同一个会话被两边同时写） | 只写进了已知限制，没做检测。候选：记下 `.jsonl` 的 `size+mtime`，下一条消息前比一次 | S5-plan 的 R8 |
+| 「真·后台并行」（切走让旧会话继续跑，像 Codex/Claude 插件那样） | 划出 S5：需要"多会话宿主"（多份 runtime + 事件分流 + 多份 UI 状态），且并行会撞 R8 的两个写者 | S5-plan §2 / §4 D7 / §12.4 |
 | 项目级设置（`.pi/settings.json` 等） | 固定 `projectTrusted: false`，信任流程没做 | **S6** |
 | `jerrypi.approvalMode` | 写了**也不生效**（S8 才实现） | README 已知限制 |
 | `ctx.ui.custom()` 类扩展命令 | 设计上不支持（终端 TUI 专有），会给明确错误 | README 已知限制 |
@@ -61,7 +62,7 @@ S6 的范围（`docs/PLAN.md` §6）：三项 VS Code 设置（含 `jerrypi.agen
 把 S1 的最小版 `Pi: Set API Key` / `Pi: Open Settings File` 补完整（provider 选择、校验）。
 验收：清空 `models.json` 里的 key、只靠 SecretStorage 也能完成对话。
 
-**S6 动工前要注意的两件已经攒下的债**（都是 S5 期间记下的，别丢掉）：
+**S6 动工前要注意的三件已经攒下的债**（都是 S5 期间记下的，别丢掉）：
 
 | 事 | 为什么归 S6 |
 | --- | --- |
