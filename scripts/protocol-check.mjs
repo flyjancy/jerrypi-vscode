@@ -410,6 +410,14 @@ function checkWebviewElementIds() {
   // 重置展开态与滚动位置，无条件滚底会把正在翻历史的用户拽回底部。
   // S3 第一次人工验收的教训：render.ts 与 main.ts 各拼一份按钮内容，
   // 于是测试测到有箭头、真机上没有。这条断言把"只能有一份拼装"钉死。
+  // 路径点击必须是**一处委托**：`data-open-path` 出现在标题行与正文两处，
+  // 只在标题按钮上挂 handler 会让正文那条变成死链（M5 实测：看着可点、点了没反应）。
+  check("路径点击用捕获阶段的一处委托（标题与正文都覆盖）",
+    /transcript\.addEventListener\("click", onTranscriptClick, true\)/.test(mainCode) &&
+      /closest\("\[data-open-path\]"\).*getAttribute\("data-open-path"\)/s.test(mainCode.replace(/\n/g, " ")) &&
+      !/dataset\?\.openPath/.test(mainCode));
+  check("markdown 链接的外开分支仍在（委托没有把旧的处理器挤掉）",
+    /type: "openExternal"/.test(mainCode) && /closest\("a"\)/.test(mainCode));
   check("按钮内容只有一处拼装（main.ts 必须调 renderToolHeadLine）",
     /renderToolHeadLine\(/.test(mainCode) && !/tool-caret/.test(mainCode), 
     /tool-caret/.test(mainCode) ? "main.ts 里仍在自建 caret" : "");

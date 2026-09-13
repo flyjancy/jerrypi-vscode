@@ -255,16 +255,8 @@ function createToolView(item: Extract<ChatItem, { kind: "tool" }>): ToolView {
   head.type = "button";
   const body = element("div", "tool-body") as HTMLDivElement;
   body.hidden = true;
-  head.addEventListener("click", (event) => {
-    const path = (event.target as HTMLElement).dataset?.openPath;
-    if (path !== undefined && path !== "") {
-      // 点路径不展开卡片：用户的意图是打开文件。
-      event.stopPropagation();
-      vscode.postMessage({ type: "openFile", path });
-      return;
-    }
-    toggleTool(item.id);
-  });
+  // 标题点击只负责展开/折叠 —— 点路径由下面的**委托**处理（见 onTranscriptClick）。
+  head.addEventListener("click", () => toggleTool(item.id));
   head.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -452,15 +444,51 @@ input.addEventListener("keydown", (event: KeyboardEvent) => {
   send(busy ? "steer" : "auto");
 });
 
-// 链接一律交给扩展去开：webview 里直接跳转会被拦，而且我们要用与渲染层同一份白名单。
-transcript.addEventListener("click", (event: MouseEvent) => {
+/**
+ * 转写区里的点击**统一在这里分派**（捕获阶段，先于元素自己的 handler）。
+ *
+ * 为什么必须是"一处委托"：`data-open-path` 出现在两个位置 —— 工具卡片的**标题行**
+ * 与**正文**（`完整输出：<路径>`）。第一版只在标题按钮上挂了 handler，正文那条于是
+ * 落到了下面这个 markdown 链接处理器里：它 `closest("a")` 找到我们的 `<a>`、
+ * `preventDefault()`、然后发现**没有 href**（我们用的是 `data-open-path`），就什么都不做
+ * —— 结果是一条**死链**：看着是蓝色可点的、点了没有任何反应（M5 人工验收实测）。
+ *
+ * 放在捕获阶段是为了让路径点击**先于**标题按钮自己的 click：命中路径时
+ * `stopPropagation()` 掉，卡片就不会顺带被展开/折叠。
+ */
+function onTranscriptClick(event: MouseEvent): void {
   const target = event.target as HTMLElement | null;
+  // ① 工具卡片里的路径：不是 URL，走 openFile（host 侧用白名单做精确比对）
+  const pathElement = target?.closest("[data-open-path]") as HTMLElement | null;
+  const path = pathElement?.getAttribute("data-open-path") ?? "";
+  if (path !== "") {
+    event.preventDefault();
+    event.stopPropagation();
+    vscode.postMessage({ type: "openFile", path });
+    return;
+  }
+  // ② markdown 里的普通链接：交给扩展用系统浏览器打开
   const anchor = target?.closest("a");
   if (anchor === null || anchor === undefined) return;
-  event.preventDefault();
   const href = anchor.getAttribute("href");
-  if (href !== null) vscode.postMessage({ type: "openExternal", href });
-});
+  if (href === null) return;
+  event.preventDefault();
+  vscode.postMessage({ type: "openExternal", href });
+}
+
+/** 键盘可达性：路径是 `role="button" tabindex="0"`，回车/空格也要能打开。 */
+function onTranscriptKeydown(event: KeyboardEvent): void {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const target = event.target as HTMLElement | null;
+  const path = target?.closest("[data-open-path]")?.getAttribute("data-open-path") ?? "";
+  if (path === "") return;
+  event.preventDefault();
+  event.stopPropagation();
+  vscode.postMessage({ type: "openFile", path });
+}
+
+transcript.addEventListener("click", onTranscriptClick, true);
+transcript.addEventListener("keydown", onTranscriptKeydown, true);
 
 renderStatus();
 vscode.postMessage({ type: "ready", protocol: PROTOCOL_VERSION });
