@@ -104,7 +104,11 @@ export function renderThinking(text: string, streaming: boolean): string {
 /** 工具卡片的标题（不换行的那一行）。 */
 export function renderToolHead(item: Extract<ChatItem, { kind: "tool" }>, now: number = Date.now()): string {
   const icon = item.pending === true ? "…" : item.isError ? "✗" : "✓";
-  const summary = item.summary === "" ? "" : ` <span class="tool-args">${renderToolTitle(item)}</span>`;
+  // 参数槽的显示条件看的是**标题或摘要有没有**，不是只看摘要：
+  // 第一版写成 `summary === "" ? "" : …`，于是"有 title 但 summary 为空"的 item
+  // 会把标题一起丢掉（测试台的"运行中卡片要有可点路径"就是这么红的）。
+  const hasArgs = item.summary !== "" || item.title !== undefined;
+  const summary = hasArgs ? ` <span class="tool-args">${renderToolTitle(item)}</span>` : "";
   const pending = item.pending === true ? ' <span class="tool-pending">运行中…</span>' : "";
   const duration = renderToolDuration(item, now);
   return (

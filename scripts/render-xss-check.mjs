@@ -319,6 +319,9 @@ async function main() {
         titleHtml.includes('data-open-path="/work/a.ts"'), titleHtml);
       check("标题里带展开箭头（未展开是 ▸）", titleHtml.includes("▸"));
       check("展开后箭头变成 ▾", render.renderToolHeadLine(titled, true).includes("▾"));
+      check("有 title 但 summary 为空时也要显示标题",
+        render.renderToolHead(toolItem({ summary: "", title: { text: "~/only-title.ts" } }), 99999).includes("~/only-title.ts"),
+        render.renderToolHead(toolItem({ summary: "", title: { text: "~/only-title.ts" } }), 99999));
       check("没有 title 时回退到 JSON 参数摘要",
         render.renderToolHeadLine(toolItem({ text: "x" }), false).includes("{&quot;command&quot;"),
         render.renderToolHeadLine(toolItem({ text: "x" }), false));

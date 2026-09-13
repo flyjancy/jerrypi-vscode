@@ -226,6 +226,22 @@ async function main() {
       openFileMessages().at(-1)?.path === "/tmp/pi-bash-x.log",
       JSON.stringify(openFileMessages().slice(-2)));
 
+    // **运行中**的卡片也要有可点路径（M14 的 DOM 半边）：
+    // 宿主侧在 tool_execution_start 就铸造路径，否则运行中的卡片点不开。
+    send({
+      type: "item",
+      item: { kind: "tool", id: "tool-run", toolCallId: "cn", toolName: "read", summary: "", isError: false,
+        title: { text: "~/running.ts", link: { text: "~/running.ts", path: "/work/running.ts" } },
+        openablePaths: ["/work/running.ts"], pending: true, startedAt: clock.now(), text: "第 1 行" },
+    });
+    const runCard = doc.querySelector('[data-id="tool-run"]');
+    const runLink = runCard.querySelector("[data-open-path]");
+    check("运行中的卡片也渲染出可点路径", runLink !== null && runLink.getAttribute("data-open-path") === "/work/running.ts");
+    const beforeRun = openFileMessages().length;
+    click(runLink);
+    check("运行中点路径同样发出 openFile", openFileMessages().length === beforeRun + 1, JSON.stringify(openFileMessages().slice(-2)));
+    equal("运行中点路径不会展开/折叠卡片", runCard.querySelector(".tool-head").getAttribute("aria-expanded"), "false");
+
     // 反向控制：**未登记**的路径必须是不可点的纯文字，点了也不会发消息。
     send({ type: "item", item: toolItem({ title: { text: "/etc/passwd" }, text: "x" }) });
     const linksNow = card.querySelectorAll("[data-open-path]").length;
@@ -261,7 +277,12 @@ async function main() {
     // 结束态：Took + 计时器停表
     send({ type: "item", item: toolItem({ title: { text: "seq" }, text: "done", startedAt: clock.now() - 4000, endedAt: clock.now() }) });
     check("结束后显示 Took", (head.textContent ?? "").includes("Took 4.0s"), head.textContent);
-    equal("没有运行中的卡片时定时器被清掉", clock.pending(), 0);
+    // 注意：上面那张"运行中"的卡片还挂着（tool-run），所以先把所有卡片都收尾，
+    // 再断言定时器停表 —— 否则这条会误报（第一次就是这样红的）。
+    send({ type: "item", item: { kind: "tool", id: "tool-run", toolCallId: "cn", toolName: "read", summary: "", isError: false,
+      title: { text: "~/running.ts", link: { text: "~/running.ts", path: "/work/running.ts" } },
+      openablePaths: ["/work/running.ts"], startedAt: clock.now() - 500, endedAt: clock.now(), text: "done" } });
+    equal("所有卡片都不再运行时定时器被清掉", clock.pending(), 0);
 
     // ---------------------------------------------------------------- 安全（真 DOM）
     console.log("[webview-dom-check] 工具正文的 XSS（走真 DOM 解析）");
