@@ -554,8 +554,11 @@ class SelfTestRun {
   private async testCliListingInterop(): Promise<string> {
     this.requireDefaultAgentDir();
     const { agentDir, pi } = this.options;
-    const interopCwd = join(this.tempRoot, "interop-cwd");
-    mkdirSync(interopCwd, { recursive: true });
+    // **物理化**：`pi` CLI 的 cwd 是 `process.cwd()`（物理路径），而 macOS 上 `os.tmpdir()`
+    // 给的是 `/var/folders/…`（`/private/var/…` 的符号链接）。不物理化的话，下面那句
+    // `list(interopCwd)`（pi 自己算默认目录）会与我们的 `resolveSessionDir` 分叉，
+    // 而分叉的真相是"CLI 找不到我们会话"（controller-check 里那条真 spawn 的检查先撞到的）。
+    const interopCwd = realpathSync(mkdtempSync(join(this.tempRoot, "interop-cwd-")));
     const dir = resolveSessionDir(interopCwd, sessionsRootOf(agentDir));
     try {
       const manager = pi.SessionManager.create(interopCwd, dir);

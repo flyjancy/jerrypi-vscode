@@ -22,6 +22,8 @@ import * as esbuild from "esbuild";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { delimiter } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -32,6 +34,20 @@ const check = (name, ok, detail = "") => results.push([name, ok, detail]);
 
 function agentDirOf(pi) {
   return process.env.PI_CODING_AGENT_DIR ?? pi.getAgentDir();
+}
+
+/** 在 PATH 上找一个可执行文件（要跟符号链接：npm/fnm 装的 `pi` 通常是指向 cli.js 的链接）。 */
+function findOnPath(name) {
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (dir === "") continue;
+    const candidate = path.join(dir, name);
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      // 权限/竞态：跳过这个候选
+    }
+  }
+  return undefined;
 }
 
 /** 把需要的模块打成一个临时 ESM（`vscode` 保持 external，反正这条路径不碰它）。 */
@@ -173,7 +189,11 @@ async function main() {
     // 这里**故意自己复刻一遍编码规则**、不复用生产的 `resolveSessionDir`：
     // 断言要独立于被测实现，否则实现改了规则、断言跟着改，两边一起错（与 S1 的隔离 import 同理）。
     // `create()` 之后路径就已确定（构造函数里走 `newSession()`），所以这时**文件还不存在**也应该有值。
-    const encodedCwd = `--${path.resolve(cwd).replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+    // **也要物理化**：pi CLI 的 cwd 是 `process.cwd()`（物理路径），而 macOS 上 `os.tmpdir()`
+    // 给的是 `/var/…`（`/private/var/…` 的符号链接）—— 不物理化就会与生产实现（已物理化）分叉，
+    // 而分叉的代价是"终端里的 pi 找不到我们会话"（S5 验收期实测撞到过）。
+    const physicalCwd = fs.realpathSync(cwd);
+    const encodedCwd = `--${physicalCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
     const expectedSessionsDir = path.join(sessionsRoot, encodedCwd);
     const sessionFile = controller.session?.sessionManager?.getSessionFile();
     check(
@@ -814,6 +834,65 @@ async function main() {
         check("D15：新建会话之后**仍然**是面板里选的那个模型（不被兜底改回去）",
           controller.snapshot().meta.model === "deepseek/deepseek-v4-flash-vision-exp",
           controller.snapshot().meta.model);
+      }
+    }
+
+    // ------------------------------------------- 9. CLI 互通（G3 的核心，由**我**跑）
+    //
+    // S5 的 U5：这一项原来是要用户手动跑一条命令的（受限机没有 pi）。改成自动化 ——
+    // 但它要真模型与用户终端那份 pi，所以不进 CI，仍然只能在这个脚本里跑。
+    //
+    // 判据不是"模型回了什么"（那会抖），而是**那个会话文件有没有被 CLI 继续写** ——
+    // 文件长大 = CLI 真的找到了、并用了**我们的**会话，与模型措辞无关。
+    {
+      const piExe = findOnPath("pi");
+      if (piExe === undefined) {
+        console.log("  skip CLI 互通：PATH 上没有 pi（受限机/CI 就是这样）");
+      } else {
+        // 用**临时 cwd + 用户真实的 agentDir**：这样会话落在 CLI 默认会去找的那个目录树里，
+        // 而且写入走的是我们的生产路径（controller → SessionManager）。
+        const interopCwd = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-interop-"));
+        const realRoot = path.join(pi.getAgentDir(), "sessions");
+        const interloper = new SessionHostController({
+          pi,
+          cwd: interopCwd,
+          agentDir: pi.getAgentDir(),
+          sessionsRoot: realRoot,
+          keys: { listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {} },
+          uiContext: createSelfTestUIContext(log),
+          log,
+          onMessage: () => {},
+        });
+        let interopDir = "";
+        try {
+          await interloper.ensure();
+          await interloper.prompt("Reply with exactly the word PONG", "auto");
+          const file = interloper.session?.sessionManager?.getSessionFile() ?? "";
+          interopDir = path.dirname(file);
+          const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
+          // `-c` = 继续这个 cwd 最近被写过的那次会话（与用户在终端里敲的一模一样）
+          const run = spawnSync(piExe, ["-c", "-p", "Reply with exactly the word PONG"], {
+            cwd: interopCwd,
+            encoding: "utf8",
+            timeout: 180_000,
+          });
+          const after = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
+          check(
+            "CLI 能用 `pi -c` 接过我们写的会话（它把新的一轮追加进了**同一个文件**）",
+            run.status === 0 && after > before,
+            `exit=${run.status}｜文件条目 ${before} → ${after}｜stdout=${String(run.stdout ?? "").trim().slice(0, 60)}｜stderr=${String(run.stderr ?? "").trim().slice(0, 80)}`,
+          );
+        } catch (error) {
+          check("CLI 能用 `pi -c` 接过我们写的会话", false, error instanceof Error ? error.message : String(error));
+        } finally {
+          await interloper.dispose().catch(() => undefined);
+          // 收尾：只删我们自己建的那个编码目录（带"必须在 sessions 根之下"的守卫）
+          const root = path.resolve(realRoot);
+          if (interopDir !== "" && path.resolve(interopDir).startsWith(root + path.sep)) {
+            fs.rmSync(interopDir, { recursive: true, force: true });
+          }
+          fs.rmSync(interopCwd, { recursive: true, force: true });
+        }
       }
     }
   } finally {

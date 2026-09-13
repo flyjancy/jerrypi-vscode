@@ -11,7 +11,7 @@
 
 ## 1. 现在
 
-**进行中**：**S5 第 6 步：Mac 验收进行中**（用户报回 2 个问题：① 中止后切回旧会话的观感——查证为忠实记录，已补确认框文案；② **输入法拼音回车被当成发送**——已修。**等用户用新包重测这两处 + 完成动作②**）（2026-09-13）
+**进行中**：**S5 第 6 步：Mac 验收已通过**；下一步把 0.1.7 上传到 Marketplace（用户手动），再做 Windows W0/W1（2026-09-13）
 
 | | |
 | --- | --- |
@@ -32,7 +32,7 @@
 | `node scripts/tool-text-check.mjs` | **87** |
 | `node scripts/webview-dom-check.mjs` | **75** |
 | `node scripts/host-check.mjs` | **57** |
-| `npm run check:controller`（真模型，**不进 CI**） | **81/81**（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
+| `npm run check:controller`（真模型，**不进 CI**） | **82/82**（含一条真 spawn `pi -c` 的 CLI 互通检查）（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | **14 项（12 gating + T5c/T12 advisory）GATE PASS** |
 | `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **338 文件 / 5.75 MB**（门禁 30 MB）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |
 

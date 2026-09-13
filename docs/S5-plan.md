@@ -289,7 +289,7 @@ cd ~ && pi --session-dir ~/.pi/agent/sessions --resume
 export function resolveSessionDir(cwd: string, sessionsRoot: string): string;
 ```
 
-实现照抄 `session-manager.js:245-246`：`--${resolve(cwd).replace(/^[/\\]/,"").replace(/[/\\:]/g,"-")}--`，
+实现照抄 `session-manager.js:245-246`（**外加一步：cwd 先 `realpathSync`** —— 见 §11 的 6-8/6-9 与 R2，那是验收期实测出来的）：`--${resolve(cwd).replace(/^[/\\]/,"").replace(/[/\\:]/g,"-")}--`，
 拼在 `sessionsRoot` 下。
 
 - **为什么**：`getDefaultSessionDir` 不在导出面（§3.3），而我们必须支持自定义 agentDir（S6）。
@@ -535,7 +535,7 @@ export function formatSessionTime(then: Date, now: Date): string;               
 | # | 风险 | 应对 |
 | --- | --- | --- |
 | R1 | **CLI 单方面改了编码规则 → 互通静默断掉，而我们的门禁全绿**（评审 B4；第 2 轮 B1 把守卫补回来了） | T10/T11 跑的是**我们自己打包的那份 pi**（`pi-runtime/`），而用户终端里的 `pi` 是**另一份独立安装**（实测：`which pi` → `~/.local/state/fnm_multishells/…/bin/pi` → 全局 node_modules，且有 `pi update` 自更新）—— **T10/T11 结构上打不到它**。对策：**T12 直接问那份 pi**（不再比版本号）：`which pi` → realpath → 包根 → `import(<包根>/dist/core/session-manager.js)` → `getDefaultSessionDir(cwd, agentDir)` → 与我们的 `resolveSessionDir` 比。**已实测可行**（本机跑通，不联网、不要模型：它算出 `~/.pi/agent/sessions/--Users-fengrui-Desktop-prj-jerrypi-vscode--`）；机制现成（`loader.ts:106` 已在用同一套 `import(pathToFileURL(…))`）。找不到 / import 失败 → **SKIP 并注明**（照 T5c 的 advisory 先例）。两条诚实的代价：① 会把用户那份 pi 加载进扩展宿主进程（一次性、try/catch 包住）；② 它只证明"路径算法一致"，**不证明"模型读得懂内容"** → §7 动作② 仍然要留 |
-| R2 | cwd 是符号链接 / 大小写不同的路径（macOS 上 `/tmp` vs `/private/tmp`）→ 同一份代码在**两个**目录下各存一份会话，看起来像"会话丢了" | **已实测**：pi 自己也不归一化（`resolvePath` = `path.resolve`，§3.1），所以我们**跟着不归一化**（一致优先），并在 README 记一条"面板与 `pi` 要用同一个路径写法打开同一个项目"。**不修**（自己 `realpath` 反而会和 CLI 分叉得更厉害） |
+| R2 | cwd 是符号链接（macOS 上 `os.tmpdir()` 给的 `/var/…` 就是 `/private/var/…` 的链接）→ 面板与 CLI 各存一份会话，看起来像"会话丢了" | **已实测并已修（S5 验收期）**：pi 的 `resolvePath` 只做 `path.resolve`，但 **CLI 拿到的 cwd 是 `process.cwd()`（物理路径）** → 我们若用非物理的 fsPath 就会分叉。修法：`resolveSessionDir` 对 cwd 做 `realpathSync`（失败退回 `path.resolve`）。回归测试是 `controller-check` 里那条真 spawn `pi -c` 的检查（它刻意用非物理的临时 cwd） |
 | R9 | （评审 N2 + 我自己查的）CLI 侧有两个"整体搬走会话目录"的开关：环境变量 `PI_CODING_AGENT_SESSION_DIR`（`config.js:407`、`main.js:531-534`）与 `settings.json` 的 `sessionDir` 键（`settings-manager.js:450-452`）。优先级实测是 `--session-dir` > 环境变量 > settings。我们**不跟随** | 不跟随是刻意的（跟随会把目录推导从一份变成三份，而 S6 才管 agentDir）。但按评审 N6：**读一下这两个值成本极低** —— 检测到就在 Output 记一行"CLI 的会话目录被 <来源> 指到了 <路径>，面板不跟随"。不跟随的决定不变，但把"极难自诊"改成"一行日志就自诊"。它同时是 §13 Q2 的一个假设 |
 | R3 | 会话文件很大（实测单文件 79KB，长会话可到 MB 级）→ `list()` 卡 UI | `showQuickPick` 传 Thenable，VS Code 自带加载态（照 modelPicker 的先例，`src/host/modelPicker.ts` 头注释第 3 条）；`list()` 自带 `onProgress`，**本步不用**（列表只有几条），真卡了再上 `createQuickPick` |
 | R4 | 切换会话时把运行中的回合 teardown 掉 | D7 的守卫 |
@@ -803,6 +803,11 @@ cwd 不存在的会话切不动且给可读提示、当前会话不变。
 | U3 | **用户 2026-09-13 拍板"都按默认"** | §13 的 Q1、Q2、Q4、Q5、Q6 全部定案（与建议的默认值一致，无偏离）；§13 标题改为"已全部拍板" | 无 —— 没有一条改动了计划的设计，只是把待定变成定案 |
 | U4 | 用户问"是不是全部做完才由我测试"时发现：§9 把**发布**写在了**两次验收之前** | 重排 §9 的 6/7/8：打包 + 自测 + **Mac 验收** → 发布 0.1.7 → **Windows 验收** | 与 S4 的实际流程一致（`S4-plan §9` 第 8 步："打包 → 自测 → Mac 2 个动作 → 发 0.1.6 → Windows"）。动因是真实的：Mac 能在本地构建上验，受限 Windows 机只能从 Marketplace 装 |
 | U5 | **用户提醒："之前说过我尽量不动？尽量减少我的测试工作"** —— 他说得对，我违反了项目已有的纪律 | **人工项从 3 Mac + 4 Windows 砍到 2 + 2**：① CLI 互通 → 改成 `controller-check` 里自动跑（真 spawn `pi -c -p`，**由我跑**）；② 重启恢复 → 从 Mac 挪到 Windows（G3 的判据本来就写"受限机重启后恢复"）；③ README 核对 → 搬到 Mac 由我自己核；④ 旧 W2 并入 W1。同时把"不属于四类就不给人做"这条纪律写进 §7 开头 | 纪律原本就在 `S4-plan §7`（"用户只做 2 个动作"+ 四类白名单 + "评审砍掉了 2 项"），是我在写 S5 时把人工项攒成了 7 条而没逐条自问。改动**不影响任何实现**（只影响谁跑那几条检查），但能让用户从 7 个动作降到 4 个 |
+| U8 | **Mac 验收期**：U5 承诺的"CLI 互通改由我自动跑"我根本没写（交付前核对包时发现）；补上后第一次跑就是红的，
+牵出 R2 的真身（Node 的 `process.cwd()` 物理化 vs pi 的 `path.resolve`） | `controller-check` 新增真 spawn `pi -c` 的检查；
+`resolveSessionDir` 对 cwd 物理化；T11 与 controller-check 的 oracle 同步物理化；R2 改为"已修"；README 已知限制跟着改 |
+行为变更：符号链接路径下的会话现在落在**物理路径**的编码目录（用户机器上无影响，T10 输出未变）。
+**未经复核**（三轮已用尽） |
 | U6 | **用户对小节 0 的追问“1.不懂”**：根目录还有一份 `PLAN.md`（gitignore），与 `docs/PLAN.md` **已分叉**（根那份多 233 行评审记录，docs 那份多 6 行较新的发布约定） | **用户选 A：合并。**把根那份的评审记录（Codex 5 轮 + DeepSeek 11 轮，共 16 轮）并入 `docs/PLAN.md` 并删掉根那份；`.gitignore` 撤销 `/PLAN.md` 那条（万一将来又冒出一份，让它出现在 `git status` 里）；`AGENTS.md` §0 与 `STATUS.md` 的“工作区”行跟着改。**校验**：旧版 266 行里只有“状态”那一行被有意替换，其余非空行**一行未丢** | 总计划从两份变成一份真相；评审记录入库（与 S4/S5 plan“评审记录内联”的惯例一致）。这是纯文档操作，不碰任何代码 |
 
 **这几条要不要补一轮评审？** 我的判断：**不补**。U1 是产品取舍（已由用户拍板），U2/U4/U5/U6 是划界、顺序与文档合并；
