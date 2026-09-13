@@ -71,6 +71,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await pickThinkingLevel(this.pickerBridge(), { fromPanel });
   }
 
+  /**
+   * 全量重放。
+   *
+   * **`state` 的组装只有这一处** —— 面板重建（`ready`/`requestState`）与会话替换
+   * （`onSessionReplaced`，见 controller 的 D6）都走它，所以两边的形状不可能跑偏。
+   */
+  replay(): void {
+    this.post({ type: "state", protocol: PROTOCOL_VERSION, ...this.options.controller.snapshot() });
+  }
+
   resolveWebviewView(view: vscode.WebviewView): void {
     this.disposeView();
     this.view = view;
@@ -126,7 +136,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             );
           }
           await controller.ensure();
-          this.post({ type: "state", protocol: PROTOCOL_VERSION, ...controller.snapshot() });
+          this.replay();
           return;
         }
         case "prompt": {

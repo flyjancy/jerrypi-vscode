@@ -115,13 +115,16 @@ async function main() {
   for (const dir of [agentDir, sessionsRoot, cwd]) fs.mkdirSync(dir, { recursive: true });
   fs.copyFileSync(path.join(sourceAgentDir, "auth.json"), path.join(agentDir, "auth.json"));
 
-  const log = { appendLine: () => {} };
+  const logLines = [];
+  const log = { appendLine: (line) => { logLines.push(line); } };
   const messages = [];
   let controllerRef;
   let snapshotDuringStream;
   let deltasSeen = 0;
   let deltasAfterSnapshot = 0;
   let liveIdAtFirstDelta = "";
+  /** S5 §9 第 2 步：会话替换后宿主应当收到的"重放"信号次数（面板靠它清空旧转写）。 */
+  let replays = 0;
 
   const controller = new SessionHostController({
     pi,
@@ -132,6 +135,11 @@ async function main() {
     uiContext: createSelfTestUIContext(log),
     log,
     additionalExtensionPaths: [path.join(REPO_ROOT, "test-fixtures", "ext-smoke", "index.ts")],
+    // S5 §9 第 2 步（D6）：每成功替换一次会话就回调一次。
+    // 现在没有这个选项 → replays 永远是 0 → 下面那两条断言是**真红**（不是编译错）。
+    onSessionReplaced: () => {
+      replays += 1;
+    },
     onMessage: (message) => {
       messages.push(message);
       if (message.type !== "delta") return;
@@ -501,9 +509,75 @@ async function main() {
       smokeBusy.length > 0 && smokeBusy[smokeBusy.length - 1] === false, smokeBusy.join("->"));
 
     // ---------------------------------------------------- 5. 新会话
+    // S5 §9 第 2 步的五条断言（D4 重启恢复 + D6 替换后重放 + S1 取消分支 + B5 的日志）
+    check(
+      "Output 记了会话文件路径（供人查「我的会话存哪了」）",
+      logLines.some((line) => line.includes("[controller] 会话文件：")),
+      logLines.filter((l) => l.includes("[controller]")).slice(-2).join(" ｜ "),
+    );
     const before = controller.snapshot().items.length;
+    const firstSessionFile = controller.session?.sessionManager?.getSessionFile();
+
+    // 5a（S1）：**被扩展取消的替换** — farm 具里的 `session_before_switch` 在
+    // `JERRYPI_SMOKE_CANCEL_SWITCH=1` 时取消。取消时必须**什么都不做**：
+    // 不清状态（面板还拿着旧转写）、不换会话、不发重放。
+    {
+      const replaysBeforeCancel = replays;
+      process.env.JERRYPI_SMOKE_CANCEL_SWITCH = "1";
+      try {
+        await controller.newSession();
+      } finally {
+        delete process.env.JERRYPI_SMOKE_CANCEL_SWITCH;
+      }
+      check(
+        "被取消的替换：会话没换、历史没被清、也没发重放",
+        controller.snapshot().items.length === before &&
+          controller.session?.sessionManager?.getSessionFile() === firstSessionFile &&
+          replays === replaysBeforeCancel,
+        `items=${controller.snapshot().items.length}（原 ${before}）｜replays=${replays}`,
+      );
+    }
+
+    // 5b（D6）：真的换一次 —— 历史清空 + 发出重放
+    const replaysBefore = replays;
     await controller.newSession();
     check("newSession 后历史清空", controller.snapshot().items.length === 0 && before > 0);
+    check(
+      "newSession 后发出重放信号（面板才会真的清空）",
+      replays === replaysBefore + 1,
+      `replays=${replays}（期望 +1）`,
+    );
+
+    // 5c（D4）：**重启等价物** —— 同一个 sessionsRoot 上再建一个 controller，
+    // 应当 `continueRecent` 接过上一会话，而不是开一个空的。
+    {
+      const revived = new SessionHostController({
+        pi,
+        cwd,
+        agentDir,
+        sessionsRoot,
+        keys: { listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {} },
+        uiContext: createSelfTestUIContext(log),
+        log,
+        onMessage: () => {},
+      });
+      try {
+        await revived.ensure();
+        const snap = revived.snapshot();
+        check(
+          "重启（重建 controller）后接过上一会话，而不是开新的",
+          snap.items.length > 0 && snap.items.length === before,
+          `items=${snap.items.length}，重启前是 ${before}`,
+        );
+        check(
+          "接过的就是那个文件（不是另建了一个）",
+          revived.session?.sessionManager?.getSessionFile() === firstSessionFile,
+          String(revived.session?.sessionManager?.getSessionFile()),
+        );
+      } finally {
+        await revived.dispose().catch(() => {});
+      }
+    }
 
     // ---------------------------------------------------- 6. 面板的模型策略
     // 6a：临时 agentDir 里**没有** settings.json → 用户没选过 → 用我们的偏好兜底

@@ -74,6 +74,11 @@ export interface SessionHostControllerOptions {
    * `sessionsRoot` 就是 S5 为了让编译器抓出这个误用（docs/S5-plan.md 的 D2）。
    */
   sessionsRoot?: string;
+  /**
+   * 会话被替换成功后通知宿主（D6）。**没有参数**：宿主要做的只是重新要一次全量快照 ——
+   * 这样 `state` 的组装（protocol 版本、truncated）就仍然只有 chatView 一处。
+   */
+  onSessionReplaced?: () => void;
   /** 额外加载的 pi 扩展（测试用；后续的 `jerrypi.extensionPaths` 设置也会走这里）。 */
   additionalExtensionPaths?: string[];
 }
@@ -224,6 +229,28 @@ export class SessionHostController {
     await this.ensuring;
   }
 
+  /**
+   * 每次会话建立/替换后要做的事：重置实时状态、广播 meta、**记一行会话文件路径**、
+   * 以及（替换时）通知宿主"该重放了"。
+   *
+   * 为什么需要那个回调（D6）：会话换了之后**面板必须重放**，否则它会继续显示上一个会话的
+   * 转写（而且新消息的 `msg-<下标>` 会和旧内容撞号）。重放本身由宿主做（`state` 的组装
+   * 只在 chatView 一处），controller 只负责"替换成功后叫一声"。
+   */
+  private afterSessionChange(reason: "start" | "new"): void {
+    this.resetLiveState();
+    this.publishMeta();
+    const file = this.host?.session.sessionManager.getSessionFile();
+    this.options.log.appendLine(
+      `[controller] 会话文件：${
+        typeof file === "string" && file.length > 0
+          ? file
+          : "(尚未落盘：pi 在首条 assistant 消息之后才建文件)"
+      }`,
+    );
+    if (reason === "new") this.options.onSessionReplaced?.();
+  }
+
   private async createHost(): Promise<void> {
     const { cwd, keys } = this.options;
     const pi = await this.loadPi();
@@ -232,7 +259,11 @@ export class SessionHostController {
     const modelRuntime = await getModelRuntime(pi, agentDir, keys);
     // **必须经 resolveSessionDir**：pi 的 `sessionDir` 参数是 per-cwd 的目录，不是根。
     const sessionsRoot = this.options.sessionsRoot ?? sessionsRootOf(agentDir);
-    const sessionManager: SessionManager = pi.SessionManager.create(
+    // D4：**启动时接过上一会话**（`continueRecent`），不再每次都新建 ——
+    // 这就是 G3 的"重启 VS Code 后能恢复上一会话"。没有已落盘会话时，continueRecent
+    // 返回的 manager 等价于新建（session-manager.js:1247-1252），所以不用特判。
+    // 注意它的"最近"是**文件 mtime**，与 list() 的消息活动时间不是同一个键（plan §3.2）。
+    const sessionManager: SessionManager = pi.SessionManager.continueRecent(
       cwd,
       resolveSessionDir(cwd, sessionsRoot),
     );
@@ -281,8 +312,7 @@ export class SessionHostController {
       },
     });
     this.host = host;
-
-
+    this.afterSessionChange("start");
   }
 
   // ---------------------------------------------------------------- 发送语义
@@ -376,8 +406,14 @@ export class SessionHostController {
     await this.ensure();
     const host = this.host;
     if (host === undefined) return;
-    this.resetLiveState();
-    await host.runtime.newSession();
+    // 顺序很重要（评审 S1）：**替换成功之后**才清状态/重放。
+    // 以前是替换之前清，于是被扩展取消（`{cancelled:true}`）时会白清一次、而面板还拿着旧转写。
+    const result = await host.runtime.newSession();
+    if (result.cancelled) {
+      this.options.log.appendLine("[controller] 新建会话被扩展取消");
+      return;
+    }
+    this.afterSessionChange("new");
     this.options.log.appendLine("[controller] 已新建会话");
   }
 

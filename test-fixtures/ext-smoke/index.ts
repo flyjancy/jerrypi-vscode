@@ -7,6 +7,8 @@
 // 标记文件（都通过环境变量指定，未设置时静默跳过，避免污染用户环境）：
 //   JERRYPI_SMOKE_MARKER          session_start 时追加 "session_start"
 //   JERRYPI_SMOKE_COMMAND_MARKER  每个命令执行时追加命令名
+//   JERRYPI_SMOKE_CANCEL_SWITCH   置为 "1" 时，`session_before_switch` 一律取消
+//                                 （用来验 S5 的 `{cancelled:true}` 分支）
 //
 // 为什么命令要**先写标记再调 UI**：notify 在 no-op UI 下什么都不会发生，
 // 没有标记就无法证明命令真的执行过。
@@ -67,5 +69,15 @@ export default function extSmoke(pi: ExtensionAPI): void {
   // 仅当显式设置标记路径时才写文件。
   pi.on("session_start", async () => {
     appendMarker(process.env.JERRYPI_SMOKE_MARKER, "session_start");
+  });
+
+  // S5：让宿主能造出 `{cancelled:true}`（pi 允许扩展在换会话前取消）。
+  // 默认不装任何手，所以只在环境变量被置位时才生效。
+  pi.on("session_before_switch", async () => {
+    if (process.env.JERRYPI_SMOKE_CANCEL_SWITCH === "1") {
+      appendMarker(process.env.JERRYPI_SMOKE_COMMAND_MARKER, "cancel-switch");
+      return { cancel: true };
+    }
+    return undefined;
   });
 }

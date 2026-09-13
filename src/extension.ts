@@ -40,6 +40,10 @@ export function activate(context: vscode.ExtensionContext): void {
     uiContext: createVSCodeUIContext(channel),
     log: channel,
     onMessage: (message) => provider.post(message),
+    // D6：会话替换成功后让面板**全量重放** —— 否则它会继续显示上一个会话的转写
+    // （并且新消息的 `msg-<下标>` 会和旧内容撞号）。`provider` 在下面才赋值，
+    // 但这个箭头只在替换发生时（远晚于 activate）才执行。
+    onSessionReplaced: () => provider.replay(),
   });
   context.subscriptions.push({ dispose: () => void controller.dispose() });
   if (!isWorkspace) {

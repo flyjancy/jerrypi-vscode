@@ -11,7 +11,7 @@
 
 ## 1. 现在
 
-**进行中**：**S5 第 1 步已完成**（会话目录语义修正；红→绿证据见 S5-plan §11），下一步是第 2 步（启动即恢复 + 会话替换后重放）（2026-09-13）
+**进行中**：**S5 第 2 步已完成**（启动即恢复 + 会话替换后重放；顺手修掉“`Pi: New Session` 后面板不消旧转写”），下一步是第 3 步（忙时确认弹窗 + 切不动的可读报错）（2026-09-13）
 
 | | |
 | --- | --- |
@@ -31,8 +31,8 @@
 | `npm run check:render` | 110 |
 | `node scripts/tool-text-check.mjs` | 69 |
 | `node scripts/webview-dom-check.mjs` | 66 |
-| `node scripts/host-check.mjs` | 39 |
-| `npm run check:controller`（真模型，**不进 CI**） | **62/62**（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
+| `node scripts/host-check.mjs` | **41** |
+| `npm run check:controller`（真模型，**不进 CI**） | **67/67**（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | **14 项（12 gating + T5c/T12 advisory）GATE PASS** |
 | `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **339 文件 / 5.74 MB**（门禁 30 MB）。338 那个基线已过时：多出的 1 个是 `media/jerrypi-mark-j.svg`（20:44 出现的未跟踪文件，见 S5-plan §11 的 1-3） |
 
@@ -64,7 +64,10 @@
 4. ⏳ **实施中**，按 S5-plan §9 的 7 步；每步先写断言、看红、再实现。
    **第 1 步 ✅**（会话目录语义修正）：`src/pi/sessions.ts` 新建；`sessionsDir`→`sessionsRoot`；
    自测新增 T10/T11/T12；`controller-check` 62/62、闸门 14/14 GATE PASS、全套门禁绿。
-   下一步：第 2 步（启动即 `continueRecent` + 会话替换后重放，含修掉 §3.7 缺口 A）
+   **第 2 步 ✅**（启动即恢复 + 替换后重放）：`continueRecent` 取代 `create`；
+   `onSessionReplaced` 回调 → `ChatViewProvider.replay()`（修掉 `newSession` 后不重放的 bug）；
+   夹具新增可取消的 `session_before_switch`；`controller-check` **67/67**、`host-check` **41/41**。
+   下一步：第 3 步（忙时替会话→弹确认；cwd 不存在的会话→可读报错）
 
 ## 4. 发布流程（每次都一样）
 

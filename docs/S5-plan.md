@@ -811,7 +811,6 @@ cwd 不存在的会话切不动且给可读提示、当前会话不变。
 ## 11. 实施期发现的问题 / 偏离计划的地方
 
 ### 第 1 步（会话目录语义修正，2026-09-13）
-
 | # | 现象 | 原因 | 处置 |
 | --- | --- | --- | --- |
 | 1-1 | 计划里写的自测项数不对 | 本项目有**两个**同名的 self-test（评审 B2 混了，我也混了） | 已在 §3.9 加"两个 self-test"的头注释；本步实际结果：`Pi: Run Self-Test` = **14 项（12 gating + T5c/T12 advisory）/ 14 PASS / GATE PASS**；`npm run self-test` 仍是 9/9 |
@@ -830,6 +829,19 @@ cwd 不存在的会话切不动且给可读提示、当前会话不变。
 - 实现后：`controller-check` **62/62**（HEAD 是 59/59；差值不完全是"我加的 2 条" ——
   检查总数会随模型是否发起工具调用而变，见 1-5）、闸门 **14/14 GATE PASS**
   （T10/T11/T12 明细：`ours==pi`、`pi 的 list(cwd) 看到了它`、`与终端那份 pi（…/dist/bundle/cli.js）一致`）。
+
+### 第 2 步（启动即恢复 + 会话替换后重放，2026-09-13）
+| # | 现象 | 原因 | 处置 |
+| --- | --- | --- | --- |
+| 2-1 | 计划要求的**4 条断言先红后绿** | 都是真红（断言失败，不是编译错）：① Output 没有 `[controller] 会话文件：`；② `replays=0`（换会话后没人通知面板重放）；③ 重启后 `items=0`，重启前是 **12**；④ 接过的不是那个文件 | 全部变绿：`controller-check 62/66 → 67/67`（+5 条） |
+| 2-2 | 计划 §6 要求的"`{cancelled:true}` → 不发 state"原本**造不出来** | `test-fixtures/ext-smoke` 里没任何扩展能手取消换会话 | 给夹具加了 `session_before_switch`（由 `JERRYPI_SMOKE_CANCEL_SWITCH=1` 触发）→ 现在有一条真断言：取消时会话没换、历史没被清、也没发重放 |
+| 2-3 | **一处接线没有断言覆盖**（诚实记下） | `extension.ts` 里 `onSessionReplaced: () => provider.replay()` 这行：`host-check` 只能验 `provider.replay()`（3 条断言），`controller-check` 只能验"回调被叫了"（1 条）——**两边接起来那一行没人验** | 靠 typecheck + 两端各自的断言 + 真机验收（Mac 动作① 的切换路径、Windows W1）兜。要彻底盖住得让 host-check 能构造真 controller（现在用的是桩），值不得。**不修，记在这里** |
+| 2-4 | `§3.7 缺口 A`（点 `Pi: New Session` 后面板不消旧转写） | 全仓唯一发 `state` 的地方是 webview 的 `ready`，而它只启动时发一次 | 已修：controller 加 `onSessionReplaced` 回调 → `ChatViewProvider.replay()`（`state` 的组装仍然只有一处）。`newSession()` 里 `resetLiveState()` 也挪到**替换成功之后**（评审 S1） |
+| 2-5 | R8（多写者）在测试里真的发生了 | 5c 的"重启等价物"让**两个 `SessionHostController` 同时持有同一个会话文件** —— 真机上就是两个窗口开同一个项目 | 测试里立刻 `dispose()`；它正好演示了 R8 的场景，所以不必造例外的例（但别把它当成"R8 已经解决"） |
+| 2-6 | 本步没改任何与 pi 交互的语义，闸门 T1–T12 只是**回归性**重跑 | —— | `14 PASS / GATE PASS`（含 T10/T11/T12 明细），说明第 1 步建立的目录语义没被碰坏 |
+
+**第 2 步的门禁**：typecheck ✅｜`npm run self-test` 9/9｜`check:controller` **67/67**｜
+`host-check` **41/41**（+2）｜闸门 **14/14 GATE PASS**。
 
 ---
 

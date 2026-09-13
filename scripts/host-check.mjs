@@ -214,6 +214,21 @@ check(
 );
 check("ready 会写一行 [webview] ready", output.lines.includes("[webview] ready"));
 
+// ①b S5 §9 第 2 步（D6）：会话替换后的重放。
+// `provider.replay()` 与 `ready` 必须走**同一个出口**，否则两边的 state 形状会跑偏。
+{
+  const before = view1.posted.length;
+  provider.replay();
+  const replayed = view1.posted.slice(before).filter((m) => m.type === "state");
+  check("replay() → 恰好一条 state", replayed.length === 1, String(replayed.length));
+  check(
+    "replay() 的 state 与 ready 的那条同形（同一出口）",
+    JSON.stringify(Object.keys(replayed[0] ?? {}).sort()) ===
+      JSON.stringify(Object.keys(stateMessages[0] ?? {}).sort()),
+    JSON.stringify(Object.keys(replayed[0] ?? {})),
+  );
+}
+
 // 旧协议的面板：要留一行日志（这是删掉「断言常量等于 3」之后唯一有意义的版本断言）
 const beforeVersionLog = output.lines.length;
 await view1.send({ type: "ready", protocol: 2 });
