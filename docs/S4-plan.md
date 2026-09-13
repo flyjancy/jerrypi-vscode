@@ -674,8 +674,16 @@ Windows 的列表是 3 个（`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp
 - Mac 的 store 里已有新名 `deepseek-flash`（+ `deepseek-v4-pro`），所以 4 个；
   Windows 那份 store 里没有，所以 3 个。用户的 `models.json` 注释也印证了这层关系：
   "`deepseek-v4-flash`：旧模型名，官方已下线，但请求仍由 DeepSeek-V4.1-Flash 提供服务"。
-- 想让 Windows 跟上：在那台机器上跑一次 pi CLI（会刷新 store），或把 Mac 的
-  `models-store.json` 复制过去。已写进 README 的已知限制（一句话，避免下一个人也困惑）。
+- **真因（当天补记，用户指出了我第一版结论里的自相矛盾）**：pi 的联网刷新开关是
+  `refreshFromNetwork = modelNetworkEnabled && options.allowModelNetwork === true`
+  （`REMOTE_CATALOG_REFRESH_INTERVAL_MS = 4h`，带 ETag；pi 自己的默认就是 `false`），
+  而**我们显式写死 `allowModelNetwork: false`**（`src/pi/runtime.ts`，注释写着
+  "不联网刷模型目录"）——所以扩展从不主动刷新目录，Mac 上那个新名字是**用户自己装的
+  pi CLI** 刷进 `models-store.json` 的，扩展只是读到它。
+  第一版写的"在那台机器上跑一次 pi CLI"是**错的两次**：那台机器装不了 pi CLI
+  （这正是本项目存在的理由），而且扩展根本不需要它 —— 复制 `models-store.json`
+  即可。已按此改写 README 与 `docs/STATUS.md`（并把"`Pi: Refresh Model Catalog`
+  显式联网刷新"记进欠账，候选与 S6 的 `jerrypi.agentDir` 一起做）。
 
 **版本字节可复现性**：本次 0.1.6 的 Marketplace 下载与本地构建**整体字节相同**，
 与 0.1.5 那次"只有 zip mtime 不同"不一致 —— 说明 zip 内 mtime 是否相同取决于

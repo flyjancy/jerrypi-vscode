@@ -158,7 +158,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 - **项目级设置默认不被信任**：pi CLI 会解析信任并询问用户，而 jerrypi 固定以 `projectTrusted: false` 初始化会话，因此工作区里的 `.pi/settings.json`、`SYSTEM.md` 等项目级资源不会被加载，也**不会有任何提示**。这是刻意的安全默认值（项目级设置能改 `shellPath` 与默认工具），信任流程待 S6 补上；在此之前如需使用项目级配置，请改用全局 `settings.json`。
 - **生成中切换模型不影响本轮**：pi 只改 `state.model`，正在跑的那轮仍用旧模型（下一轮生效）。切模型本身是**异步**的（要校验凭据），面板在切换完成前仍显示旧值。
 - **面板里选的模型只在本窗口有效**：面板内的选择不写入 pi 的 `settings.json`（等价于 pi TUI 里"选了但没按 Ctrl+S 保存"），重开窗口会回到 pi 的默认/你自己的设置。写入设置属于 S6。
-- **模型列表是"这台机器上 pi 的目录"**：面板直接用 pi 的 `getAvailable()`（不硬编码、不过滤），而 pi 会把内置目录与 `<agentDir>/models-store.json`（pi 自己维护的缓存）合并，所以**两台机器上看到的模型可能不同**（例如 `deepseek-flash` 这个新名字只在刷新过缓存的机器上有）。想让列表跟上，在那台机器上跑一次 pi CLI，或复制 `models-store.json`。
+- **模型列表是"这台机器上 pi 的目录"，而且不会自己联网更新**：面板直接用 pi 的 `getAvailable()`（不硬编码、不过滤），而 pi 会把**内置目录**与 `<agentDir>/models-store.json`（缓存）合并。我们的运行时**显式关掉了联网刷新**（`allowModelNetwork: false`），所以面板不会替用户往外发请求 —— 代价是新模型名（例如 `deepseek-flash`）**不会自动出现**。判断标准：`models-store.json` 是 pi 的文件格式，任何能刷新它的 pi 环境（另一台装了 pi CLI 的机器）刷出来的文件**可以直接复制**到这台机器的 `<agentDir>` 下，重启面板即生效。将来会提供 `Pi: Refresh Model Catalog`（点了才联网）。
 - **模型列表只列"配了凭据"的模型**：用 `getAvailable()` 过滤，所以列表里没有的模型不是 bug，而是那个 provider 没配 API key（`Pi: Set API Key`）。
 - **模型选择器不做"先显示旧列表再刷新"**：直接传一个 Promise 给 VS Code 的 `showQuickPick`（原生加载态）。这台机器上取列表只要 1ms，而 OAuth provider 上先显示一份可能已失效的旧列表反而更糟；真出现明显卡顿再升级成 `createQuickPick`。
 - **远程图片不加载**：markdown 里的 `![](https://…)` 会被降级成 alt 文字。放行远程图片等于让模型可控的 URL 变成一条出网信道（一张 1×1 像素就能把内容编码进 query 发出去），因此消息里的图片**只允许 `data:image/...`**（CSP 里写的是 `img-src <扩展自身资源> data:`，另外放行扩展自己的图标），任何远程 URL 都不会发起请求。
