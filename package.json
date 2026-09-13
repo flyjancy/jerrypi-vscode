@@ -96,6 +96,7 @@
     "@types/vscode": "1.120.0",
     "@vscode/vsce": "3.9.2",
     "esbuild": "0.28.2",
+    "happy-dom": "^20.14.5",
     "marked": "18.0.5",
     "typescript": "5.9.3"
   }

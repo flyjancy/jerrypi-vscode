@@ -10,15 +10,15 @@
 //   3. webview 产物**不得**引用 node 内置模块或 `vscode`（它是浏览器环境）。
 import { readFileSync, statSync } from "node:fs";
 import { build } from "esbuild";
+// webview 的打包参数**单独一个文件**：无头 DOM 测试台（scripts/webview-dom-check.mjs）
+// 必须与生产用同一份配置，否则两边会慢慢漂成两个东西。
+import { MAX_WEBVIEW_BYTES, WEBVIEW_OUTFILE, webviewBuildOptions } from "./scripts/webview-bundle.mjs";
 
 const PI_PACKAGE = "@earendil-works/pi-coding-agent";
 const EXTENSION_OUTFILE = "dist/extension.js";
-const WEBVIEW_OUTFILE = "dist/webview.js";
 const STYLE_OUTFILE = "dist/style.css";
 /** 体积上限：正常约 20 KB；pi bundle 是 7.6 MB，一旦误打进产物会立刻超限。 */
 const MAX_EXTENSION_BYTES = 256 * 1024;
-/** webview 产物上限：marked（约 45 KB）+ 自己的代码，正常远低于此。 */
-const MAX_WEBVIEW_BYTES = 512 * 1024;
 
 const banner = [
   'import { createRequire } from "module";',
@@ -57,29 +57,8 @@ await build({
 });
 
 /** 面板前端（浏览器环境）。 */
-await build({
-  entryPoints: ["src/webview/main.ts"],
-  bundle: true,
-  platform: "browser",
-  format: "iife",
-  target: "es2022",
-  outfile: WEBVIEW_OUTFILE,
-  minify: true,
-  sourcemap: true,
-  logLevel: "info",
-  // webview 里没有 node，误用会得到一个难查的运行时错误；在打包期直接拦下。
-  external: [],
-  plugins: [
-    {
-      name: "forbid-node-and-vscode",
-      setup(pluginBuild) {
-        pluginBuild.onResolve({ filter: /^(node:|vscode$)/ }, (args) => ({
-          errors: [{ text: `webview 产物不能引用 "${args.path}"（浏览器环境没有它）` }],
-        }));
-      },
-    },
-  ],
-});
+// 参数全部来自 scripts/webview-bundle.mjs（测试台用的是同一个函数）。
+await build(webviewBuildOptions({ outfile: WEBVIEW_OUTFILE }));
 
 /** 样式：单独一个入口，产物直接进 .vsix。 */
 await build({

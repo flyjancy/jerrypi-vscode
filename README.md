@@ -295,7 +295,7 @@ Once installed, run the feasibility gate with `Pi: Run Self-Test` (T1–T9, resu
 | `jiti` | 2.7.0 | MIT | Loads pi TypeScript extensions |
 | `@silvia-odwyer/photon-node` | 0.3.4 | Apache-2.0 | Image resizing (WASM, no native code) |
 
-**Build-time only** (not shipped; versions per `package.json`): `@earendil-works/pi-coding-agent` (types), `esbuild`, `typescript`, `marked`, `undici`.
+**Build- and test-time only** (never distributed; versions per `package.json`): `@earendil-works/pi-coding-agent` (types), `esbuild`, `typescript`, `marked`, `undici` (the last two are bundled into `dist/`), and `happy-dom` (used only by `scripts/webview-dom-check.mjs`).
 
 See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full notices and license texts.
 

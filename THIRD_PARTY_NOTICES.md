@@ -5,6 +5,14 @@ bundles, redistributes or derives from the third-party software listed below.
 Each component remains under its own license; the corresponding notices and
 license texts are reproduced here as required.
 
+**Scope**: this file covers software that is **shipped** — either redistributed
+verbatim inside the `.vsix`, or bundled into `dist/*.js`. Development-only
+dependencies (esbuild, typescript, marked, undici, happy-dom, and the type
+packages) are *not* distributed and therefore have no notices here; `happy-dom`
+is used solely by `scripts/webview-dom-check.mjs`, which never enters the
+package (verified by `scripts/check-vsix.mjs` and the file list of the built
+`.vsix`).
+
 The extension ships, inside its `.vsix` under `pi-runtime/`, a verbatim copy of
 the official pre-bundled SDK published by `@earendil-works/pi-coding-agent`,
 together with the runtime packages that bundle depends on. Notably, the

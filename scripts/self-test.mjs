@@ -25,9 +25,10 @@ const RESOURCES_TS = path.join(REPO_ROOT, "src", "pi", "resources.ts");
 const PROTOCOL_CHECK = path.join(SCRIPT_DIR, "protocol-check.mjs");
 const RENDER_CHECK = path.join(SCRIPT_DIR, "render-xss-check.mjs");
 const TOOL_TEXT_CHECK = path.join(SCRIPT_DIR, "tool-text-check.mjs");
+const WEBVIEW_DOM_CHECK = path.join(SCRIPT_DIR, "webview-dom-check.mjs");
 const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 
-const TOTAL = 7;
+const TOTAL = 8;
 let passed = 0;
 
 function pass(id, name, detail) {
@@ -199,6 +200,22 @@ function testScriptsParse() {
   pass(7, `${scripts.length} 个检查脚本都能解析`, "");
 }
 
+/**
+ * 面板前端的**接线层**检查（happy-dom 真 DOM）。
+ *
+ * 与上面那几个纯函数脚本分开成独立用例，因为它的失败含义不同：那三个是"算错了"，
+ * 这个是"事件没接上"（人工验收抓到的两个缺陷都属于这一类）。
+ */
+function testWebviewDom() {
+  const result = spawnSync(process.execPath, [WEBVIEW_DOM_CHECK], { cwd: REPO_ROOT, encoding: "utf8" });
+  const output = `${result.stdout}${result.stderr}`.trim();
+  if (result.status !== 0) {
+    const failed = output.split("\n").filter((line) => line.includes("FAIL")).slice(0, 4).join(" | ");
+    fail(8, "webview DOM wiring checks pass", failed || output.split("\n").slice(-2).join(" | "));
+  }
+  pass(8, "webview DOM wiring checks pass", output.split("\n").filter((l) => l.includes("OK")).slice(-1)[0] ?? "");
+}
+
 function testUnitChecks() {
   // S2 的纯函数层（serialize 的 id 规则、urlPolicy 的白名单、渲染安全）由单独脚本检查，
   // 这里只保证它们**真的会被跑**——漂移的检查脚本等于没有检查。
@@ -227,6 +244,7 @@ async function main() {
   await testResourceListDrift();
   testScriptsParse();
   testUnitChecks();
+  testWebviewDom();
   console.log(`SELF-TEST OK (${passed}/${TOTAL})`);
 }
 
