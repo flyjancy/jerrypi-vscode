@@ -64,6 +64,8 @@ this.mountInteractiveTui(this.renderer, [
 - **右**：`(provider) <model id> • <等级>`；`reasoning: false` 时**不显示等级**；
   等级为 `off` 时写作 `thinking off`。
 - **阈值配色：`> 90` 用 error 色，`> 70` 用 warning 色**（严格大于）。
+- **`?` 的完整串是 `?/1.0M`，没有 `%` 号**（`contextPercent === "?" ? \`?/${formatTokens(window)}\` : \`${p}%/${…}\`` 是两个分支）——
+  不写死就会被实现成 `?%/1.0M`。
 - **`?` 的真实触发条件（评审纠正）**：`contextUsage?.percent !== null ? value.toFixed(1) : "?"` ——
   只有 **`percent === null`**（压缩后还没有新的 assistant usage）才显示 `?`；
   `getContextUsage()` 返回 **`undefined`** 时走的是 `0.0`。二者是两种不同状态。
@@ -190,16 +192,24 @@ pi 的 `?` 就是为这个）⑥ **会话重建**（`newSession` 已存在，`on
 
 成本与窗口放 D13 的 tooltip。元信息行只放 **模型 · 等级 · 用量**。
 
-### D7 模型列表 —— 采纳 + 评审修正前提
+### D7 模型列表 —— 第 1 轮修正前提、第 2 轮改做法
 
 只用 `getAvailable()`（它按有效凭据过滤，不可能选中一个一点就报错的模型）。
-评审修正：**无参调用 `getAvailable()` 会触发全量可用性刷新**（每个 provider `checkAuth` + 读凭据），
-1ms 只是我这台机器（纯 API key）的结果。做法改为：
+评审第 1 轮指出：**无参调用 `getAvailable()` 会触发全量可用性刷新**
+（每个 provider `checkAuth` + 读凭据），1ms 只是我这台机器（纯 API key）的结果。
 
-1. `getAvailableSnapshot()` **同步**拿列表 → QuickPick **立刻**弹出（零 I/O）；
-2. 同时发起 `getAvailable()`，回来后**替换 items**（`busy: true` 的加载态）。
+我原来打算用 `getAvailableSnapshot()`（同步、零 I/O）先弹窗、再用异步结果替换 items ——
+**评审第 2 轮指出这条自相矛盾**：`showQuickPick` 弹出后**改不了 items、也设不了 `busy`**，
+要那样做必须换 `window.createQuickPick()`，桩的面积翻倍，而且 `onDidHide`/`onDidAccept`
+的先后顺序自己就容易写错。
 
-`getModels()`（全目录，含没 key 的 provider）**不用**。
+**结论（采纳）：`window.showQuickPick(session.modelRuntime.getAvailable())`** ——
+VS Code **原生支持传 Thenable**，等待期间自带加载态。一行拿到全部效果；
+放弃的只是"先显示旧快照"，而在 1ms 的机器上没人看得见，
+在 OAuth 慢机上显示一份**可能已失效的**旧列表反而更糟。
+真机上真出现明显卡顿，再升级到 `createQuickPick`（记在 §11 已知限制里）。
+
+`getModels()`（全目录，含没 key 的 provider）**不用**；`getAvailableSnapshot()` 也不用。
 
 ### D8 等级 QuickPick —— 采纳 + 评审修正前提
 
@@ -258,6 +268,9 @@ pi 的 `?` 就是为这个）⑥ **会话重建**（`newSession` 已存在，`on
 
 理由：原来把 `contextWindow` 塞进 `contextUsage`，一旦 usage 是 `null`，前端连窗口都不知道，
 只能渲染 `?/?` 而pi 在这种情况渲染的是 `?/1.0M`。
+**无模型时 `contextWindow` 是 `0`** → 那种情况走 D11 的"未选择模型"文案，
+**不渲染 `?/0`**（§6 有一条 `contextWindow: 0` 的渲染断言）。
+
 **协议注释里必须把两种状态分开写**：
 （a）`contextUsage === null` = 根本没有用量信息（无模型 / 窗口 ≤ 0）；
 （b）`contextUsage.percent === null` = 刚压缩、等下一次回复（→ 显示 `?`）。
@@ -265,7 +278,8 @@ pi 的 `?` 就是为这个）⑥ **会话重建**（`newSession` 已存在，`on
 ### D13 VS Code 状态栏项 —— 采纳 + 评审补充
 
 `createStatusBarItem(Right, 100)`，文本 `$(hubot) <model id> · 42.3%`，tooltip 带
-provider/等级/窗口/成本，`command = jerrypi.selectModel`，面板 dispose 时隐藏。
+provider/等级/窗口/成本（**价格要标单位 `$X / 1M tokens`** —— §3.5 第 6 条核实过的口径，
+否则 tooltip 里一个裸 `$2` 没人知道是什么），`command = jerrypi.selectModel`，面板 dispose 时隐藏。
 评审补充：
 - **只在 controller 已 ensure 之后创建**，**不要为了显示它而提前建会话**（否则 VS Code 启动
   就会加载 pi 运行时）；
@@ -287,19 +301,29 @@ provider/等级/窗口/成本，`command = jerrypi.selectModel`，面板 dispose
 百分比：`percent.toFixed(1)`；`percent === null` → `?`。
 **断言并进 `tool-text-check.mjs`**（self-test 已挂它；新建脚本容易忘挂 → CI 根本不跑）。
 
-### D15 【新增，待第 2 轮评审】面板选的模型要跨 `newSession` 记住吗
+### D15 面板选的模型要跨 `newSession` 记住 —— **定案 A（评审第 2 轮）**
 
 问题来源（评审 R14）：面板里选的模型是 `persist: false`（只改本次会话），
 而 `jerrypi.newSession` → `onRebind` → `alignPanelModel` 会在"用户从没在 pi 里设过默认"的机器上
 **把它改回我们的偏好（flash）** —— 用户会觉得"我选的模型被吞了"。
 
-三个选项：
+**评审否决了 B（`persist: true`，替用户改全局默认 —— 与既有纪律冲突）、
+C（只写已知限制 —— 把十行的修复包装成文档）、以及我没想到的 D
+（newSession 时干脆不跑 `alignPanelModel` —— 那会把受限机上"`openai/gpt-5.5` 卡死"那条路
+重新打开，而 `alignPanelModel` 存在的唯一理由就是挡它）。定案 A，并补三条：**
 
-| 选项 | 说明 |
-| --- | --- |
-| **A（我倾向）** | 参数 `rememberPanelModel`：进程内记住用户在面板里选过的模型，`onRebind` 优先用它；**不写 pi 设置**（设置是 S6 的事）。用户在 pi 那边改了默认模型时，以 pi 的为准 |
-| B | 面板切模型时也 `persist: true`（等于替用户改全局默认）—— 与"不覆盖用户选择"的既有纪律冲突 |
-| C | 什么都不做，只在 README 已知限制里写明"新建会话后模型回到默认" |
+1. **优先级写死，面板选择赢**。`onRebind` 顺序：
+   ① 本进程记过面板选择 → 用它；② 否则 pi 设置里有默认 → 不动（pi 已自己应用）；
+   ③ 否则 → `pickModel` 兜底。
+   规则一句话说得清：**"你在面板里选过模型，本窗口就一直用它，直到你再换或重开窗口。"**
+   （我原来写的"用户在 pi 那边改了就以 pi 的为准"会让规则变成"看谁后改"，无法解释也无法断言。）
+2. **记住的模型在 `onRebind` 时要重新校验**：凭据可能在两次会话之间失效，
+   `setModel` 会 throw → 捕获成 notice（"上次选的 X 现在不可用，已回退到 Y"）并退回第 ③ 步。
+3. **只存在内存里**（controller 的一个字段），**不要用 `workspaceState`/`globalState`** ——
+   一旦落盘它就是第三份"默认模型"设置，S6 要同时和 pi 的 settings 与它对账。
+
+**配套断言（controller-check，真会话）**：选模型 → 触发 `newSession` → `session.model`
+**仍是用户选的那个**。这条比任何 UI 断言都值钱，因为它锁的是**跨会话重建**的行为。
 
 ## 5. 风险与对策
 
@@ -314,7 +338,7 @@ provider/等级/窗口/成本，`command = jerrypi.selectModel`，面板 dispose
 | R7 | 阈值与 pi 不一致 | 70/90（严格大于），具名常量 + 出处注释；断言 70 与 90 本身是普通/warning |
 | R8 | 顶部状态行消失后忙/闲提示无处放 | D1/D2：常驻空行 + 按钮/hint 已足够 |
 | R9 | 状态栏项在无面板窗口乱显示 | D13：只在有活动会话时显示，dispose 时 hide |
-| **R10** | **`renderStatus()` 结尾有一句无条件 `scrollToBottom()`（`main.ts:209`）** —— meta 刷新频率一上来，正在往上翻历史的用户会被**反复拽回底部** | meta/busy 路径一律走 `scrollIfFollowing()` 或干脆不滚；**加一条断言：收到 `meta` 不得写 `transcript.scrollTop`**（给 `#transcript.scrollTop` 装 setter 探针，测"有没有调用"而不是"滚到哪"） |
+| **R10** | **`renderStatus()` 结尾有一句无条件 `scrollToBottom()`（`main.ts:209`，已复验）** —— meta 刷新频率一上来，翻历史的用户会被**反复拽回底部** | **采纳评审第 2 轮的结论：从 `renderStatus()` 里删掉它，不做任何替换**（滚动跟随的正确条件是"**转录内容变了**"，meta/busy/queue 都不改内容；改成 `scrollIfFollowing()` 只是把伤害降到"大多数时候没事"，还把这个与状态渲染无关的副作用留在原地）。**但 `applyState()` 末尾要显式补一次 `scrollToBottom()`** —— 快照重放后必须停在底部，漏了会变成"重开面板停在转录顶部"，比 R10 更显眼。跟随只保留在 `delta` / `item` 两条路径 |
 | **R11** | 窄栏溢出 | 模型名 `min-width:0; overflow:hidden; text-overflow:ellipsis`；**等级与百分比 `flex:none` 永不被挤掉**（它们是本次改造的目的） |
 | **R12** | `setModel` 是 async + `checkAuth`，关闭选择器到生效之间有窗口 | await 完成再广播 meta；**生成中切模型不影响本轮**（pi 只改 `state.model`）→ 写进 README 已知限制 |
 | **R13** | `meta` 与 `busy` 的到达顺序竞态 | 只要 D2 被否决就不存在（评审指出这本身就是否决 D2 的理由之一） |
@@ -322,25 +346,43 @@ provider/等级/窗口/成本，`command = jerrypi.selectModel`，面板 dispose
 
 ---
 
-## 6. 自动化检查（先红后绿；评审逐条纠正过）
+## 6. 自动化检查（先红后绿；两轮评审逐条纠正过）
+
+**桩的纪律（评审第 2 轮，写进脚本头注释）**：**驱动端必须是真输入**（一条会话事件 /
+一条 webview 消息），**桩只能出现在断言端**；两端都是桩的断言一律删掉。
+例：不要"我调 `updateStatusBar(x)` 再断言桩记到 `x`"（那是在测赋值），
+而是"喂一条 `meta` 刷新，再去桩上读 `statusBar.text`"。
 
 | 脚本 | 断言（要点） |
 | --- | --- |
-| `scripts/tool-text-check.mjs` | **`formatTokens` 的 8 个边界值**（D14 表）+ `percent` 格式化（含 `null → "?"`） |
-| `scripts/render-xss-check.mjs` | 元信息行渲染：模型名 + 等级 + 百分比；`percent: null` → `?`（不是 `NaN%`）；**70 与 90 本身**（普通 / warning）、`70.1`（warning）、`90.1`（error）、`percent: null` **不着色**（pi 用 `percent ?? 0`）；模型名里的 `<img …>` 不产生元素；`off` 且支持思考时显示 `thinking off` |
-| `scripts/webview-dom-check.mjs` | **结构位置**：`#status` 在 `#composer` 之前且在 `#queue` 之后；`#meta` 在 `#input` 之后；**空闲时 `#status` 文本为空且整份 DOM 不含"空闲"**；点模型段/等级段发出对应请求；收到 `meta` 就地更新（不重建节点）；**收到 `meta` 不得写 `transcript.scrollTop`（setter 探针，锁死 R10）**；`focusInput` 后 `activeElement === #input`（**注释里写明它不覆盖 R2 的真焦点**） |
-| `scripts/host-check.mjs`（**新脚本，配 fake-`vscode` 桩**） | ①`chatView.handleMessage` 接受两个新消息、拒绝未知消息（**这里才有真正的运行期校验**）；②QuickPick：交给 `showQuickPick` 的 items 顺序/内容 == `getAvailableSnapshot()`、当前项被 `picked` 标记；③选第 N 项时 `setModel` 收到的是**那个 Model 对象**（不是字符串、不是 `provider/id`）；④`setModel` 抛错 → 变成 notice 且无 unhandled rejection；⑤状态栏项：文本/tooltip/`command`/show-hide 时机 |
-| `scripts/controller-check.mjs` | 快照里 `meta` 必填且形状正确（含 `contextWindow` 顶层）；一轮对话后 `percent` 变大；无模型会话里 `supportsThinking()===false` 而 `getAvailableThinkingLevels()` 有 7 档（D8 的 gate） |
+| `scripts/tool-text-check.mjs` | **`formatTokens` 的 8 个边界值**（D14 表，实测值）+ `percent` 格式化 |
+| `scripts/render-xss-check.mjs` | 元信息行：模型名 + 等级 + 百分比；`percent: null` → **`?/1.0M`（无 `%`）**；**`contextWindow: 0` → 走"未选择模型"文案，不出现 `?/0`**；**70 与 90 本身**（普通 / warning）、`70.1`（warning）、`90.1`（error）、`null` **不着色**（pi 用 `percent ?? 0`）；模型名里的 `<img …>` 不产生元素；`off` 且支持思考时显示 `thinking off` |
+| `scripts/webview-dom-check.mjs` | **结构位置**：`#status` 在 `#composer` 之前且在 `#queue` 之后；`#meta` 在 `#input` 之后；空闲时 `#status` 文本为空**且整份 DOM 不含"空闲"**；点模型段/等级段发出对应请求；收到 `meta` 就地更新（不重建节点）；`focusInput` 后 `activeElement === #input`（注释写明**它不覆盖 R2 的真焦点**）；**R10 三条**：收到 `meta` **不写** `transcript.scrollTop`、收到 `busy` **不写**、收到 `state` **写**（setter 探针；单独一条会被"把滚动搬进 busy"绕过去） |
+| `scripts/host-check.mjs`（新，配 fake-`vscode` 桩） | ①消息路由：未知消息 → output 多一行**且没有任何 postMessage 发出**；`openModelPicker` → `showQuickPick` 被调用一次；**webview 报旧 protocol → output 里有版本不一致日志**（这是删掉 `PROTOCOL_VERSION === 3` 之后唯一有意义的版本断言）。④错误路径：`setModel` 抛错 → notice 文案**带 `provider/id`**、**且不广播 meta**（别把半截状态推给前端）。②（**随 controller 提交一起补**）`showQuickPick` 收到的 items **与 `getAvailable()` 顺序一致**、当前项用 **`$(check)` 前缀或 `description:"当前"`** 标记（**不是 `picked`** —— 它只在 `canPickMany` 多选时生效）；**空列表 → 只有一条说明项，选中它 `executeCommand("jerrypi.setApiKey")`**。③（**最有价值**）选第 N 项时 `setModel` 收到的是**那个 Model 对象**（不是字符串、不是 `provider/id`）。⑤状态栏项：**喂真输入**后读文本/tooltip/`command`；断言**时机**（ensure 之前不创建、dispose 时 hide） |
+| `scripts/controller-check.mjs` | 快照里 `meta` 必填且形状正确（含顶层 `contextWindow`）；一轮对话后 `percent` 变大；无模型会话里 `supportsThinking()===false` 而 `getAvailableThinkingLevels()` 有 7 档（D8 的 gate）；**D15：选模型 → `newSession` → `session.model` 仍是用户选的那个** |
 
-**删掉的**（评审指出是恒真或无意义）：
+**桩的最小 API 面（评审按"宿主代码真的碰到什么"裁的，不多给）**：
+`window.showQuickPick`（await thenable，按预置脚本返回第 N 项或 `undefined`，记录 items 与 options）、
+`window.createStatusBarItem`（记录 text/tooltip/command/show/hide/dispose）、
+`window.showWarningMessage`/`showErrorMessage`（只记录）、`window.showTextDocument`（只记录）、
+`commands.registerCommand`/`executeCommand`（注册表 + 真派发）、`env.openExternal`（只记录）、
+`Uri.file/parse/joinPath` + `toString()`（平凡实现）、`StatusBarAlignment`/`Disposable`（常量/平凡类）。
+
+外加一个**不属于 vscode 模块**的假 `WebviewView`：
+`{ webview: { options, html, cspSource, asWebviewUri, onDidReceiveMessage, postMessage(记录) }, onDidDispose }`
+—— 必须走 `resolveWebviewView` 注册进来的那个回调去驱动消息处理（别直接调私有的 `handleMessage`）。
+
+接线：`scripts/webview-bundle.mjs` 那套之外，host-check 用 esbuild 的 **`alias`** 把 `vscode`
+指向 `scripts/fixtures/vscode-stub.mjs`。**桩里不写任何判断逻辑**，只有记录与可编程返回值。
+
+**删掉的**（评审指出恒真或无意义）：
 - ~~`PROTOCOL_VERSION === 3`~~ —— 两端 import 同一个常量，断言它等于 3 只是把数字抄两遍；
-- ~~"两个新客户端消息被接受"放 protocol-check~~ —— `protocol.ts` 只有类型，运行期没有校验器，
-  真正的接受/拒绝在 `chatView.handleMessage`（import vscode）→ 挪进 `host-check`。
+- ~~"两个新客户端消息被接受"放 protocol-check~~ —— `protocol.ts` 只有类型、运行期没有校验器，
+  真正的接受/拒绝在 `chatView.handleMessage`（import vscode）→ 挪进 `host-check`；
+- ~~"QuickPick **弹出**"~~ —— 弹出本身不该断言（见桩的纪律）。
 
 **不许写进自动化的**：任何**滚动结果**（无头 DOM 无排版引擎，`scrollHeight` 恒 0）。
-注意区别：R10 那条断言测的是"**有没有调用** scrollTop"，允许。
-
----
+区别：R10 那三条测的是"**有没有调用** `scrollTop`"，允许。
 
 ## 7. 人工验收 —— Mac（**用户只做 2 个动作**）
 
@@ -352,7 +394,7 @@ provider/等级/窗口/成本，`command = jerrypi.selectModel`，面板 dispose
 | 版式的**位置关系** | 测试台结构断言 | 【自动】 |
 | 版式在**真侧边栏**里的样子（挤压/换行/抖动） | 无头 DOM 测不了 | 【人工】动作 ① |
 | 点模型段/等级段发出请求 | 测试台断言 | 【自动】 |
-| QuickPick 弹出、选中后真的切了模型 | `host-check`（桩）+ `controller-check`（真会话） | 【自动】 |
+| 选中项 → `setModel` 收到正确的 Model 对象（**不是**"弹出了"） | `host-check`（桩）+ `controller-check` | 【自动】 |
 | 选完能**直接打字** | 真焦点 | 【人工】动作 ① 后半 |
 | 等级列表带空洞、随模型变 | 渲染断言 + §3.5 探针实测 | 【自动】 |
 | 一轮后百分比变化 | `controller-check` | 【自动】 |
@@ -392,20 +434,35 @@ W4（"重开后模型正确" —— 由 `snapshot()` 带 meta 的断言覆盖，
 
 ---
 
-## 9. 实施步骤（提交切分）
+## 9. 实施步骤（提交切分）—— 采纳评审第 2 轮的重排
 
-1. **探针补充**（已做，见 §3.5；第 2 轮若有新问题再补）。
-2. **`test: add a fake-vscode stub and host-check`** —— 桩 + 新脚本 + 挂进 `self-test`；
-   **先写断言、看红**（此时功能还没实现）。
-3. **`feat(protocol): v3`** —— `meta`（D12 形状）+ `meta` 消息 + 两个客户端消息。
-4. **`feat(controller)`** —— 组装/去重/`lastMeta` 清理、D5 的八个刷新点、D7 的 snapshot→替换、
-   QuickPick 与两个命令、D13 状态栏项、D15 的选择（若采纳 A）。
-5. **`feat(webview)`** —— 版式改造 + `#meta` 渲染 + 新挂委托 + `focusInput` + D1 的常驻空行 +
-   R11 的溢出规则 + R10 的滚动修正。
-6. **`docs`** —— README（功能表、已知限制：生成中切模型不影响本轮 / D15 的选择）、本文件 §11/§12。
-7. 打包 → 自测 → Mac 2 个动作 → 发 0.1.6 → Windows W0–W2。
+**顺序：协议 → 桩 + host-check → controller → webview。**
+我原来的顺序（桩在前、协议在后）有一处倒挂：第 2 步要断言 `chatView` 接受
+`openModelPicker`，可这两个消息类型要到第 3 步才存在 —— 那写出来的断言会因为
+**类型/常量不存在而编译失败**。那不是"看到红"，是"跑不起来"；
+**红必须是断言失败**，否则先红后绿这条纪律就退化成走过场。
+协议提交只加类型、常量与注释（无行为）→ 天然是绿的，不违反纪律。
 
----
+1. **探针补充**（已做，见 §3.5）。
+2. **`feat(protocol): v3`** —— D12 的 `meta` 形状 + `meta` 消息 + 两个客户端消息 + 注释里写明
+   两种 null 状态与 `contextWindow: 0` 的语义。
+3. **`test: add a fake-vscode stub and host-check`** —— 桩（§6 的最小 API 面）+ 新脚本 +
+   挂进 `self-test`。**这一步只写断言 ①④**（消息路由、错误路径）—— 它们只依赖协议形状，
+   不依赖 items 怎么拼、状态栏文案长什么样。**②③⑤ 留到 controller 那个提交里同步补**：
+   硬在此时写完，就是对着想象中的实现写断言，最后必然改断言去迁就实现
+   —— 那种断言退化成"实现的镜像"，正是 S3 栽过的"断言了 bug 本身"。
+4. **`fix(webview): stop scrolling to the bottom on every status render`** —— **单独一个提交**：
+   `main.ts` 删掉 `renderStatus()` 里的 `scrollToBottom()` + `applyState()` 末尾**显式补一次** +
+   §6 的 R10 三条断言。它是既有行为的回归修复，单独成提交才能被单独 revert 和引用
+   （S3 的 `fix:` 提交都是这么切的）。
+5. **`feat(controller)`** —— 组装/去重/`lastMeta` 清理、D5 的八个刷新点、D7 的
+   `showQuickPick(getAvailable())`、QuickPick 与两个命令、D13 状态栏项、D15 的 A 方案（含三条补丁）；
+   同步补 host-check 的 ②③⑤ 与 controller-check 的 D15 断言。
+6. **`feat(webview)`** —— 版式改造（`#status` 下移**常驻空行**、新增 `#meta`）+ 渲染 +
+   新挂委托 + `focusInput` + R11 的溢出规则。
+7. **`docs`** —— README（功能表、已知限制：生成中切模型不影响本轮 / D7 暂不做 `createQuickPick`）、
+   本文件 §11/§12。
+8. 打包 → 自测 → Mac 2 个动作 → 发 0.1.6 → Windows W0–W2。
 
 ## 10. 评审记录
 
@@ -474,8 +531,43 @@ W4（"重开后模型正确" —— 由 `snapshot()` 带 meta 的断言覆盖，
 
 **I. 待第 2 轮的问题**：**D15**（面板选的模型要不要跨 `newSession` 记住）。
 
+### 第 2 轮（Claude，2026-09-13，5697 字；同一会话）
+
+评审先复核了我的吸收质量：**没有漏条**，13 条采纳 + 1 条否决都对得上，
+D14 的 8 个边界值它重算过全对。但指出 **2 处"采纳方式不对" + 3 处小遗漏 + 1 处设计自相矛盾**：
+
+| # | 意见 | 处置 |
+| --- | --- | --- |
+| B1 | **`picked` 是第二个 `isEnabled`**：`QuickPickItem.picked` **只在 `canPickMany` 多选时生效**，单选时什么都不做 —— 我把原来的 `$(check)` 改成 `picked`，等于换了个真机上不生效的字段，而 host-check 会断言它"被设置了" → **测试全绿、真机没勾** | **采纳**：改回 `$(check)` 前缀或 `description:"当前"`（后者更原生） |
+| B2 | host-check 断言②的基准取错了半边：写的是 `getAvailableSnapshot()`，**权威列表是 `getAvailable()`**；D11 的"没有可用模型"也须按最终列表判定（快照非空但凭据刚失效正是要提示的场景） | **采纳**（连 D7 的做法一起重做，见下） |
+| B3 | §6 没写 `?` 的**完整串**：pi 渲染 `?/1.0M`，**没有 `%`** | **采纳**（§3.2 + §6 断言） |
+| B4 | D12 的 `contextWindow` 顶层必填，但**无模型时它是 `0`** → 要定规则：无模型走"未选择模型"文案，**不渲染 `?/0`** | **采纳**（D12 + §6 断言） |
+| B5 | D13 tooltip 的价格要标单位 `$X / 1M tokens` | **采纳** |
+| B6 | §7 那行仍叫"QuickPick **弹出**、选中后真的切了模型" —— "弹出了"正是不该断言的部分 | **采纳**（改为"选中项 → `setModel` 收到正确的 Model 对象"） |
+| B7 | **D4/D7 自相矛盾**：`showQuickPick` 弹出后改不了 items、设不了 `busy`；要那样做必须换 `createQuickPick`（桩面积翻倍 + 事件顺序自己容易写错） → 改用 **`showQuickPick(Thenable)`**，VS Code 原生支持传 Promise 并自带加载态 | **采纳**（D7 重写；`createQuickPick` 留作真机卡顿时的升级项） |
+| B8 | **D15 定案 A**（B/C/以及它自己想到的 D 全部否决：B 与既有纪律冲突、C 是把十行修复包装成文档、D 会把受限机"`gpt-5.5` 卡死"那条路重新打开），并给三条补丁 | **采纳**：①优先级写死且**面板选择赢**（"你在面板里选过模型，本窗口就一直用它"）；②`onRebind` 时**重新校验**（凭据可能失效 → notice + 退回兜底）；③**只存内存**，不用 `workspaceState`/`globalState`（否则就是第三份默认模型设置）。配 controller-check 断言：选模型 → `newSession` → 模型没变 |
+| B9 | 桩的最小 API 面（按"宿主真的碰到什么"裁）+ 假 `WebviewView` 必须走 `resolveWebviewView` 的回调驱动，别直接调私有 `handleMessage` | **采纳**（§6 的接口表） |
+| B10 | 断言①④可留、②③⑤要等 controller；**⑤有"测桩自己"的风险** → 立规矩：**驱动端必须是真输入，桩只能出现在断言端** | **采纳**（写进 §6 头注释） |
+| B11 | ④补两点：notice 文案要带 `provider/id`；**失败时不广播 meta** | **采纳** |
+| B12 | **R10 的修法是"不滚"而不是 `scrollIfFollowing()`**；且 `applyState()` 要**显式**补一次滚底（否则"重开面板停在转录顶部"，比 R10 更显眼）；断言要三条一起（`meta` 不写 / `busy` 不写 / `state` 写） | **采纳**（R10 行重写） |
+| B13 | **§9 顺序倒挂**：桩在协议前，会导致"编译失败"而不是"断言失败"；红必须是断言失败 | **采纳**（重排为 协议 → 桩+host-check → controller → webview；并规定第 3 步只写 ①④） |
+| B14 | **R10 的修正单独切一个 `fix:` 提交**，别混进版式大改 | **采纳**（§9 第 4 步） |
+
+第 2 轮**没有否决项**、也没有新的设计分歧 → 按既定规则（"全部采纳且是小改就不为了流程而流程"）
+不再开第 3 轮；第 3 轮只用于**核对本次吸收的转写**（见 §10.1）。
+
 ---
 
-## 11. 实施与验收结果
+## 11. 待记录的问题（实施期发现即追加）
+
+（暂无）
+
+## 12. 实施与验收结果
 
 （待填）
+
+### 10.1 第 3 轮（**只核对转写，不审设计**）
+
+把第 2 轮的 B1–B14 逐条对着 §4/§5/§6/§9 的实际文字核对一遍，确认我没有曲解或漏改
+（第 1 轮的吸收曾被查出 2 处"采纳方式不对"，所以这次专门核一遍）。
+若核对发现的是**新的设计问题**而非转写问题，则停下来找用户，不再自行吸收。
