@@ -186,11 +186,16 @@ export function renderToolBody(item: Extract<ChatItem, { kind: "tool" }>, expand
     // 如果输出本来就只有几行，折叠与展开**长得一模一样**，用户会以为点击没生效
     // （S3 第一次验收就是这样反馈的）。pi 在 TUI 里也插这一行
     // （`... (N earlier lines, <key> to expand)`），只是它用键位提示、我们用点击。
-    const hidden = hiddenLineCount(text);
+    //
+    // ⚠️ 提示里的行数与真正显示的行数必须用**同一个**行定义：第一版计数用
+    // `textLines()`（减掉末尾空行）、渲染用 `text.split()`（没减），于是"还有 7 行"
+    // 却只显示 4 行 —— 少了一行（S3 第二次人工验收实测）。
+    const lines = textLines(text);
+    const hidden = Math.max(0, lines.length - TOOL_PREVIEW_LINES);
     if (hidden > 0) {
       parts.push(`<div class="tool-note">… 还有 ${hidden} 行（点击标题展开）</div>`);
     }
-    parts.push(`<pre class="tool-text">${renderPlain(lastLines(text, TOOL_PREVIEW_LINES))}</pre>`);
+    parts.push(`<pre class="tool-text">${renderPlain(lines.slice(-TOOL_PREVIEW_LINES).join("\n"))}</pre>`);
   }
 
   if (item.textTruncated === true) {
@@ -213,22 +218,15 @@ export function renderToolBody(item: Extract<ChatItem, { kind: "tool" }>, expand
 }
 
 /**
- * 折叠态下"被折起来"的行数。
+ * 把正文切成"逻辑行"。
  *
- * 末尾那个换行会 split 出一个空串，它不是一行内容 —— 要减掉，
- * 否则 7 行输出会显示"还有 3 行"（实际只折了 2 行）。
+ * 末尾那个换行会 split 出一个空串，它不是一行内容 —— 要减掉。
+ * **折叠预览与折行计数必须共用这一个定义**，否则两处会差一行。
  */
-function hiddenLineCount(text: string): number {
+function textLines(text: string): string[] {
   const lines = text.split("\n");
   if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-  return Math.max(0, lines.length - TOOL_PREVIEW_LINES);
-}
-
-/** 取最后 n 行（不足就全给）。 */
-function lastLines(text: string, count: number): string {
-  const lines = text.split("\n");
-  if (lines.length <= count) return text;
-  return lines.slice(-count).join("\n");
+  return lines;
 }
 
 /**

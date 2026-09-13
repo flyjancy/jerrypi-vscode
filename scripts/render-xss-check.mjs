@@ -248,14 +248,23 @@ async function main() {
       // 折叠/展开的内容规则（照 pi：bash 折叠给最后 5 行）
       const collapsed = render.renderToolCard(toolItem({ text: LONG }), false);
       const expanded = render.renderToolCard(toolItem({ text: LONG }), true);
-      check("bash 折叠时只渲染最后 5 行", collapsed.includes("第 5 行") && !collapsed.includes("第 4 行"), collapsed.slice(0, 120));
+      // 9 行 → 折 4 行、显示最后 5 行（第 5..9 行）
+      const previewLines = collapsed.match(/第 \d+ 行/g) ?? [];
+      check("bash 折叠时只渲染最后 5 行",
+        previewLines.length === 5 && previewLines[0] === "第 5 行" && previewLines[4] === "第 9 行",
+        JSON.stringify(previewLines));
       check("bash 折叠时说明还有多少行被折起来（否则用户以为点击没生效）",
         collapsed.includes("还有 4 行"), collapsed.slice(0, 160));
-      // 末尾换行会 split 出一个空串，它不是一行 —— 否则 7 行输出会显示"还有 3 行"
-      const seven = Array.from({ length: 7 }, (_, i) => `L${i + 1}`).join("\n") + "\n";
-      check("折行数不吃掉末尾的空行",
-        render.renderToolCard(toolItem({ text: seven }), false).includes("还有 2 行"),
-        render.renderToolCard(toolItem({ text: seven }), false).slice(0, 160));
+      // 说的行数必须与真正显示的行数一致 —— 第一版计数减掉了末尾空行、渲染没有，
+      // 于是"还有 7 行"却只显示 4 行（S3 第二次人工验收实测）。
+      for (const count of [6, 7, 12, 20]) {
+        const body = Array.from({ length: count }, (_, i) => `L${i + 1}`).join("\n") + "\n";
+        const card = render.renderToolCard(toolItem({ text: body }), false);
+        const shown = (card.match(/L\d+/g) ?? []).length;
+        const said = Number((card.match(/还有 (\d+) 行/) ?? [])[1]);
+        check(`${count} 行输出：说还有 ${count - 5} 行就正好显示 5 行`,
+          said === count - 5 && shown === 5, `said=${said} shown=${shown}`);
+      }
       const shortBash = render.renderToolCard(toolItem({ text: "只有一行" }), false);
       check("输出不足 5 行时不显示「还有 N 行」提示", !shortBash.includes("还有"), shortBash.slice(0, 160));
       check("bash 折叠态的 HTML 里不含被折叠掉的内容", !collapsed.includes("第 1 行"));
