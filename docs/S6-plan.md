@@ -251,16 +251,18 @@ activate() 第一件事
 
 ## 9. 步骤（每步单独提交 + 门禁全绿）
 
-1. **设置声明 + 读取层**：`package.json` 的 `contributes.configuration`；新建 `src/host/config.ts`（读取与校验）；`host-check` 加 `getConfiguration`/`onDidChangeConfiguration` 桩 + A1/A2/A3 先红后绿。
-2. **agentDir 贯通**：`activate()` 最开头应用；runtime/commands/sessions 全部走生效值；变更提示重载。断言 A9。
-3. **密钥清理**：`ApiKeyStore.removeApiKey` + `clearStoredApiKeys` + `Pi: Clear Stored API Keys`（含灰掉 auth.json 项）。断言 A5（**含 auth.json 字节不变**）。
-4. **`Pi: Set API Key` 补完**：provider 来自 pi、已配置标注、三态校验。断言 A6/A7。
-5. **空凭据目录也能对话**：断言 A4（真模型，controller-check）。
-6. **`Pi: Refresh Model Catalog`**（按 Q5）。断言 A8。
-7. **代理**：按 Q2 —— 要么只加 T13 + 诚实标注，要么照 PLAN §5.3 做第 2 层。
-8. **文档**：README 中英双语（配置表定稿 + 已知限制）、`docs/PLAN.md` §6 的 S6 状态、`docs/pi-traps.md`（`RuntimeCredentials.delete()` 那个陷阱）、`docs/STATUS.md`。
-9. **打包 + 自测 + Mac 验收（M1/M2，2 个动作）**。
-10. **发 0.1.8 → Windows W0/W1 → 回填 §12 → 关阶段**。
+| # | 步骤 | 这一步要落地的断言 |
+| --- | --- | --- |
+| 1 | **设置声明 + 读取层**：`package.json` 的 `contributes.configuration`（三项、scope 按 Q9）；新建 `src/host/config.ts`；`activate()` 最开头应用 agentDir；变更时提示重载 + 记一行带来源的日志 | **A1**（含新脚本 `scripts/settings-check.mjs` 的第一段）、**A2**、**A3** |
+| 2 | **agentDir 贯通**：runtime / commands / sessions 全部走生效值；`Pi: Open Settings File` 按 §3.6 的新口径（不替用户建目录） | **A9**、**A13**（会话落在新目录）、**A14**（凭据落在新目录） |
+| 3 | **密钥清理**：`ApiKeyStore.removeApiKey` + `clearStoredApiKeys`（逐个 try/catch、顺序定死）+ `Pi: Clear Stored API Keys`（来源判定用 `getProviderAuthStatus`，灰掉 pi 侧的） | **A5**（含"换成 `logout()` 必须变红"的可红验证） |
+| 4 | **`Pi: Set API Key` 补完**：候选来自 `getProviders()`、6 档来源标注、三态本地校验 | **A6**、**A7** |
+| 5 | **空凭据目录也能对话**：夹具（`models.json` 有 provider 无 key、无 auth.json、子进程清环境变量）+ 一轮真对话 + 来源断言 | **A4** |
+| 6 | **`Pi: Refresh Model Catalog`**（按 Q5）+ 漂移守卫 | **A8**、**A12**（正反两条都在这里落） |
+| 7 | **代理**（按 Q2）：要么只加 T13 + 诚实标注，要么照 PLAN §5.3 做第 2 层 | **A11** |
+| 8 | **文档**：README 中英双语（配置表定稿 + 已知限制）、`docs/PLAN.md` §6 的 S6 状态、`docs/pi-traps.md`（`RuntimeCredentials.delete()` 那个陷阱）、`docs/STATUS.md` | **A10**（设置 id + 生效状态的集合比对） |
+| 9 | **打包 + 自测 + Mac 验收**（M1/M2，2 个动作） | — |
+| 10 | **发 0.1.8 → Windows W0/W1 → 回填 §12 → 关阶段** | — |
 
 ## 10. 评审记录
 
@@ -323,9 +325,29 @@ F12 那条错不是"写错了"，是**实验被环境污染**：
 
 **STRONGEST_OBJECTION（它写的是 B2）** —— 采纳：一条恒真的守卫比没有守卫更糟。已据此重写 A12。
 
+### 第 3 轮（2026-09-13）—— **没跑成：评审者的 API 日限额用完了**
+
+第 3 轮按纪律只做"转写与事实核对"。提示发出去之后评审者返回：
+
+```
+API Error: Request rejected (429) · api key 日限额已用完
+```
+
+⇒ **第 3 轮由我自己做**（等价于它本来要做的三件事），结论记在下面，**全部标"未经复核"**：
+
+| 核对项 | 结果 |
+| --- | --- |
+| **① 事实复核**（F1–F19 有没有被我改坏的） | 逐条重读了改过的 F8/F12/F16/F18/F19，行号与本轮实测命令一致；本轮**没有发现新的错** |
+| **② 转写一致性**（§10 说的改法 vs 正文实际） | 用 16 个"标志串"机械化比对：§10 第 1/2 轮里承诺的每一处改动，在正文里都能找到（✓ 16/16）。编号连续性：F1–F19 / C1–C3 / A1–A14 / Q1–Q9 **无缺号** |
+| **③ 可实施性**（只看这份计划能不能干） | **发现一处真缺口**：§9 的步骤只引用到 A9，新增的 **A10–A14 没有任何步骤认领**。已把 §9 改成"步骤 ↔ 断言"对照表，现在 A1–A14 **全部被引用**（机械化复核：未引用 = 0） |
+
+**未解决分歧**：无（第 1、2 轮共 29 条意见，28 ACCEPT / 1 REJECT / 1 部分 REJECT，全部有理由）。
+**残留风险**：第 3 轮的"核对"是我自己做的 —— 这正是"评审者不会替我看第二遍"的盲区，若用户愿意，可以在日限额恢复后补跑一轮只读核对（不增加设计改动）。
+
 ### 10.1 评审后的改动（**未经复核**）
 
-_（第 3 轮之后若在评审之外自己又改了，记在这里。）_
+1. **§9 的"步骤 ↔ 断言"表**：第 3 轮自查发现 A10–A14 无人认领，改成对照表（这一处改动**没有经过任何评审**）。
+2. `AGENTS.md §2` 的 **L1 纪律**（实验要在干净环境里做 + 判别输入只有一种解释）：来自第 1 轮 B1，写进纪律文件时**没有经过评审**。
 
 ### 10.2 评审者的事实错误（本轮 3 处，按"评审的意见也要自己核"）
 
