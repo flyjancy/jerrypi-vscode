@@ -35,6 +35,12 @@
 - **SKIP 不是 PASS**；而且 SKIP 必须能区分"真的没有"与"我找错了"
   （S5-plan §11 的 1-4：PATH 拆错分隔符、`pi` 是符号链接 —— 两次都表现为静默 SKIP）。
 - `host-check` 的桩纪律：真输入、桩只在断言端、用真类与真 HTML。
+- **实验也要遵守"先红"纪律（S6 的 L1 教训，代价：一条错事实撑了半节设计）**：
+  测环境相关的行为（代理、网络、环境变量）时 ——
+  ① **在干净环境里做**：`env -u http_proxy -u https_proxy -u all_proxy -u ALL_PROXY -u NO_PROXY -u no_proxy -u HTTPS_PROXY …`
+  （本机 shell 里就有小写 `http_proxy`，undici 的小写优先，我那个“死端口仍返回 200”的对照就是这么被污染的）；
+  ② **判别输入要只有一种解释**：拿“不存在的域名”看错误码（走代理 → `ECONNREFUSED`，不走 → `ENOTFOUND`），
+  而**不能**拿“返回 200”当“没生效”（那可能正是代理帮你拿回来的）。
 
 ## 3. 事实从哪来
 
