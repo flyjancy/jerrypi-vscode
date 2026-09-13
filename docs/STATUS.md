@@ -11,7 +11,7 @@
 
 ## 1. 现在
 
-**进行中**：**S5 第 6 步：等你做 Mac 验收**（本地 F5，2 个动作；0.1.7 已打包）（2026-09-13）
+**进行中**：**S5 第 6 步：Mac 验收进行中**（用户已报回第 1 个问题：中止后切回旧会话的观感，已查证 + 补了确认框文案；**等用户继续做动作①的剩余部分与动作②**）（2026-09-13）
 
 | | |
 | --- | --- |
@@ -31,7 +31,7 @@
 | `npm run check:render` | **114** |
 | `node scripts/tool-text-check.mjs` | **87** |
 | `node scripts/webview-dom-check.mjs` | **71** |
-| `node scripts/host-check.mjs` | **56** |
+| `node scripts/host-check.mjs` | **57** |
 | `npm run check:controller`（真模型，**不进 CI**） | **81/81**（总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | **14 项（12 gating + T5c/T12 advisory）GATE PASS** |
 | `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **338 文件 / 5.75 MB**（门禁 30 MB）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |

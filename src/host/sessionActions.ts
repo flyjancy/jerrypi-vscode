@@ -23,7 +23,10 @@ export async function replaceSessionWithConfirm(
   const first = await run(false);
   if (first.ok || first.code !== "busy") return first;
   const picked = await vscode.window.showWarningMessage(
-    "正在生成：切换会话会中止这一轮（它会被保存到原会话里）。继续吗？",
+    // 文案要把**全部后果**说清（S5 验收时用户撞到过）：不只是"这一轮被中止"，
+    // 排队里的消息也会被 pi 一并处理（实测：排队的那条 steer 会成为旧会话里的一条 user 消息，
+    // 然后跟着这一轮一起被中止）。
+    "正在生成：切换会话会中止这一轮（它会被保存到原会话里，排队中的消息也会一并被处理）。继续吗？",
     { modal: true },
     CONFIRM_LABEL,
   );

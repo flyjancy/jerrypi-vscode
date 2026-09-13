@@ -630,6 +630,13 @@ check(
   });
   const warnings = callsOf("showWarningMessage");
   check("忙时先弹一次确认，而且是模态", warnings.length === 1 && warnings[0]?.options?.modal === true, JSON.stringify(warnings[0]?.options));
+  check(
+    "确认框把后果说全（中止这一轮 + 排队消息也会被处理）",
+    typeof warnings[0]?.message === "string" &&
+      warnings[0].message.includes("中止这一轮") &&
+      warnings[0].message.includes("排队"),
+    String(warnings[0]?.message),
+  );
   check("点了「继续」→ 带 force 再跑一次，并返回成功", confirmed.ok === true && forced.join(",") === "false,true", forced.join(","));
 
   resetStub();
