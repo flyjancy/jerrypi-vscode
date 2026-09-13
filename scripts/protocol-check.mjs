@@ -193,7 +193,8 @@ async function checkToolCard(serialize, protocol, toolText) {
       role: "toolResult",
       toolCallId: "t3",
       toolName: "bash",
-      content: [{ type: "text", text: "x".repeat(200) + "\n[Showing last 50.0KB …]" }],
+      // 用 pi 的真实形态：正文 + `\n\n[Showing … Full output: <path>]`（探针 C 的实测）
+      content: [{ type: "text", text: "x".repeat(200) + "\n\n[Showing lines 2001-4000 of 4000. Full output: /tmp/pi-bash-123.log]" }],
       details: {
         truncation: {
           truncated: true,
@@ -241,6 +242,17 @@ async function checkToolCard(serialize, protocol, toolText) {
     `length=${JSON.stringify(t3.truncation).length}`,
   );
   check("③ 完整输出路径进可点路径", (t3.openablePaths ?? []).includes("/tmp/pi-bash-123.log"));
+  check("③ pi 的截断脚注被剥掉（否则同一件事说三遍、还占掉折叠预览的名额）",
+    !(t3.text ?? "").includes("[Showing last"), JSON.stringify(t3.text));
+  // 只在"确实截断 + 有完整输出路径"时剥；否则正文里的方括号是用户自己的内容
+  const notTruncated = serialize.serializeMessages(
+    [
+      { role: "assistant", content: [{ type: "toolCall", id: "t8", name: "bash", arguments: {} }], stopReason: "toolUse" },
+      { role: "toolResult", toolCallId: "t8", toolName: "bash", content: [{ type: "text", text: "a\n\n[not a footer]" }], isError: false },
+    ],
+    ctx,
+  ).items.find((item) => item.id === "tool-t8");
+  check("没有截断信息时不动正文", (notTruncated.text ?? "").includes("[not a footer]"), JSON.stringify(notTruncated.text));
 
   const t4 = tool("t4");
   check("④ 图片结果只给提示文本", t4.text === "[Image: image/png]", JSON.stringify(t4.text));

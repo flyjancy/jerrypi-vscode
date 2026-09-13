@@ -296,9 +296,34 @@ export function itemBytes(item: ChatItem): number {
 
 // ------------------------------------------------------------------ 工具卡片
 
+/**
+ * 剥掉 pi 附在正文末尾的截断脚注。
+ *
+ * pi 在截断时会把 `[Showing lines 2001-4000 of 4000. Full output: <path>]` 直接写进正文，
+ * 而**我们另外渲染"已截断：…"与"完整输出：…"两行**（这正是 pi 的 TUI 做法：
+ * 它在 `renderResult` 里把这段脚注从正文剥掉，另起一行 warning）。不剥的话：
+ *   - 同一件事在卡片里说三遍；
+ *   - 折叠预览只有 5 行，这段脚注要占掉 2 行，真正的内容只剩 3 行。
+ * 剥除条件与 pi 完全一致（未完成、已截断、有 fullOutputPath、正文以 `]` 结尾、
+ * 最后一段 `\n\n[…` 里确实含那个路径）。
+ */
+export function stripPiTruncationFooter(text: string, details: unknown): string {
+  const meta = toolMetaOf(details);
+  if (meta.truncation === undefined || meta.fullOutputPath === undefined) return text;
+  const trimmed = text.trimEnd();
+  if (!trimmed.endsWith("]")) return text;
+  // pi 的 bash 用的是 `\n\n[`（它自己的 renderResult 也只认这个），
+  // 但 read/grep 那几处的脚注只隔一个换行 —— 两种都认，其余条件照样卡死。
+  const at = trimmed.lastIndexOf("\n\n[") !== -1 ? trimmed.lastIndexOf("\n\n[") : trimmed.lastIndexOf("\n[");
+  if (at === -1) return text;
+  const tail = trimmed.slice(at);
+  if (!tail.includes(meta.fullOutputPath)) return text;
+  return trimmed.slice(0, at).trimEnd();
+}
+
 /** toolResult 的正文部分。 */
 function toolBodyOf(message: AnyMessage): { text?: string; textTruncated?: boolean } {
-  const body = toolTextFromContent(message.content);
+  const body = stripPiTruncationFooter(toolTextFromContent(message.content), message.details);
   // 空正文**不写字段**：卡片折叠时本来就不显示正文，写个空串只会让"有没有正文"这个判断
   // 在两端各写一遍（而且 `(no output)` 这种占位是 pi 自己加在文本里的，我们照显示）。
   if (body === "") return {};
