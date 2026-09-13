@@ -102,11 +102,11 @@ export function renderThinking(text: string, streaming: boolean): string {
 }
 
 /** 工具卡片的标题（不换行的那一行）。 */
-export function renderToolHead(item: Extract<ChatItem, { kind: "tool" }>): string {
+export function renderToolHead(item: Extract<ChatItem, { kind: "tool" }>, now: number = Date.now()): string {
   const icon = item.pending === true ? "…" : item.isError ? "✗" : "✓";
   const summary = item.summary === "" ? "" : ` <span class="tool-args">${renderToolTitle(item)}</span>`;
   const pending = item.pending === true ? ' <span class="tool-pending">运行中…</span>' : "";
-  const duration = renderToolDuration(item);
+  const duration = renderToolDuration(item, now);
   return (
     `<span class="tool-icon">${icon}</span>` +
     `<span class="tool-name">${renderPlain(item.toolName)}</span>` +
@@ -143,10 +143,13 @@ export function renderToolTitle(item: Extract<ChatItem, { kind: "tool" }>): stri
  * 没有 `startedAt` 时不显示 —— 重放/重启后我们不知道它跑了多久，**不编造**。
  * 进行中的秒数由 `main.ts` 每秒 tick 重写这一个 span（`data-started-at` 是它的锚点）。
  */
-function renderToolDuration(item: Extract<ChatItem, { kind: "tool" }>): string {
+function renderToolDuration(item: Extract<ChatItem, { kind: "tool" }>, now: number): string {
   if (item.startedAt === undefined) return "";
   const streaming = item.pending === true;
-  const end = item.endedAt ?? item.startedAt;
+  // ⚠️ 进行中必须用**现在**：用 `endedAt ?? startedAt` 的话每一帧都算出 0.0s，
+  // 而流式期间每 200ms 就会重渲染一次标题行 —— 表现是"1 秒的 tick 刚写上 2.5s，
+  // 200ms 后又被抹回 0.0s"，用户看到的是 0→2→0→3 的跳（S3 第二次人工验收实测）。
+  const end = item.endedAt ?? now;
   const seconds = Math.max(0, (end - item.startedAt) / 1000).toFixed(1);
   const label = streaming ? "Elapsed" : "Took";
   return ` <span class="tool-duration" data-started-at="${item.startedAt}"${
@@ -183,7 +186,7 @@ export function renderToolBody(item: Extract<ChatItem, { kind: "tool" }>, expand
     // 如果输出本来就只有几行，折叠与展开**长得一模一样**，用户会以为点击没生效
     // （S3 第一次验收就是这样反馈的）。pi 在 TUI 里也插这一行
     // （`... (N earlier lines, <key> to expand)`），只是它用键位提示、我们用点击。
-    const hidden = text.split("\n").length - TOOL_PREVIEW_LINES;
+    const hidden = hiddenLineCount(text);
     if (hidden > 0) {
       parts.push(`<div class="tool-note">… 还有 ${hidden} 行（点击标题展开）</div>`);
     }
@@ -207,6 +210,18 @@ export function renderToolBody(item: Extract<ChatItem, { kind: "tool" }>, expand
     );
   }
   return parts.join("");
+}
+
+/**
+ * 折叠态下"被折起来"的行数。
+ *
+ * 末尾那个换行会 split 出一个空串，它不是一行内容 —— 要减掉，
+ * 否则 7 行输出会显示"还有 3 行"（实际只折了 2 行）。
+ */
+function hiddenLineCount(text: string): number {
+  const lines = text.split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  return Math.max(0, lines.length - TOOL_PREVIEW_LINES);
 }
 
 /** 取最后 n 行（不足就全给）。 */
@@ -247,9 +262,13 @@ export function renderToolCaret(open: boolean): string {
  * `renderToolCard` 有箭头、`main.ts` 自己拼的那份没有，于是 74 条断言全绿、
  * 真机上箭头根本不出现（两份拼装代码漂移）。
  */
-export function renderToolHeadLine(item: Extract<ChatItem, { kind: "tool" }>, open: boolean): string {
+export function renderToolHeadLine(
+  item: Extract<ChatItem, { kind: "tool" }>,
+  open: boolean,
+  now: number = Date.now(),
+): string {
   return (
-    `<span class="tool-head-text">${renderToolHead(item)}</span>` +
+    `<span class="tool-head-text">${renderToolHead(item, now)}</span>` +
     `<span class="tool-caret" aria-hidden="true">${renderToolCaret(open)}</span>`
   );
 }

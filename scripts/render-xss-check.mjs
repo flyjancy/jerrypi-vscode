@@ -251,6 +251,11 @@ async function main() {
       check("bash 折叠时只渲染最后 5 行", collapsed.includes("第 5 行") && !collapsed.includes("第 4 行"), collapsed.slice(0, 120));
       check("bash 折叠时说明还有多少行被折起来（否则用户以为点击没生效）",
         collapsed.includes("还有 4 行"), collapsed.slice(0, 160));
+      // 末尾换行会 split 出一个空串，它不是一行 —— 否则 7 行输出会显示"还有 3 行"
+      const seven = Array.from({ length: 7 }, (_, i) => `L${i + 1}`).join("\n") + "\n";
+      check("折行数不吃掉末尾的空行",
+        render.renderToolCard(toolItem({ text: seven }), false).includes("还有 2 行"),
+        render.renderToolCard(toolItem({ text: seven }), false).slice(0, 160));
       const shortBash = render.renderToolCard(toolItem({ text: "只有一行" }), false);
       check("输出不足 5 行时不显示「还有 N 行」提示", !shortBash.includes("还有"), shortBash.slice(0, 160));
       check("bash 折叠态的 HTML 里不含被折叠掉的内容", !collapsed.includes("第 1 行"));
@@ -318,11 +323,16 @@ async function main() {
       check("标题文本被转义", audit(evilTitle) === null && !evilTitle.includes("<img"), evilTitle);
 
       // 耗时：进行中用 Elapsed、结束用 Took；没有 startedAt 就不显示
-      const running = render.renderToolHead(toolItem({ pending: true, startedAt: 1000 }));
-      const done = render.renderToolHead(toolItem({ startedAt: 1000, endedAt: 3400 }));
-      check("进行中的耗时是 Elapsed", running.includes("Elapsed"), running);
-      check("结束后的耗时是 Took", done.includes("Took 2.4s"), done);
-      check("没有 startedAt 时不显示耗时", !render.renderToolHead(toolItem({})).includes("Took"));
+      // 显式传 now：断言必须是**确定性**的（否则这条检查自己会随时间漂）
+      const running = render.renderToolHead(toolItem({ pending: true, startedAt: 1000 }), 3500);
+      const done = render.renderToolHead(toolItem({ startedAt: 1000, endedAt: 3400 }), 99999);
+      check("进行中的耗时是 Elapsed 且按现在算", running.includes("Elapsed 2.5s"), running);
+      check("结束后的耗时是 Took（不受 now 影响）", done.includes("Took 2.4s"), done);
+      check("没有 startedAt 时不显示耗时", !render.renderToolHead(toolItem({}), 99999).includes("Took"));
+      // 回归：流式期间每 200ms 重渲染标题行，耗时不能因此被重置成 0.0s
+      const againLater = render.renderToolHead(toolItem({ pending: true, startedAt: 1000 }), 5000);
+      check("耗时不会被后续重渲染抹回 0.0s（实测踩过）",
+        !againLater.includes("Elapsed 0.0s") && againLater.includes("Elapsed 4.0s"), againLater);
 
       // pi 的截断摘要与完整输出路径
       const truncated = render.renderToolCard(

@@ -299,6 +299,9 @@ async function main() {
         await streamController.abort().catch(() => {});
         await abortable.catch(() => {});
       } else {
+        check("执行中重开：运行中的行已经有 pi 风格的 title（不是原始 JSON）",
+          typeof runningRow.title?.text === "string" && !runningRow.title.text.startsWith("{"),
+          JSON.stringify(runningRow.title));
         check("执行中重开：已流出的正文还在（C1/N1 家族第四处）",
           typeof runningRow.text === "string" && runningRow.text.includes("中止行"),
           JSON.stringify(runningRow.text?.slice(0, 60)));

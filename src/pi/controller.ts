@@ -31,6 +31,7 @@ import {
   createToolCallIndex,
   indexToolCalls,
   openablePathsOfToolCall,
+  titleOf,
   serializeMessage,
   serializeMessages,
   summarizeArgs,
@@ -384,6 +385,7 @@ export class SessionHostController {
           isError: false,
           pending: true,
           ...(paths.length > 0 ? { openablePaths: paths } : {}),
+          ...titleOf(known?.name, known?.args, this.options.cwd),
         },
         this.partials.get(toolCallId),
         this.toolTimes.get(toolCallId),
@@ -561,6 +563,9 @@ export class SessionHostController {
       pending: true,
       startedAt,
       ...(paths.length > 0 ? { openablePaths: paths } : {}),
+      // 运行中的卡片同样要有 pi 风格的标题 —— 否则它显示原始 JSON，
+      // 而工具一结束就变成清爽的命令（实测第一版就是这样，用户一眼看出两种形态）。
+      ...titleOf(event.toolName, event.args, this.options.cwd),
     };
     this.registerOpenable(item);
     this.toolItems.set(toolCallId, item);
