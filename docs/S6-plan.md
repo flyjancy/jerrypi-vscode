@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | F1 | `getAgentDir()` = `process.env.PI_CODING_AGENT_DIR`（经 `expandTildePath`），否则 `join(homedir(), ".pi", "agent")`。**每次调用都读环境变量，没有缓存** | `node_modules/@earendil-works/pi-coding-agent/dist/config.js`：`ENV_AGENT_DIR = \`${APP_NAME.toUpperCase()}_CODING_AGENT_DIR\``，`getAgentDir()` 直接读 `process.env[ENV_AGENT_DIR]` |
 | F2 | 其余路径**全部**从它派生：`getSessionsDir()` = `<agentDir>/sessions`、`getModelsPath()` = `<agentDir>/models.json`、`getAuthPath()` = `<agentDir>/auth.json`、`getSettingsPath()`、`getCustomThemesDir()`、`getToolsDir()`、`getBinDir()`、`getPromptsDir()` | 同文件；`getSessionsDir` 只是一行 `join(getAgentDir(), "sessions")` |
-| F3 | 另有 `PI_CODING_AGENT_SESSION_DIR`（`ENV_SESSION_DIR`）—— **只在 pi 的会话目录推导里用**，我们刻意不跟随（S5 的 R9 会在 Output 记一行诊断） | 同文件；`docs/S5-plan.md` §11 的 R9 |
+| F3 | 另有 `PI_CODING_AGENT_SESSION_DIR`（`ENV_SESSION_DIR`）：**`getSessionsDir()` 根本不读它** —— 全 dist 里只有 `main.js:531`（CLI 启动路径）与 `cli/args.js:422`（帮助文本）引用它。所以「我们刻意不跟随」的准确说法是：**SDK 路径想跟随还得自己实现**。（S5 的 R9 会在 Output 记一行诊断） | `grep -rn ENV_SESSION_DIR dist/` → 只有 `config.js:407`（定义）、`main.js:531`、`cli/args.js:422`；`docs/S5-plan.md` §11 的 R9 |
 
 **⇒ 结论**：想让 `jerrypi.agentDir` 生效，正确做法是**在扩展激活的最开头、任何 `loadPi()` 之前设 `process.env.PI_CODING_AGENT_DIR`**。这是**进程级**副作用（扩展宿主是共享进程），必须写进设置描述与 README。
 
@@ -30,7 +30,7 @@
 | F5 | `RuntimeCredentials` 是**纯内存覆盖层**（文件头注释原话："Async credential store overlay for **non-persistent** runtime API keys"）：`setRuntimeApiKey`/`removeRuntimeApiKey` 只动一个 `Map`；`read()` 覆盖优先；`list()` 把覆盖项与底层合并 | `dist/core/runtime-credentials.js` 全文 |
 | F6 | ⚠️ **`RuntimeCredentials.delete()` 会去删底层（auth.json）里的凭据** —— 也就是 `ModelRuntime.logout()` 会**动用户的 auth.json** | 同文件：`async delete(providerId, options) { await this.store.delete(...); this.overrides.delete(...) }` |
 | F7 | `ModelRuntime.create()` 接受 `authPath` / `modelsPath` / `modelsStorePath` / `allowModelNetwork` 等；我们**已经显式传了三个路径**（S5 之前的决定） | `dist/core/model-runtime.d.ts` 的 `CreateModelRuntimeOptions`；`src/pi/runtime.ts` 的 `createModelRuntime()` |
-| F8 | `ModelRuntime.refresh({ allowNetwork, force, providers, signal })` 可以**显式**联网刷新；`create({ allowModelNetwork: false })` 只影响**创建期** | `model-runtime.d.ts`；`dist/core/model-runtime.js` 的 `refresh` 实现里 `options.allowNetwork ?? true` |
+| F8 | ⚠️ **修正（评审 B5 指出，已复核）**：`refresh()` 的默认值是 `options.allowNetwork ?? **this.modelNetworkEnabled**`（`model-runtime.js:517`），而 `modelNetworkEnabled = process.env.PI_OFFLINE === undefined`（`:88` 的构造）—— **与 `create({ allowModelNetwork: false })` 无关**（后者只在 `:91` 决定「创建期那一次 refresh 要不要联网」）。也就是说**我们的进程里 `modelNetworkEnabled === true`**：任何不带参数的 `refresh()` 都会联网。今天它不联网，只是因为 pi 内部每个调用点都显式传了 `false`（`:381/:556/:592/:599`）—— **一个会漂移的内部细节**。 | 上面每条都带行号 |
 
 **⇒ 结论**：`Pi: Clear Stored API Keys` **必须**用 `removeRuntimeApiKey()` / SecretStorage.delete，**绝不能用 `logout()`**（那会删掉用户 auth.json 里的凭据 —— 违反"不替用户动 `~/.pi/agent`"）。这条要进 `docs/pi-traps.md`。
 
@@ -39,9 +39,9 @@
 | # | 事实 | 证据 |
 | --- | --- | --- |
 | F9 | pi 的代理能力在 `dist/core/http-dispatcher.js`：`configureHttpDispatcher()` 装 undici `EnvHttpProxyAgent` 并**替换 `globalThis.fetch`**（`undici.install()`），另有 `applyHttpProxySettings(httpProxy)` 走 `process.env.HTTP_PROXY ??= proxy` | 同文件；`HTTP_IDLE_TIMEOUT_*` 也在那儿 |
-| F10 | 它**只被 CLI / TUI / rpc-entry 调用**（`dist/cli/setup.js`、`dist/modes/interactive/interactive-mode.js`、`dist/rpc-entry.js`）—— **SDK 路径不会自动调用** | `grep -rn configureHttpDispatcher dist/` 的调用点只有这三处 |
+| F10 | 它**只被 CLI / TUI / rpc-entry 调用**，SDK 路径不会自动调用。精确调用点（`grep -rn "configureHttpDispatcher()" dist/`）：`rpc-entry.js:9`、`cli/setup.js:10`、`main.js:456`；另有两处**带参数**的：`main.js:686`、`interactive-mode.js:1480` 与 `:3854` | 上面的 grep（评审 N1 说「没有 cli/setup.js」—— 我自己复核为**它漏了**：`cli/setup.js:10` 确实在） |
 | F11 | 而且**拿不到**：包的 `exports` 只有 `.` / `./rpc-entry` / `./client` / `./experimental/plugin`（**没有** http-dispatcher 子路径）；我们 ship 的 `pi-runtime/dist/bundle/index.js` 里 `configureHttpDispatcher` 出现 **0 次** | `node_modules/@earendil-works/pi-coding-agent/package.json` 的 `exports`；`grep -c` 结果 |
-| F12 | Node 自带的环境变量代理**用不上**：本机 Node 26.8.1 实测 —— 启动时设 `NODE_USE_ENV_PROXY=1`（并把 `HTTP_PROXY` 指向死端口 `127.0.0.1:9`）`fetch()` 仍返回 200；`--use-env-proxy`（`node --help` 里确实有这个 flag）同样无效；跑完第一次 fetch 之后再设环境变量也无效。`node:undici` 不存在 | 本机实测（三条命令，见提交信息）；`--help` 里那条写着 "apply the setting in global HTTP/HTTPS clients" |
+| F12 | ⚠️ **推翻并重写（评审 B1 指出，已用干净环境复核）**：`NODE_USE_ENV_PROXY=1`（以及 `--use-env-proxy`）**确实让 Node 的 fetch 走环境变量代理** —— 但它**只在进程启动前设才有效**。实测（`env -u` 清掉全部代理变量；用**不存在的域名**做判别，这样「走了代理」与「没走代理」必然给出不同的错误码）：<br>· 启动前 `NODE_USE_ENV_PROXY=1 HTTP_PROXY=http://127.0.0.1:1` → **ECONNREFUSED**（走了代理）<br>· 不带那个变量、只设 `HTTP_PROXY=…:1` → **ENOTFOUND**（没走代理）<br>· **进程内**（fetch 之前）再设 `NODE_USE_ENV_PROXY=1` → **ENOTFOUND**（太晚）<br>⇒ 扩展在 `activate()` 里设它**没用**（与 `PI_CODING_AGENT_DIR` 相反 —— 后者 pi 每次调用都现读）。`node:undici` 不存在。<br>**我第一版的错误**：拿「死端口 proxy 仍返回 200」当「没走代理」，而那 200 是**经过我自己 shell 里的小写 `http_proxy=http://127.0.0.1:7897` 真代理**回来的（`env \| grep -i proxy` 可见）。教训见 §10 的 L1 | 上面三条命令；`env \| grep -i proxy`；另：清空代理变量后直连 `https://example.com` → 200（所以「本机不需要代理也能通」这个前提**成立**，评审那句「这台机器不是直连」不成立） |
 
 **⇒ 结论**：`jerrypi.proxy` 若要做，只有 PLAN §5.3 第 2 层那条路（**扩展自带 undici**，包装 `globalThis.fetch`）。PLAN §5.3 已经写好了那一层的全套要求（不调 `undici.install()`、不动 `Request/Response/Headers/WebSocket`、只管字符串与 `URL` 输入、恢复语义、`ProxyAgent.close()`、**宿主网络回归验收**）。
 **⇒ 但代价**：一份 undici 依赖 + 一个全局副作用 + 一条"宿主网络回归"的人工验收 —— 与我们"Mac ≤2"的预算直接冲突（见 Q2）。
@@ -52,8 +52,10 @@
 | --- | --- | --- |
 | F13 | `package.json` **没有** `contributes.configuration` —— 三项设置**从来没有被声明过**，`src/` 里也没有任何 `getConfiguration()` 调用。也就是说 `jerrypi.agentDir` / `jerrypi.proxy` / `jerrypi.approvalMode` 今天**写了完全不生效** | 审计见提交 `d63d242`；`python3 -c "json.load(open('package.json'))['contributes'].keys()"` → `commands/viewsContainers/views` |
 | F14 | 现有 key 链路：`src/pi/runtime.ts` 的 `ApiKeyStore`（SecretStorage + globalState 里的 provider 列表）、`getModelRuntime()` 按 agentDir 缓存、`createModelRuntime()` 显式传三个路径并在创建时注入、`injectApiKey()` 立刻给已缓存实例注入。**缺 `removeApiKey`** | `src/pi/runtime.ts` |
-| F15 | 现有命令：`Pi: Set API Key`（**硬编码**候选 provider 列表、**没有任何校验**）、`Pi: Open Settings File`（用 `module.getAgentDir()`，文件不存在时写 `{}`） | `src/commands.ts` |
-| F16 | `RuntimeCredentials.list()` 会把 **auth.json 里的凭据也列出来**（`{ providerId, type }`，不含 key 本身） | `dist/core/runtime-credentials.js` 的 `list()` |
+| F15 | 现有命令：`Pi: Set API Key`（候选列表是**硬编码常量** `SUGGESTED_PROVIDERS`，位于 `src/pi/runtime.ts:24-32`；`src/commands.ts:64-73` 只是使用者；**没有任何校验**）、`Pi: Open Settings File`（用 `module.getAgentDir()`；**目录不存在时先 `createDirectory` 再写 `{}`**，见 `src/commands.ts:148-151`） | `src/pi/runtime.ts` · `src/commands.ts` |
+| F16 | ⚠️ **修正（评审 S2 指出，已复核）**：`RuntimeCredentials.list()` **区分不出来源** —— 它先把底层（auth.json）条目读出来，再用 `entries.set(providerId, { providerId, type: "api_key" })` **覆盖同名项**：两种来源出来都是 `{ providerId, type }`，同名 provider 只剩一条。⇒「这个 key 是我们存的还是 auth.json 里的」**必须问 `getProviderAuthStatus(id).source`（`runtime` vs `stored`）或 `credentials.hasRuntimeApiKey(id)`**，不能用 `listCredentials()` | `dist/core/runtime-credentials.js` 的 `list()` |
+| F18 | **`AuthStatus.source` 有 6 档**，不是 3 档：`runtime` / `stored`（`model-runtime.js:412-413`）+ `models_json_command` / `environment`（带 label）/ `fallback` / **`models_json_key`**（`provider-composer.js:388-401` 的 `configuredRequestAuthStatus()`）。**验收判据里说的「`models.json` 里的 key」就是 `models_json_key` 这一档** | 上面两个文件的行号 |
+| F19 | 本机 `~/.pi/agent/models.json` **存在**（1816 字节、JSONC、带中文注释的自定义模型定义），但里面**没有任何 `apiKey`/`token` 字段**；凭据在 `auth.json`（`deepseek: api_key`，95 字节）。⇒ 判据那句「清空 `models.json` 里的 key」按字面**今天就已经满足**，所以 C1 必须比字面更强才有意义（见 §1）；另：评审说「models.json 根本不存在」是**它自己核错了** | `grep -o '"\"[a-zA-Z]*[Kk]ey[a-zA-Z]*"\"' ~/.pi/agent/models.json` → 空；`ls -la ~/.pi/agent/` |
 | F17 | `dist/core/session-manager.js` 的 `sessionCwdMatches()` 是**严格字符串比较**；自定义 agentDir 会让 `list(cwd, sessionDir)` 走 `filterCwd = true` 那条路（S5 的 R10） | `docs/S5-plan.md` R10 · §12.3（W0 实测同一台 Windows 上存在 `c:\…` 与 `C:\…` 两种写法） |
 
 ## 1. 目标与判据
@@ -64,8 +66,10 @@
 
 把它拆成**可自动断言**的三条（§6 逐条对应）：
 
-1. **C1**：一个**没有任何凭据文件**（`auth.json` 不存在、`models.json` 里没有 key）的 agentDir，只要 SecretStorage 里有 key，就能完成一轮真实对话。
-2. **C2**：`Pi: Clear Stored API Keys` 之后，同一个 agentDir **不能再**对话（模型列表为空），且 **auth.json 一个字节没变**。
+1. **C1**：一个**没有任何凭据来源**的临时 agentDir —— `models.json` 里**有 provider 但没有 `apiKey`**、**没有 `auth.json`**、**子进程里清掉 `*_API_KEY`/`*_TOKEN` 之类环境变量** —— 只要 SecretStorage 里有 key，就能完成一轮真实对话，**且这条凭据的来源被判定为 `runtime`**（`getProviderAuthStatus(id).source === "runtime"`）。
+   *（评审 B2/B4 的修正：只说「能对话」证明不了 key 来自 SecretStorage —— `getProviderAuthStatus` 还有 `environment` 一档，`getAvailable()` 把环境变量凭据也算「已配置」；所以必须断言来源。夹具放一份「有 provider 无 key」的 `models.json` 是为了挡住 `models_json_key` 那一档。）*
+2. **C2**：`Pi: Clear Stored API Keys` 之后：① 我们存的 provider 列表为空；② 该 provider 的 `getProviderAuthStatus().configured === false`（不再有 `runtime` 来源）；③ **夹具里预置的那份 `auth.json` 的 sha256 与 mtime 一个字节没变**。
+   *（评审 B2/B3 的修正：「`getAvailable()` 为空」会被环境变量凭据弄成**永远红**；而在「本来就没有 auth.json」的夹具上断言「auth.json 没变」是**恒真空断言** —— 必须先写一份已知内容的 auth.json。）*
 3. **C3**：`jerrypi.agentDir` 指向别的目录时，**会话、模型、设置三条链路都在新目录上**（不是只有一条跟着走）。
 
 ## 2. 本步做什么 / 不做什么
@@ -98,6 +102,7 @@ activate() 第一件事
        const configured = getConfiguration("jerrypi").get<string>("agentDir")
        if (configured && !process.env.PI_CODING_AGENT_DIR)   // ← 只在"环境变量没设"时写
            process.env.PI_CODING_AGENT_DIR = configured
+       记一行日志：agentDir=<生效值>（来源：环境变量 / 设置 / 默认）      // ← 评审 S3
   └─ 之后所有 loadPi() / getModelRuntime() / workspace 逻辑不变（它们都问 pi.getAgentDir()）
 ```
 
@@ -107,16 +112,19 @@ activate() 第一件事
 2. **重载窗口而不是热切换**：agentDir 变了要重建的东西太多（我们的 runtime 缓存、pi 模块内的 settings-manager/models-store/extensions loader），热切换一定会出现"半新半旧"的劈叉。做法：`onDidChangeConfiguration` 命中 `jerrypi.agentDir` 时弹一条**信息**消息，附「重载窗口」按钮（`workbench.action.reloadWindow`）—— 不强制、不静默。
 3. **`activate()` 里第一位**：`loadPi()` 是动态 `import()`，pi 模块级状态在**第一次 import** 时建立；我们必须在它之前设好环境变量。
 
+4. **`scope` 必须定死为 `machine`**（`jerrypi.agentDir` 与 `jerrypi.proxy` 都是）—— 评审 S1 指出，默认 scope 允许 **`.vscode/settings.json` 覆盖**，那等于"任何一个仓库都能把扩展的 agentDir 指到它选的目录"（会话、auth.json、models.json 全跟着走）。这是安全问题，不是形式问题。其余两项（`approvalMode`）用默认 workspace scope 即可。
+
 **为什么这条不能省人工验收**：环境变量的进程级效果 + 重载窗口是真实 VS Code 生命周期，无头环境里两者都没有。见 §7 的 M1。
+**为什么日志要带来源**（评审 S3）：用户看到"改了设置但目录没变"时，无法自己判断是"没重载"还是"被环境变量压住了"；M1 的判据也依赖这一行。
 
 ### 3.2 密钥：存、注入、清
 
 - 存：**只** SecretStorage（`jerrypi.apiKey.<providerId>`）+ globalState 里一份 provider 名单（SecretStorage 不能枚举）。**不写 auth.json**（S1 的决定，S6 保持）。
 - 注入：`createModelRuntime()` 创建时注入 + `injectApiKey()` 立刻注入已缓存实例（现状，F14）。
 - 清：新增 `ApiKeyStore.removeApiKey(providerId)`（`secrets.delete` + 从 globalState 名单移除）+ 命令 `Pi: Clear Stored API Keys`：
-  1. QuickPick（`canPickMany`）列出 `keys.listProviders()`，每项标注**来源**：`runtime`（面板存的）／`stored`（auth.json 里的）—— 数据来自 `listCredentials()`（F16）。
-  2. 只允许勾选**面板存的**那些；auth.json 里的项**灰掉**并在描述里写"pi 自己的凭据，本扩展不动"。
-  3. 二次确认（模态）："将从 VS Code SecretStorage 删除 N 个 provider 的 key；pi 的 auth.json 不受影响"。
+  1. 列出 `keys.listProviders()`（我们存过的那份名单），**来源判定问 `runtime.getProviderAuthStatus(id).source`**：`runtime` = 面板存的（可勾）；`stored` = auth.json 里的（灰掉）；`models_json_key`/`models_json_command`/`fallback`/`environment` = pi 的配置或环境（灰掉，各写一句说明）。⚠️ **不能用 `listCredentials()` 判来源** —— 它把两种来源合并成同一条 `{providerId, type}`（F16，评审 S2）。
+  2. 灰掉的项在描述里写清"这是 pi 自己的凭据（auth.json / models.json / 环境变量），本扩展不动"。
+  3. 二次确认（模态）："将从 VS Code SecretStorage 删除 N 个 provider 的 key；**当前会话将无法继续发送，直到重新设置 key**（pi 的 auth.json / models.json 不受影响）"。 ← 评审 S4：清 key 是**立即生效**的内存操作，正在开着的会话下一条消息就会失败，文案必须说。
   4. 逐个 `removeApiKey` + `runtime.removeRuntimeApiKey(providerId)`（**不用 `logout`**，F6）。
   5. 结束提示里给一句"要让 pi CLI 也忘掉，请用它自己的方式（`auth.json`）"。
 - 保留一个断言：**清理后 `auth.json` 的字节与 mtime 都不变**（C2）。
@@ -124,7 +132,7 @@ activate() 第一件事
 ### 3.3 `Pi: Set API Key` 补完：provider 选择与校验
 
 - **候选来源**改掉硬编码（F15）：`runtime.getProviders()` → `{ id, name }`（`createProvider` 里 `name: input.name ?? input.id`）。`DEFAULT_PROVIDER = "deepseek"` 仍置顶；找不到时退回首项。
-- **标注已配置**：`runtime.getProviderAuthStatus(id).source` → `runtime`（面板存的）/ `stored`（auth.json）/ `environment`（环境变量）。
+- **标注已配置**：`runtime.getProviderAuthStatus(id).source` —— 完整 6 档都要有文案（F18）：`runtime`（面板存的）/ `stored`（auth.json）/ `models_json_key`（models.json 里写的）/ `models_json_command`（models.json 里配的命令）/ `fallback` / `environment`（环境变量，带变量名 label）。后四档统一归成"pi 侧配的凭据，本扩展不动"但**保留各自的说法**（用户排查时这四个词能救命）。
 - **校验（全部本地、不发请求）**：
   1. provider 必须在 pi 认识的列表里 → 不在就警告"pi 不认识这个 provider，模型列表可能是空的"，但**允许**继续（用户可能在 models.json 里自定义了 provider）；
   2. 保存并注入后 `await runtime.checkAuth(providerId)` → 有结果才算"配好了"；
@@ -134,10 +142,11 @@ activate() 第一件事
 ### 3.4 代理：第一层验证掉，第二层待定（Q2）
 
 - **第一层（默认路径，零代码）**：VS Code 自身的 `http.proxy` / `http.proxySupport` / `http.fetchAdditionalSupport` / `http.systemCertificates`。PLAN §5.3 断言"它们已注入扩展宿主的 `http`/`https` 与全局 `fetch`" —— **这条至今没有被验证过**（S1 的 T4 在受限机上直连成功，代理路径根本没被走到）。
-  S6 的便宜做法：加一个**自测项 T13（advisory）**，在真实宿主里报告三件事：`globalThis.fetch` 是不是被替换过（比较 `fetch.toString()` 与 Node 原生形态 / 与 `process.versions` 对照）、`vscode.workspace.getConfiguration("http").get("proxy")` 的值、`process.env.HTTP_PROXY/HTTPS_PROXY` 是否被设过。**只报告不判定**（不 PASS/FAIL），避免把"我读不懂的身份"变成假失败。用户真配了代理时才有人能对着这行判断。
+  S6 的便宜做法：加一个**自测项 T13（advisory）**，在真实宿主里报告三件事（判据按评审 N4 改成可判定的三元组）：① `globalThis.fetch.toString().includes("[native code]")`（VS Code 的 `http.proxySupport: override` 会把它换成普通函数）；② `vscode.workspace.getConfiguration("http").get("proxySupport")` 与 `get("proxy")` 的值；③ `process.env.HTTP_PROXY/HTTPS_PROXY/http_proxy/https_proxy` 是否存在（**只报存在性，不打印值**）。**只报告不判定**（不 PASS/FAIL），避免把"我读不懂的身份"变成假失败。
 - **第二层（要做就见 PLAN §5.3，工作量与验收都在那儿）**：扩展自带 undici（与 pi 同版本 8.9.0 —— pi 的 dependencies 里就是它）包装 `globalThis.fetch`。
-  **我的建议：S6 不做，延期**（Q2）。三条理由：
-  1. 现在**没有任何人需要它**：我这台与受限机都是直连（S1 T4 通过）；
+  **我的建议：S6 不做，延期**（Q2）。四条理由（**评审 B1 之后重写** —— 原来第一条是拿一条错事实撑着的）：
+  0. **有一条零成本的替代方案先写进 README**：在**启动 VS Code 之前**设 `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY`，"整进程"的 fetch 就会走环境变量代理（实测有效，F12）。这条治不了"用户想只给 jerrypi 设代理"，但能治"企业网必须走代理"这一类，代价是零。
+  1. 现在**没有已知需求**：我这台与受限机都不需要代理也能通（S1 T4 通过；本轮实测清空代理变量后直连 `https://example.com` 仍是 200）—— 注意这与"本机配了代理"不矛盾（`env｜grep -i proxy` 有 `http_proxy=127.0.0.1:7897`，但直连也通）；
   2. 它的验收要求（宿主网络回归：Marketplace 搜索、另一个联网扩展、全局 `Request` 输入、`http.proxyStrictSSL`…）与"Mac ≤2 人工项"预算直接冲突；
   3. 它引入一份依赖 + 一个全局副作用 + 一层永远可能被别的扩展打乱的 fetch 包装，而收益只在"VS Code 的 http.proxy 不够用"这一种场景。
   **不做的同时必须做对**：`jerrypi.proxy` 在 `contributes.configuration` 里的描述里写明"**尚未实现**"，README 配置表与已知限制同步（今天审计刚把它们改成"尚未生效（S6）"，Q2 若选"不做"就再改成"尚未实现（未排期）"）。
@@ -145,13 +154,14 @@ activate() 第一件事
 ### 3.5 `Pi: Refresh Model Catalog`
 
 `runtime.refresh({ allowNetwork: true })` → 结果映射成一句人话："已刷新 N 个 provider（M 个模型）"；`refresh` 返回 `{ aborted, errors: Map }`，把 errors 里每个 provider 的 message 记进 Output。
-不变式：**默认仍然不联网**（`create({ allowModelNetwork: false })` 不动）—— 只有用户点这个命令才发请求。
+
+不变式：**只有用户点这个命令才发请求**。但按 F8 的修正，这条不变式**不是**被 `create({ allowModelNetwork: false })` 保证的 —— 它靠的是 pi 内部每个调用点都显式传 `allowNetwork: false`（`:381/:556/:592/:599`），一个会漂移的内部细节。⇒ 按 AGENTS.md §3「依赖上游就配一条漂移守卫」，加一条断言：在 `controller-check` 里**包一层 `runtime.refresh` 计数**，然后跑一遍完整流程（建会话、发消息、切会话、换模型），断言**没有任何一次 `refresh()` 在没被显式禁止的情况下发生**；另把 `modelNetworkEnabled` 的实际取值（我们的进程里应为 `true`）记进自测输出，便于将来对照。
 
 ### 3.6 `Pi: Open Settings File`
 
 目标文件 = `<生效 agentDir>/settings.json`（现状已经走 `module.getAgentDir()`，F15）。S6 只补两条：
 - 断言它**跟着 `jerrypi.agentDir` 走**（C3 的一部分）；
-- 文件不存在时仍创建 `{}`（用户点了才创建，属于用户动作），并在 Output 记一行。
+- 文件不存在时：**只在目标目录已存在**的情况下创建空的 `{}`；目录不存在就**报错并提示**（"`<path>` 不存在 —— 检查 `jerrypi.agentDir`"），**不要替用户把目录建出来**（评审 N6：用户把设置拼错时，现状的 `createDirectory` 会替他创建一个拼错的目录；AGENTS.md §4 说"不替用户动 `~/.pi/agent` 下的数据"）。
 
 ### 3.7 R10（`filterCwd` 的严格比较）：接受，不绕
 
@@ -163,7 +173,8 @@ activate() 第一件事
 | # | 问题 | 默认（我的建议） | 备选 |
 | --- | --- | --- | --- |
 | Q1 | `jerrypi.agentDir` 怎么生效 | **设进程环境变量 + 提示重载窗口**；环境变量已设时不覆盖 | 不提供这个设置（只承认 `PI_CODING_AGENT_DIR`） |
-| Q2 | `jerrypi.proxy` 第 2 层（自带 undici）做不做 | **不做**，只标"尚未实现"；第 1 层加一条 advisory 自测项 | 做（照 PLAN §5.3 全套要求，含宿主网络回归） |
+| Q2 | `jerrypi.proxy` 第 2 层（自带 undici）做不做 | **不做**，只标"尚未实现"；第 1 层加一条 advisory 自测项；README 里补"启动 VS Code 前设 `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY`"这条零成本方案 | 做（照 PLAN §5.3 全套要求，含宿主网络回归） |
+| Q9 | 三项设置的 `scope` | `jerrypi.agentDir`、`jerrypi.proxy` 用 **`machine`**（防止任意仓库用 `.vscode/settings.json` 把 agentDir 指走）；`approvalMode` 用默认 | 全部用默认 scope |
 | Q3 | `Pi: Set API Key` 的校验强度 | **只本地判定**（checkAuth + getAvailable），不发请求 | 真发一条最小请求 |
 | Q4 | `Pi: Clear Stored API Keys` 是否帮忙清 auth.json | **不碰**，灰掉并说明 | 提供"连 auth.json 一起清"（会动用户数据） |
 | Q5 | `Pi: Refresh Model Catalog` 做不做 | **做**（点了才联网） | 不做，维持"复制 models-store.json"的土办法 |
@@ -185,17 +196,18 @@ activate() 第一件事
 
 | # | 断言 | 脚本 | 对应判据 |
 | --- | --- | --- | --- |
-| A1 | `package.json` 声明了三项设置，`jerrypi.agentDir` 的默认值/描述/`scope` 与计划一致 | 新 `scripts/settings-check.mjs`（静态读 package.json + 与 `src/host/config.ts` 的常量对照） | — |
-| A2 | `applyAgentDirSetting()`：没设过环境变量 → 写入；已设过 → **不覆盖**；设置为空 → 不写 | `host-check`（vscode 桩提供 `getConfiguration`） | C3 |
+| A1 | `package.json` 声明了三项设置，`jerrypi.agentDir` 的默认值/描述/**`scope: machine`** 与计划一致 | 新 `scripts/settings-check.mjs`（静态读 package.json + 与 `src/host/config.ts` 的常量对照） | — |
+| A2 | `applyAgentDirSetting()`：没设过环境变量 → 写入；已设过 → **不覆盖**；设置为空 → 不写。**断言前后必须存/删/恢复 `process.env.PI_CODING_AGENT_DIR`**（评审 N5：`host-check` 是单进程跑多条断言，泄露会污染 A9 等） | `host-check`（vscode 桩提供 `getConfiguration`） | C3 |
 | A3 | 变更 `jerrypi.agentDir` → 恰好弹一次"需要重载"的信息消息，且带「重载窗口」按钮 | `host-check`（桩记录 `showInformationMessage` 的 items） | — |
-| A4 | **空凭据目录也能对话**（C1）：临时 agentDir（无 auth.json、models.json 无 key）+ SecretStorage 里有 key → 一轮真实对话成功 | `controller-check`（真模型） | **C1** |
-| A5 | **C2**：`clearStoredApiKeys` 之后 `listProviders()` 为空、`getAvailable()` 为空，且 **auth.json 的 sha256 与 mtime 未变** | `controller-check` + `host-check` | **C2** |
-| A6 | `Pi: Set API Key` 的候选来自 `getProviders()`（不是硬编码），已配置的带来源标注 | `host-check`（桩记录 QuickPick 的 items） | — |
+| A4 | **空凭据目录也能对话且来源正确**（C1）：临时 agentDir（`models.json` 有 provider 无 `apiKey`、无 `auth.json`、子进程已清掉环境变量凭据）+ SecretStorage 里有 key → 一轮真实对话成功，**且 `getProviderAuthStatus(id).source === "runtime"`** | `controller-check`（真模型；**子进程 `env -u` 清掉相关环境变量**） | **C1** |
+| A5 | **C2**：`clearStoredApiKeys` 之后 ① `listProviders()` 为空 ② 该 provider `getProviderAuthStatus().configured === false` ③ **夹具里预置的 auth.json 的 sha256 与 mtime 未变**。**可红验证**：把实现里的 `removeRuntimeApiKey` 故意换成 `logout()` → 这条必须变红（证明它真的能抓 F6 那个陷阱） | `controller-check` + `host-check` | **C2** |
+| A6 | `Pi: Set API Key` 的候选来自 `getProviders()`（不是硬编码），已配置项的来源标注用 `getProviderAuthStatus().source`（**不是 `listCredentials()`**，F16/评审 S2），且 6 档都有对应文案 | `host-check`（桩记录 QuickPick 的 items） | — |
 | A7 | 校验三态：`checkAuth` 有结果 / 无结果 / `getAvailable` 为空 → 三种提示文案 | `host-check` | — |
 | A8 | `Pi: Refresh Model Catalog` 调 `refresh({ allowNetwork: true })`，一次调用、结果文案含 provider 数与错误数 | `host-check` | — |
 | A9 | `Pi: Open Settings File` 打开的是 `<生效 agentDir>/settings.json` | `host-check` | C3 |
-| A10 | 协议/文档同步：README 中英双语里三项设置的"生效状态"与 `package.json` 描述一致 | `scripts/readme-check`（若有）/ 人工核对 | — |
-| A11 | T13（advisory）：报告 fetch 身份、`http.proxy` 值、`HTTP(S)_PROXY` 是否设过 —— **只报告不判定** | `src/pi/selftest.ts` | §3.4 |
+| A10 | 文档同步：README 中英双语里三项设置的**描述文字与生效状态**与 `package.json` 的 `configuration` 描述一致（评审 S5：这条从 M2 搬到这里，别让它留在人工项里） | 新 `scripts/settings-check.mjs` 的第二段（读 README 的两个表格比对关键词） | — |
+| A11 | T13（advisory）：报告 `fetch.toString()` 是否含 `[native code]`、`http.proxySupport` / `http.proxy` 的值、四个代理环境变量的**存在性** —— **只报告不判定** | `src/pi/selftest.ts` | §3.4 |
+| A12 | **漂移守卫**：跑一遍完整流程，断言没有任何一次 `runtime.refresh()` 在不带 `allowNetwork: false` 的情况下发生（F8 的修正："默认不联网"靠的是 pi 内部调用点的纪律） | `controller-check` | §3.5 |
 
 **"先红"怎么写**：A1–A3、A6–A9 全部在 `host-check` 的 vscode 桩上加能力（`getConfiguration`、`onDidChangeConfiguration`、记录消息）——**先让它们红**，红的原因是"断言失败"而不是"编译错"。
 
@@ -203,8 +215,8 @@ activate() 第一件事
 
 | # | 动作 | 属于哪一类 | 为什么自动化不了 |
 | --- | --- | --- | --- |
-| M1 | F5 起调试宿主 → 改 `jerrypi.agentDir`（指到一个临时空目录）→ 按提示**重载窗口** → 确认 Output 里那行 `agentDir=` 变了、面板能发一条消息 → 再改回默认 → 重载 → 会话还在 | **③真进程** | ①"重载窗口"是 VS Code 的生命周期，无头环境没有；②进程环境变量只在真实宿主里才有意义；③"设置改了之后 pi 到底用哪个目录"这件事，只有在真宿主里才成立 |
-| M2 | 外观/文案：`Pi: Set API Key` 的 provider 列表（含"已配置"标注）、`Pi: Clear Stored API Keys` 的多选 + 二次确认（中英混排、按钮文字）、以及设置页里三项设置的**描述文字** | **①排版/外观** | 原生 QuickPick / 模态框的渲染是 VS Code 的画，我们的桩只能验参数（items 内容、modal=true），渲染与换行验不了 |
+| M1 | F5 起调试宿主 → 改 `jerrypi.agentDir`（指到一个临时空目录）→ 按提示**重载窗口** → 确认那行 `agentDir=<path>（来源：设置）` 变了、面板能发一条消息 → 再改回默认 → 重载 → 会话还在 | **③真进程** | ①"重载窗口"是 VS Code 的生命周期，无头环境没有；②进程环境变量只在真实宿主里才有意义；③"设置改了之后 pi 到底用哪个目录"这件事，只有在真宿主里才成立。**判据是那行日志（评审 S3 加的"来源"字段）** |
+| M2 | **只验真实渲染**：`Pi: Set API Key` 的 provider 列表与 `Pi: Clear Stored API Keys` 的多选/模态框在窄侧边栏下的**换行与按钮文字**（中英混排是否别扭） | **①排版/外观** | 原生 QuickPick / 模态框的渲染是 VS Code 的画，我们的桩只能验参数（items 内容、modal=true），渲染与换行验不了。**评审 S5 的收缩**：items 内容归 A6、设置描述文字归 A10，M2 不再"顺便都看一眼" |
 
 - 两条都在**同一次 F5** 里做完，加起来约 3 分钟。
 - 合并记录方式：M1 的 Output 行贴给我；M2 只要一句"文案 OK / 哪里别扭"。
@@ -234,7 +246,53 @@ activate() 第一件事
 
 ## 10. 评审记录
 
-_（三轮评审写在这里；评审后的改动记在 §10.1 并标"未经复核"。）_
+### 第 1 轮（2026-09-13，Claude Opus 5，评审者在本仓 `w60:pC` 面板）
+
+**VERDICT: BLOCKING**（5 条 B、5 条 S、6 条 N）。**处置：14 条 ACCEPT、1 条 REJECT（N1）、1 条部分 REJECT（B1 的推论）。**
+**教训 L1 记在本轮末尾 —— 这是本次评审最值钱的东西，比任何一条意见都值钱。**
+
+| # | 意见（摘要） | 处置 | 我怎么处置的 |
+| --- | --- | --- | --- |
+| **B1** | **F12 的结论是反的**：`NODE_USE_ENV_PROXY` 对 fetch 生效；我那次对照被自己 shell 里的小写 `http_proxy=http://127.0.0.1:7897` 污染了。另：Q2 理由①「我这台是直连」是假的 | **ACCEPT（核心）／部分 REJECT（推论）** | 用 `env -u` 清干净环境 + **不存在的域名**做判别，复核为：启动前设 → `ECONNREFUSED`（走代理）；进程内设 → `ENOTFOUND`（太晚）。**它是对的，F12 整条推翻重写**。但它的推论「这台机器不是直连」**不成立**：清空代理变量后 `https://example.com` 仍是 200（本机既有代理又可直连）。Q2 的结论不变、理由按新事实重写，并采纳它提的零成本方案（启动 VS Code 前设那两个环境变量） |
+| **B2** | A4/C1、A5/C2 会被**环境变量凭据**污染：`getProviderAuthStatus` 有 `environment` 一档，`getAvailable()` 也算它已配置 → 一个假绿、一个假红 | **ACCEPT** | C1 加断言 `source === "runtime"`；C2 改成 `configured === false`；`controller-check` 跑这两条时**子进程清掉相关环境变量**。另：它举的 `ANTHROPIC_AUTH_TOKEN` 在我这个 shell 里不存在（它有），但结论与设计无关 —— 断言不能依赖运行环境 |
+| **B3** | A5 的「auth.json 字节不变」在「本来就没有 auth.json」的夹具上是**恒真空断言** | **ACCEPT** | 夹具改成**先写一份已知内容的 auth.json** 再比 sha256/mtime；并加「可红验证」：把 `removeRuntimeApiKey` 故意换成 `logout()` → 这条必须变红 |
+| **B4** | `AuthStatus.source` 有 **6 档**不是 3 档，漏掉的那档 `models_json_key` 正是验收判据说的那档 | **ACCEPT** | 新增 F18 记全 6 档；§3.3 的文案与 A6 的断言按 6 档改；C1 的夹具放一份「有 provider 无 apiKey」的 models.json 挡这一档。**它附带说「本机 models.json 根本不存在」是它自己核错了**（存在、1816 字节、JSONC、无 key 字段 —— 见新增的 F19） |
+| **B5** | F8 的证据句是错的：`refresh()` 的默认值是 `options.allowNetwork ?? **this.modelNetworkEnabled**`，而它来自 `PI_OFFLINE`，与 `create({allowModelNetwork:false})` 无关 →「默认不联网」靠的是 pi 内部调用点的纪律，会漂移 | **ACCEPT** | F8 重写并带行号（`:517` / `:88` / `:91` / 内部调用点 `:381/:556/:592/:599`）；§3.5 加**漂移守卫**（新增断言 A12） |
+| **S1** | 三项设置的 `scope` 从头到尾没决定，而 A1 却要断言它；默认 scope 会让**任意仓库的 `.vscode/settings.json` 把 agentDir 指走** | **ACCEPT** | §3.1 定死 `machine`（agentDir / proxy）；新增 **Q9**；A1 补 `scope: machine` |
+| **S2** | 「灰掉 auth.json 项」建在一个**区分不出来源**的 API 上（`listCredentials()` 把两种来源合并） | **ACCEPT** | F16 改写；§3.2/§3.3/A6 全部改用 `getProviderAuthStatus().source` / `hasRuntimeApiKey()` |
+| **S3** | agentDir 的**生效来源**没被记录 → 用户无法区分「没重载」与「被环境变量压住」 | **ACCEPT** | §3.1 加「记一行 `agentDir=…（来源：环境变量 / 设置 / 默认）`」；M1 的判据改成这一行 |
+| **S4** | 清 key 之后「当前会话怎么办」没写（是立即生效的内存操作） | **ACCEPT** | 确认文案加「当前会话将无法继续发送，直到重新设置 key」 |
+| **S5** | M2 是兜底筐，里面至少两件事已被静态断言覆盖，违反「能搬就搬」 | **ACCEPT** | M2 收缩成「只验真实渲染（换行/按钮文字）」；items 内容归 A6、描述文字归 A10 |
+| **N1** | F10 的出处不对，「没有 `dist/cli/setup.js`」 | **REJECT** | 我自己 `grep -rn "configureHttpDispatcher()" dist/` → **`cli/setup.js:10` 确实在**（评审漏了）。F10 顺手写得更精确（列出全部 6 处） |
+| **N2** | `SUGGESTED_PROVIDERS` 在 `src/pi/runtime.ts` 不在 `src/commands.ts` | **ACCEPT** | F15 改正位置 |
+| **N3** | F3 偏松：`getSessionsDir()` 根本不读 `ENV_SESSION_DIR` | **ACCEPT** | F3 重写（全 dist 只有 `main.js:531` 与帮助文本引用它） |
+| **N4** | T13 用 `fetch.toString()` 比较太脆 | **ACCEPT** | 改成可判定三元组（`[native code]` + `proxySupport`/`proxy` + 环境变量存在性），仍「只报告不判定」 |
+| **N5** | A2 改 `process.env` 会污染同进程后续断言 | **ACCEPT** | A2 明写「存/删/恢复」，并点出会被污染的正是 A9 |
+| **N6** | `Pi: Open Settings File` 会**替用户创建拼错的目录** | **ACCEPT** | §3.6 改成「只在目标目录已存在时创建文件；不存在就报错并提示」 |
+
+**STRONGEST_OBJECTION（它写的是 B1）** —— 它自己指出了最值钱的东西：「§0 这张『已核实事实』表是后面所有决策的地基，而 F12 这条地基是反的」。采纳。
+
+#### 教训（L1）：先红纪律也要用在**实验**上
+
+F12 那条错不是"写错了"，是**实验被环境污染**：
+
+- 我的做法：`HTTP_PROXY=http://127.0.0.1:9 node -e "fetch(...)"` → 返回 200 → 我判定"没走代理"。
+- 真相：本机 shell 里有**小写 `http_proxy=http://127.0.0.1:7897`**（一个真代理），undici 的环境变量代理**小写优先**，那 200 是**经过真代理**回来的。
+- 正确做法（评审给的，已复核）：① `env -u` **清干净**全部代理变量；② 用**不可能成功的输入**判别（不存在的域名）：走代理 → `ECONNREFUSED`，不走 → `ENOTFOUND` —— 两种错误码**必然不同**，不依赖"成功/失败"这种会被环境翻转的信号。
+
+⇒ **写进 AGENTS.md §2**：实验必须①在干净环境里做（`env -u`）②用「只有一种解释」的判别输入，不能拿"返回 200"当"没生效"。
+
+### 10.1 评审后的改动（**未经复核**）
+
+_（第 2 轮之后若在评审之外自己又改了，记在这里。）_
+
+### 10.2 评审者的事实错误（本轮 3 处，按"评审的意见也要自己核"）
+
+| 它说的 | 实际 |
+| --- | --- |
+| 「`configureHttpDispatcher` 的调用点没有 `dist/cli/setup.js`」（N1） | 有：`cli/setup.js:10` |
+| 「本机 `~/.pi/agent/models.json` 根本不存在」 | 存在（1816 字节、JSONC、无 key 字段）—— 见 F19 |
+| 「这台机器不是直连」（B1 的一段推论） | 清空代理变量后直连 `https://example.com` → 200；本机是"既能直连也有代理" |
 
 ## 11. 实施期发现
 
