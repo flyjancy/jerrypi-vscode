@@ -182,19 +182,19 @@ activate() 第一件事
 自定义 agentDir 后 pi 的 `list()` 会带 `filterCwd = true` → 严格比较会话头里的 cwd。**我们自己的会话不会不匹配**：header 的 cwd 就是我们传进去的那个字符串，两边同源。
 风险窗口只剩"**CLI 用另一种盘符大小写写的会话**"（Windows + 装了 pi 的机器）—— 那台受限机**没有 pi**，所以现实里没有受害者。**结论：接受**；已记进 README 已知限制与 `docs/pi-traps.md` 第 18 条，S6 不再加代码。
 
-## 4. 决策与默认值（Q1–Q8，等用户拍板）
+## 4. 决策与默认值（Q1–Q9，等用户拍板）
 
 | # | 问题 | 默认（我的建议） | 备选 |
 | --- | --- | --- | --- |
 | Q1 | `jerrypi.agentDir` 怎么生效 | **设进程环境变量 + 提示重载窗口**；环境变量已设时不覆盖 | 不提供这个设置（只承认 `PI_CODING_AGENT_DIR`） |
 | Q2 | `jerrypi.proxy` 第 2 层（自带 undici）做不做 | **不做**，只标"尚未实现"；第 1 层加一条 advisory 自测项；README 里补"启动 VS Code 前设 `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY`"这条零成本方案 | 做（照 PLAN §5.3 全套要求，含宿主网络回归） |
-| Q9 | 三项设置的 `scope` | `jerrypi.agentDir`、`jerrypi.proxy` 用 **`machine`**（防止任意仓库用 `.vscode/settings.json` 把 agentDir 指走）；`approvalMode` 用默认 | 全部用默认 scope |
 | Q3 | `Pi: Set API Key` 的校验强度 | **只本地判定**（checkAuth + getAvailable），不发请求 | 真发一条最小请求 |
 | Q4 | `Pi: Clear Stored API Keys` 是否帮忙清 auth.json | **不碰**，灰掉并说明 | 提供"连 auth.json 一起清"（会动用户数据） |
 | Q5 | `Pi: Refresh Model Catalog` 做不做 | **做**（点了才联网） | 不做，维持"复制 models-store.json"的土办法 |
 | Q6 | `jerrypi.approvalMode` 登记方式 | **登记 + 描述写明"尚未生效（S8）"** | 不登记，等 S8 一起 |
 | Q7 | agentDir 变更后的提示 | **信息消息 + 「重载窗口」按钮**（不强制） | 模态强制 / 不提示 |
-| Q8 | agentDir 的路径校验 | **存在性 + 是目录**（不存在时警告但允许，因为它会被自动创建） | 不校验 |
+| Q8 | agentDir 的路径校验 | **存在性 + 是目录**（不存在时警告但允许 —— 创建它的是 **pi**，时机是**写第一个会话时**；在那之前我们不替用户建，见 §3.6） | 不校验 |
+| Q9 | 三项设置的 `scope`（+ 要不要声明 `untrustedWorkspaces`） | **三项全用 `machine`**：`agentDir`/`proxy` 防止任意仓库把配置目录指走；**`approvalMode` 更要紧**（S8 之后克隆下来的仓库带一份 `.vscode/settings.json` 就能把工具审批关掉 = 不问就执行），而且 scope 发布后再改是破坏性变更。`capabilities.untrustedWorkspaces` 至今未声明，建议**一并声明**（受限工作区里不启用需要写盘的能力） | 全部用默认 scope / 暂不声明 untrustedWorkspaces |
 
 ## 5. 风险
 
