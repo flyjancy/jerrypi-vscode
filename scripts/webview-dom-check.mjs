@@ -284,6 +284,29 @@ async function main() {
       openablePaths: ["/work/running.ts"], startedAt: clock.now() - 500, endedAt: clock.now(), text: "done" } });
     equal("所有卡片都不再运行时定时器被清掉", clock.pending(), 0);
 
+    // 中止那种形状：pending → 就地替换成 ✗（M13 的 DOM 半边）。
+    // 宿主侧另有断言"中止后正文没丢 + 带 pi 自己的 Command aborted"。
+    send({ type: "item", item: { kind: "tool", id: "tool-abort", toolCallId: "ca", toolName: "bash", summary: "", isError: false,
+      title: { text: "sleep 30" }, pending: true, startedAt: clock.now(), text: "已流出的第 1 行\n已流出的第 2 行" } });
+    const abortCard = doc.querySelector('[data-id="tool-abort"]');
+    click(abortCard.querySelector(".tool-head"));
+    check("运行中的卡片先显示运行中与 ✗ 之前的状态",
+      (abortCard.querySelector(".tool-head").textContent ?? "").includes("运行中…") &&
+        (abortCard.querySelector(".tool-head").textContent ?? "").includes("…"));
+    send({ type: "item", item: { kind: "tool", id: "tool-abort", toolCallId: "ca", toolName: "bash", summary: "", isError: true,
+      title: { text: "sleep 30" }, startedAt: clock.now() - 3000, endedAt: clock.now(),
+      text: "已流出的第 1 行\n已流出的第 2 行\n\nCommand aborted" } });
+    check("中止后就地变成 ✗（没有新增第二个节点）",
+      doc.querySelectorAll('[data-id="tool-abort"]').length === 1 &&
+        (abortCard.querySelector(".tool-head").textContent ?? "").includes("✗"),
+      abortCard.querySelector(".tool-head").textContent);
+    check("中止后已流出的正文仍在（含 pi 自己的 Command aborted）",
+      (abortCard.querySelector(".tool-body").textContent ?? "").includes("已流出的第 1 行") &&
+        (abortCard.querySelector(".tool-body").textContent ?? "").includes("Command aborted"),
+      abortCard.querySelector(".tool-body").textContent);
+    check("中止后耗时从 Elapsed 变 Took", (abortCard.querySelector(".tool-head").textContent ?? "").includes("Took"),
+      abortCard.querySelector(".tool-head").textContent);
+
     // ---------------------------------------------------------------- 安全（真 DOM）
     console.log("[webview-dom-check] 工具正文的 XSS（走真 DOM 解析）");
     const payload = `<img src=x onerror="alert(1)"><script>alert(2)</script>`;
