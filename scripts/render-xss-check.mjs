@@ -281,12 +281,37 @@ async function main() {
 
       // 路径：只有登记过的才渲染成可点的 `<a>`
       const pathItem = toolItem({ text: "ok", openablePaths: ["/work/a.ts"] });
-      const linked = render.renderPathLink("/work/a.ts", pathItem);
-      check("登记过的路径渲染成可点元素", linked.includes("<a ") && linked.includes('data-open-path="/work/a.ts"'), linked);
-      const unregistered = render.renderPathLink("/etc/passwd", pathItem);
+      const linked = render.renderPathLink("~/a.ts", "/work/a.ts", pathItem);
+      check("登记过的路径渲染成可点元素",
+        linked.includes("<a ") && linked.includes('data-open-path="/work/a.ts"') && linked.includes("~/a.ts"), linked);
+      const unregistered = render.renderPathLink("/etc/passwd", "/etc/passwd", pathItem);
       check("未登记的路径只是文字（不可点）", !unregistered.includes("<a "), unregistered);
-      const evilPath = render.renderPathLink('/w/x" onmouseover="alert(1)', toolItem({ text: "ok", openablePaths: ['/w/x" onmouseover="alert(1)'] }));
+      const evilPath = render.renderPathLink('/w/x" onmouseover="alert(1)', '/w/x" onmouseover="alert(1)', toolItem({ text: "ok", openablePaths: ['/w/x" onmouseover="alert(1)'] }));
       check("路径里的引号被转义（不会造出事件属性）", audit(evilPath) === null, String(audit(evilPath)));
+
+      // 标题（照 pi 的 call 行）：path 形态、可点、以及"两处拼装必须同一份"这条铁律
+      const titled = toolItem({
+        toolName: "read",
+        title: { text: "~/a.ts:10-20", link: { text: "~/a.ts", path: "/work/a.ts" } },
+        openablePaths: ["/work/a.ts"],
+      });
+      const titleHtml = render.renderToolHeadLine(titled, false);
+      check("标题渲染成短路径 + 行号范围", titleHtml.includes("~/a.ts") && titleHtml.includes(":10-20"), titleHtml);
+      check("标题里的路径是可点的（data-open-path 用绝对路径）",
+        titleHtml.includes('data-open-path="/work/a.ts"'), titleHtml);
+      check("标题里带展开箭头（未展开是 ▸）", titleHtml.includes("▸"));
+      check("展开后箭头变成 ▾", render.renderToolHeadLine(titled, true).includes("▾"));
+      check("没有 title 时回退到 JSON 参数摘要",
+        render.renderToolHeadLine(toolItem({ text: "x" }), false).includes("{&quot;command&quot;"),
+        render.renderToolHeadLine(toolItem({ text: "x" }), false));
+      // **铁律**：卡片整体拼装出来的按钮内容必须与 main.ts 用的是同一份
+      const cardHtml = render.renderToolCard(titled, true);
+      check("renderToolCard 的按钮内容 === renderToolHeadLine 的输出",
+        cardHtml.includes(render.renderToolHeadLine(titled, true)), cardHtml.slice(0, 200));
+      // 标题里的命令是模型可控的
+      const evilTitle = render.renderToolHeadLine(
+        toolItem({ title: { text: '<img src=x onerror="alert(1)">' } }), false);
+      check("标题文本被转义", audit(evilTitle) === null && !evilTitle.includes("<img"), evilTitle);
 
       // 耗时：进行中用 Elapsed、结束用 Took；没有 startedAt 就不显示
       const running = render.renderToolHead(toolItem({ pending: true, startedAt: 1000 }));

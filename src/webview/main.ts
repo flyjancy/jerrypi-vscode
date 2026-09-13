@@ -13,7 +13,8 @@ import {
   renderMarkdown,
   renderNotice,
   renderToolBody,
-  renderToolHead,
+  renderToolHeadLine,
+  renderToolStatusClass,
 } from "./render";
 import { PROTOCOL_VERSION, type ChatItem, type ClientMessage, type ServerMessage } from "../shared/protocol";
 
@@ -45,7 +46,6 @@ const live = new Map<string, LiveRegion>();
 interface ToolView {
   head: HTMLButtonElement;
   body: HTMLDivElement;
-  caret: HTMLElement;
 }
 const tools = new Map<string, ToolView>();
 /**
@@ -230,8 +230,9 @@ function renderTool(item: Extract<ChatItem, { kind: "tool" }>): void {
   const bodyHtml = renderToolBody(item, isOpen);
   const text = item.text ?? "";
 
-  setHtml(view.head, `<span class="tool-head-text">${renderToolHead(item)}</span>`);
-  view.head.className = `tool-head tool-${item.pending === true ? "running" : item.isError ? "error" : "ok"}`;
+  // 调 render.ts 的同一个函数拼装按钮内容 —— 不许在这里自己拼（见 S3 第一次验收的教训）。
+  setHtml(view.head, renderToolHeadLine(item, isOpen && bodyHtml !== ""));
+  view.head.className = `tool-head ${renderToolStatusClass(item)}`;
   view.head.setAttribute("aria-expanded", isOpen && bodyHtml !== "" ? "true" : "false");
 
   // 正文只在内容真的变了时重写：否则每帧都会把用户的选中与滚动位置清掉。
@@ -252,8 +253,6 @@ function createToolView(item: Extract<ChatItem, { kind: "tool" }>): ToolView {
   const head = document.createElement("button");
   head.className = "tool-head";
   head.type = "button";
-  const caret = element("span", "tool-caret");
-  caret.setAttribute("aria-hidden", "true");
   const body = element("div", "tool-body") as HTMLDivElement;
   body.hidden = true;
   head.addEventListener("click", (event) => {
@@ -272,8 +271,7 @@ function createToolView(item: Extract<ChatItem, { kind: "tool" }>): ToolView {
       toggleTool(item.id);
     }
   });
-  void caret;
-  return { head, body, caret };
+  return { head, body };
 }
 
 /** 展开/折叠。重渲染正文时**保留滚动位置**。 */

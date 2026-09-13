@@ -104,7 +104,7 @@ export function renderThinking(text: string, streaming: boolean): string {
 /** 工具卡片的标题（不换行的那一行）。 */
 export function renderToolHead(item: Extract<ChatItem, { kind: "tool" }>): string {
   const icon = item.pending === true ? "…" : item.isError ? "✗" : "✓";
-  const summary = item.summary === "" ? "" : ` <span class="tool-args">${renderPlain(item.summary)}</span>`;
+  const summary = item.summary === "" ? "" : ` <span class="tool-args">${renderToolTitle(item)}</span>`;
   const pending = item.pending === true ? ' <span class="tool-pending">运行中…</span>' : "";
   const duration = renderToolDuration(item);
   return (
@@ -114,6 +114,27 @@ export function renderToolHead(item: Extract<ChatItem, { kind: "tool" }>): strin
     pending +
     duration
   );
+}
+
+/**
+ * 标题里的那段文字。
+ *
+ * 优先用宿主铸造的 `title`（照 pi 的 call 行：`~/a.ts:10-20`、`命令 (timeout 30s)`），
+ * 没有就回退到原始的 JSON 参数摘要（扩展工具走这条路）。
+ * `title.link` 存在时，那一段渲染成**可点的路径**（pi 的 `renderToolPath` 也是把
+ * call 行里的路径做成交互元素的）。
+ */
+export function renderToolTitle(item: Extract<ChatItem, { kind: "tool" }>): string {
+  const title = item.title;
+  if (title === undefined) return renderPlain(item.summary);
+  const link = title.link;
+  if (link === undefined || link.text === "" || !title.text.includes(link.text)) {
+    return renderPlain(title.text);
+  }
+  const at = title.text.indexOf(link.text);
+  const before = title.text.slice(0, at);
+  const after = title.text.slice(at + link.text.length);
+  return renderPlain(before) + renderPathLink(link.text, link.path, item) + renderPlain(after);
 }
 
 /**
@@ -172,7 +193,9 @@ export function renderToolBody(item: Extract<ChatItem, { kind: "tool" }>, expand
     parts.push(`<div class="tool-note">已截断：${lines}</div>`);
   }
   if (item.fullOutputPath !== undefined) {
-    parts.push(`<div class="tool-note">完整输出：${renderPathLink(item.fullOutputPath, item)}</div>`);
+    parts.push(
+      `<div class="tool-note">完整输出：${renderPathLink(item.fullOutputPath, item.fullOutputPath, item)}</div>`,
+    );
   }
   return parts.join("");
 }
@@ -191,22 +214,49 @@ function lastLines(text: string, count: number): string {
  * 否则就是一段普通文字。理由：可点却点不开（host 会拒）比不可点更让人困惑，
  * 而"渲染层与 host 侧判定一致"是 S2 就立下的规矩。
  */
-export function renderPathLink(path: string, item: Extract<ChatItem, { kind: "tool" }>): string {
-  const escaped = renderPlain(path);
+export function renderPathLink(
+  display: string,
+  path: string,
+  item: Extract<ChatItem, { kind: "tool" }>,
+): string {
+  const escaped = renderPlain(display);
   if (!(item.openablePaths ?? []).includes(path)) return `<span class="tool-path">${escaped}</span>`;
+  // `data-open-path` 带的是**绝对路径**（host 白名单的键），显示的是缩短形态。
   return `<a class="tool-path tool-path-open" data-open-path="${escapeHtml(path)}" role="button" tabindex="0">${escaped}</a>`;
+}
+
+/** 展开箭头的字形。 */
+export function renderToolCaret(open: boolean): string {
+  return open ? "▾" : "▸";
+}
+
+/**
+ * 标题按钮的**全部内容**（文本 + 箭头）。
+ *
+ * ⚠️ 这是**唯一**产出按钮内容的地方 —— `main.ts`（就地更新）与 `renderToolCard`
+ * （渲染断言用）都必须调它。S3 的第一次人工验收就是被这件事咬的：
+ * `renderToolCard` 有箭头、`main.ts` 自己拼的那份没有，于是 74 条断言全绿、
+ * 真机上箭头根本不出现（两份拼装代码漂移）。
+ */
+export function renderToolHeadLine(item: Extract<ChatItem, { kind: "tool" }>, open: boolean): string {
+  return (
+    `<span class="tool-head-text">${renderToolHead(item)}</span>` +
+    `<span class="tool-caret" aria-hidden="true">${renderToolCaret(open)}</span>`
+  );
+}
+
+/** 工具卡片的 class（三态）。 */
+export function renderToolStatusClass(item: Extract<ChatItem, { kind: "tool" }>): string {
+  return `tool-${item.pending === true ? "running" : item.isError ? "error" : "ok"}`;
 }
 
 /** 工具卡片：标题行（可点）+ 正文容器。`expanded` 由调用方维护。 */
 export function renderToolCard(item: Extract<ChatItem, { kind: "tool" }>, expanded = false): string {
-  const status = item.pending === true ? "running" : item.isError ? "error" : "ok";
   const body = renderToolBody(item, expanded);
-  const hasBody = body !== "";
-  const open = expanded && hasBody;
+  const open = expanded && body !== "";
   return (
-    `<button class="tool-head tool-${status}" aria-expanded="${open ? "true" : "false"}">` +
-    `<span class="tool-head-text">${renderToolHead(item)}</span>` +
-    `<span class="tool-caret" aria-hidden="true">${open ? "▾" : "▸"}</span>` +
+    `<button class="tool-head ${renderToolStatusClass(item)}" aria-expanded="${open ? "true" : "false"}">` +
+    renderToolHeadLine(item, open) +
     `</button>` +
     `<div class="tool-body"${open ? "" : " hidden"}>${body}</div>`
   );

@@ -8,6 +8,7 @@
 // 可以同时有文本、思考与工具调用，但工具调用在 UI 上另有 `kind:"tool"` 的行，
 // 所以这里只取文本与思考，不重复展示。
 
+import { homedir } from "node:os";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import {
   MAX_REPLAY_BYTES,
@@ -185,6 +186,7 @@ export function serializeMessage(
       isError: message.isError === true,
       ...toolBodyOf(message),
       ...toolMetaOf(message.details),
+      ...titleOfItem(message.toolName ?? known?.name, known?.args, context),
       // 空数组不写字段：没有可点路径是常态，写一个 `[]` 只会让两端各写一遍空判断。
       ...(openablePaths.length > 0 ? { openablePaths } : {}),
     };
@@ -365,6 +367,81 @@ function openablePathsOfResult(
   }
   // 去重：同一个路径出现两次时点哪个都一样，重复只会让白名单变大。
   return [...new Set(paths)];
+}
+
+/** 标题里命令/路径的显示上限（超出就省略；卡片很窄）。 */
+const TITLE_MAX = 160;
+
+/** 压成一行（命令里可能有换行）。 */
+function singleLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+/** pi 的 `shortenPath`：家目录前缀缩成 `~`（窄栏里这点很值）。 */
+export function shortenPath(value: string): string {
+  const home = homedir();
+  if (home !== "" && value.startsWith(home)) return `~${value.slice(home.length)}`;
+  return value;
+}
+
+function clip(value: string): string {
+  return value.length > TITLE_MAX ? `${value.slice(0, TITLE_MAX)}…` : value;
+}
+
+/**
+ * 构造工具卡片的**标题**（照 pi 的 call 行，`core/tools/renderers/*.js`）：
+ *
+ *   - bash / powershell → 命令原文（pi 前面有个 `$` 提示符；我们这一行本来就有工具名，
+ *     再放一个 `$` 是重复，所以省略）+ ` (timeout Ns)`；
+ *   - read → `~/path:10-20`（offset/limit 转成行号范围）；
+ *   - write / edit → `~/path`；
+ *   - 其它（含扩展工具）→ 不铸造，调用方回退到原始的 JSON 参数摘要。
+ *
+ * `link` 是标题里**可点击的那一段**：显示形态是缩短过的（`~/a.ts`），
+ * 而 `path` 是解析后的绝对路径（白名单的键）。两者必须分开，因为白名单比对的是绝对路径。
+ */
+export function titleOf(
+  toolName: string | undefined,
+  args: unknown,
+  cwd: string,
+): { title?: { text: string; link?: { text: string; path: string } } } {
+  if (typeof toolName !== "string" || args === null || typeof args !== "object") return {};
+  const a = args as Record<string, unknown>;
+
+  if (toolName === "bash" || toolName === "powershell") {
+    if (typeof a.command !== "string") return {};
+    const command = singleLine(a.command);
+    if (command === "") return {};
+    const timeout = typeof a.timeout === "number" ? ` (timeout ${a.timeout}s)` : "";
+    return { title: { text: `${clip(command)}${timeout}` } };
+  }
+
+  // 只给内置的路径类工具铸造标题：扩展工具的 `path` 未必是文件路径，
+  // 猜错比不猜更糟（回退到 JSON 参数摘要它至少是准确的）。
+  if (toolName !== "read" && toolName !== "write" && toolName !== "edit") return {};
+
+  const raw = typeof a.file_path === "string" ? a.file_path : typeof a.path === "string" ? a.path : undefined;
+  if (raw === undefined || raw.trim() === "") return {};
+  const absolute = absolutePathOf(raw, cwd);
+  const display = shortenPath(absolute);
+
+  let text = display;
+  if (toolName === "read") {
+    const offset = typeof a.offset === "number" ? a.offset : undefined;
+    const limit = typeof a.limit === "number" ? a.limit : undefined;
+    const start = offset ?? (limit === undefined ? undefined : 1);
+    if (start !== undefined) text += `:${start}${limit === undefined ? "" : `-${start + limit - 1}`}`;
+  }
+  return { title: { text, link: { text: display, path: absolute } } };
+}
+
+/** `titleOf` 的调用形态（toolResult 分支用）。 */
+function titleOfItem(
+  toolName: string | undefined,
+  args: unknown,
+  context: SerializeContext,
+): { title?: { text: string; link?: { text: string; path: string } } } {
+  return titleOf(toolName, args, context.cwd);
 }
 
 /** 相对路径按会话 cwd 解析；已经是绝对路径就原样返回。 */

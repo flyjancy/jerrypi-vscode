@@ -65,6 +65,14 @@ export type ChatItem =
       /** bash 截断时完整输出的临时文件路径（也是可点路径之一）。 */
       fullOutputPath?: string;
       /**
+       * 卡片标题（照 pi 的 call 行）：`~/a.ts:10-20`、`命令 (timeout 30s)`…
+       *
+       * `link` 是标题里**可点击的那一段**：`text` 是显示形态（家目录缩成 `~`），
+       * `path` 是解析后的绝对路径（白名单的键）—— 两者必须分开，
+       * 因为白名单比对的是绝对路径。
+       */
+      title?: { text: string; link?: { text: string; path: string } };
+      /**
        * 本条卡片里**可点击打开**的绝对路径。
        *
        * 由序列化器铸造、控制器登记成白名单；host 收到 `openFile` 时**只做精确字符串比对**。

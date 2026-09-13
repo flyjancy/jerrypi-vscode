@@ -288,6 +288,24 @@ async function checkToolCard(serialize, protocol, toolText) {
 
   // 未登记路径 / 非字符串 path 都不铸造
   check("非字符串 path 不铸造", serialize.openablePathsOfToolCall({ path: 42 }, "/w").length === 0);
+
+  // ---- 标题（照 pi 的 call 行）----
+  const tBash = serialize.titleOf("bash", { command: "wc  -l\n/tmp/a.md", timeout: 30 }, "/w");
+  check("bash 标题是压成一行的命令 + timeout", tBash.title?.text === "wc -l /tmp/a.md (timeout 30s)", JSON.stringify(tBash.title));
+  check("bash 标题不带可点路径", tBash.title?.link === undefined);
+  const titleRead = serialize.titleOf("read", { path: "src/a.ts", offset: 10, limit: 11 }, "/work/project");
+  check("read 标题是 '路径:起-止'", titleRead.title?.text === "/work/project/src/a.ts:10-20", JSON.stringify(titleRead.title));
+  check("read 标题里的 link.path 是绝对路径", titleRead.title?.link?.path === "/work/project/src/a.ts");
+  check("read 标题的 link.text 是显示形态（title 里真有这一段）",
+    titleRead.title.text.includes(titleRead.title.link.text));
+  const tWrite = serialize.titleOf("write", { path: "/abs/x.ts", content: "big" }, "/work");
+  check("write 标题不带 content（大文件不该进标题）",
+    tWrite.title?.text === "/abs/x.ts", JSON.stringify(tWrite.title));
+  check("edit 标题同 write", serialize.titleOf("edit", { path: "rel.ts" }, "/w").title?.text === "/w/rel.ts");
+  check("扩展工具（未知名字）不铸造标题", serialize.titleOf("my_ext_tool", { path: "x" }, "/w").title === undefined);
+  check("命令里的换行被压平", !String(tBash.title?.text).includes("\n"));
+  const tLong = serialize.titleOf("bash", { command: "x".repeat(500) }, "/w");
+  check("超长命令被截断", (tLong.title?.text ?? "").length <= 200, String((tLong.title?.text ?? "").length));
   check("空 path 不铸造", serialize.openablePathsOfToolCall({ path: "   " }, "/w").length === 0);
 }
 
@@ -378,6 +396,11 @@ function checkWebviewElementIds() {
   // ---- S3：工具卡片的就地更新、滚动策略、展开态 ----
   // 这几条都是"看着正常但会一直折磨用户"的类型：每 200ms 重写 innerHTML 会
   // 重置展开态与滚动位置，无条件滚底会把正在翻历史的用户拽回底部。
+  // S3 第一次人工验收的教训：render.ts 与 main.ts 各拼一份按钮内容，
+  // 于是测试测到有箭头、真机上没有。这条断言把"只能有一份拼装"钉死。
+  check("按钮内容只有一处拼装（main.ts 必须调 renderToolHeadLine）",
+    /renderToolHeadLine\(/.test(mainCode) && !/tool-caret/.test(mainCode), 
+    /tool-caret/.test(mainCode) ? "main.ts 里仍在自建 caret" : "");
   check("工具卡片就地更新（不再整块 setHtml）",
     /renderToolBody\(/.test(mainCode) && !/setHtml\(node, renderToolLine\(item\)\)/.test(mainCode));
   check("展开态存在 webview 侧（不进协议）",
