@@ -27,7 +27,7 @@ const RENDER_CHECK = path.join(SCRIPT_DIR, "render-xss-check.mjs");
 const TOOL_TEXT_CHECK = path.join(SCRIPT_DIR, "tool-text-check.mjs");
 const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 
-const TOTAL = 6;
+const TOTAL = 7;
 let passed = 0;
 
 function pass(id, name, detail) {
@@ -178,6 +178,27 @@ function extractStringArray(source, exportName) {
   return [...match[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
 }
 
+/**
+ * 所有检查脚本自己必须能解析。
+ *
+ * 这不是形式主义：我在检查脚本里写过三次**嵌套双引号**（中文文案里带 ASCII 引号），
+ * 而只有被 CI 跑到的那几个脚本会因此报错 —— `controller-check` 不进 CI，
+ * 它的语法错误要等到有人手动跑才暴露。`node --check` 一秒扫完全部脚本。
+ */
+function testScriptsParse() {
+  const scripts = fs
+    .readdirSync(SCRIPT_DIR)
+    .filter((name) => name.endsWith(".mjs"))
+    .map((name) => path.join(SCRIPT_DIR, name));
+  const broken = [];
+  for (const script of scripts) {
+    const result = spawnSync(process.execPath, ["--check", script], { encoding: "utf8" });
+    if (result.status !== 0) broken.push(`${path.basename(script)}: ${(result.stderr ?? "").split("\n")[0]}`);
+  }
+  if (broken.length > 0) fail(7, "scripts parse", broken.join(" | "));
+  pass(7, `${scripts.length} 个检查脚本都能解析`, "");
+}
+
 function testUnitChecks() {
   // S2 的纯函数层（serialize 的 id 规则、urlPolicy 的白名单、渲染安全）由单独脚本检查，
   // 这里只保证它们**真的会被跑**——漂移的检查脚本等于没有检查。
@@ -204,6 +225,7 @@ async function main() {
   testMissingDependencyFailsVerification();
   testIdempotentSync();
   await testResourceListDrift();
+  testScriptsParse();
   testUnitChecks();
   console.log(`SELF-TEST OK (${passed}/${TOTAL})`);
 }

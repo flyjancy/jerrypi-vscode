@@ -239,11 +239,23 @@ function renderTool(item: Extract<ChatItem, { kind: "tool" }>): void {
   const signature = `${isOpen}\u0000${text}\u0000${item.truncation === undefined ? "" : JSON.stringify(item.truncation)}\u0000${item.fullOutputPath ?? ""}\u0000${item.textTruncated === true}`;
   if (toolTextSeen.get(item.id) !== signature) {
     toolTextSeen.set(item.id, signature);
-    const keepScroll = view.body.scrollTop;
+    // ⚠️ 滚动容器是内层的 `.tool-text`（它有 `max-height: 40vh; overflow: auto`），
+    // **不是** `.tool-body`（它没有 overflow，scrollTop 恒为 0）。第一版存的是
+    // `.tool-body.scrollTop`，于是"保存/恢复"存了个恒为 0 的值 —— 而 setHtml 会把
+    // 内层 `<pre>` 整个换掉，真正的滚动位置照样归零：表现就是用户往下滚了以后
+    // 每 200ms 被拽回正文顶部（M7 人工验收实测）。
+    const previous = view.body.querySelector(".tool-text") as HTMLElement | null;
+    const followedTail =
+      previous === null ||
+      previous.scrollTop + previous.clientHeight >= previous.scrollHeight - BODY_STICK_THRESHOLD_PX;
+    const keepScroll = previous?.scrollTop ?? 0;
     setHtml(view.body, bodyHtml);
-    // 恢复正文内部的滚动位置（大输出展开时用户会自己往下滚）。
-    view.body.scrollTop = keepScroll;
     view.body.hidden = bodyHtml === "";
+    const next = view.body.querySelector(".tool-text") as HTMLElement | null;
+    if (next !== null) {
+      // 本来贴着底部（或在顶部没动过）就跟随新输出，否则停在用户看的位置。
+      next.scrollTop = followedTail ? next.scrollHeight : keepScroll;
+    }
   }
 
   ensureDurationTimer();
@@ -314,7 +326,10 @@ function ensureDurationTimer(): void {
  * 原来是无条件 `scrollTop = scrollHeight`：流式输出（尤其工具卡片每 200ms 一次）
  * 会把正在往上翻历史的用户一直拽回底部（S3-plan 约束 #6）。
  */
+/** 转写区"算贴着底部"的容差。 */
 const STICK_THRESHOLD_PX = 40;
+/** 卡片正文内部"算贴着底部"的容差。 */
+const BODY_STICK_THRESHOLD_PX = 24;
 
 function isAtBottom(): boolean {
   return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= STICK_THRESHOLD_PX;
@@ -385,6 +400,9 @@ window.addEventListener("message", (event: MessageEvent<ServerMessage>) => {
       return;
     case "delta":
       appendDelta(message.id, message.kind, message.delta);
+      // 流式文本会长到可视区下方 —— 用户在底部时跟随，翻历史时不动。
+      // （S2 只在 `item` 上滚，于是"逐字流式"其实是看着字往下跑出屏幕。）
+      scrollIfFollowing();
       return;
     case "queue":
       renderQueue({ steering: message.steering, followUp: message.followUp });

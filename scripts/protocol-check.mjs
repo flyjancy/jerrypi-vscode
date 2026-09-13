@@ -427,8 +427,15 @@ function checkWebviewElementIds() {
     /const expanded = new Set<string>\(\)/.test(mainCode) && !/expanded/.test(
       fs.readFileSync(path.join(REPO_ROOT, "src/shared/protocol.ts"), "utf8"),
     ));
-  check("正文重写前保存/恢复正文容器的滚动位置",
-    /keepScroll/.test(mainCode) && /view\.body\.scrollTop = keepScroll/.test(mainCode));
+  // 第一版这条断言是照着**实现**写的（`view.body.scrollTop = keepScroll`），
+  // 于是它断言的恰恰是那个 bug：`.tool-body` 没有 overflow，scrollTop 恒为 0，
+  // 真正的滚动容器是内层 `.tool-text`（`max-height: 40vh; overflow: auto`）。
+  // 现在按**需求**断言：保存/恢复的位置必须取自滚动容器本身。
+  check("正文滚动位置取自滚动容器 .tool-text（不是 .tool-body）",
+    /querySelector\("\.tool-text"\)/.test(mainCode) && !/view\.body\.scrollTop = /.test(mainCode));
+  check("正文更新时按「本来在底部就跟随」处理", /followedTail/.test(mainCode));
+  check("流式 delta 也会跟随滚动（否则字长到可视区下方）",
+    /case "delta":[\s\S]{0,200}scrollIfFollowing\(\)/.test(mainCode));
   check("自动滚动只在用户本来就在底部时发生",
     /function isAtBottom/.test(mainCode) && /scrollIfFollowing\(\)/.test(mainCode) &&
       !/case "item":\s*renderItem\(message\.item\);\s*scrollToBottom\(\);/.test(mainCode));
