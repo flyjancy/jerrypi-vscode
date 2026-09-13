@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" fill="none" width="24" height="24">
+  <!--
+    jerrypi 候选 mark —— "P" + "j" 合体
+    沿用 pi 官方模块系统: module = 117.36, 4 列 x 5 行, origin (165.28, 106.60)
+    左侧 P 与官方 mark 逐像素一致（含方形 counter）
+    右侧原 "i" 方块下沉一格并向左接一格 -> 读作 "j"
+  -->
+  <path fill="currentColor" fill-rule="evenodd" d="
+    M165.28 106.60 H517.36 V341.32 H400.00 V458.68 H282.64 V576.04 H165.28 Z
+    M282.64 223.96 H400.00 V341.32 H282.64 Z"/>
+  <path fill="currentColor" d="
+    M517.36 341.32 H634.72 V693.40 H400.00 V576.04 H517.36 Z"/>
+</svg>
