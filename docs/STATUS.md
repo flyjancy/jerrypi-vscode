@@ -19,7 +19,7 @@
 | 最新发布 | **0.1.6**（2026-09-13，预发布） |
 | 发布核验 | `node scripts/compare-vsix.mjs 0.1.6` → **338 个文件逐个字节相同**（发布当时）；tag `v0.1.6`；留档 `~/jerrypi-releases/jerrypi-0.1.6.vsix`。⚠️ 仓库根那份 `jerrypi-0.1.6.vsix` 已被 S5 第 1 步的 `npm run package` 重建，**不再是发布时的字节**（权威副本在 `~/jerrypi-releases/`） |
 | 真机验收 | Mac（2 个动作）✅ ／ Windows（W0–W3）✅ —— 明细 S4-plan §12.3 |
-| 工作区 | `96251ae` 为止已提交在 `main`，**尚未 push**；另有一个未跟踪文件 `media/jerrypi-mark-j.svg`（不是 S5 的东西，等你处置）。**总计划只有一份**：`docs/PLAN.md`（2026-09-13 已把根目录那份的 233 行评审记录并进去并删除，见 S5-plan §10.1 的 U6） |
+| 工作区 | `main` 上有 **7 个提交未 push**；两个未跟踪文件 `media/jerrypi-mark-j.svg` 与 `output/`（你的 logo 素材，我没纳进任何提交）。**总计划只有一份**：`docs/PLAN.md`（2026-09-13 已把根目录那份的 233 行评审记录并进去并删除，见 S5-plan §10.1 的 U6） |
 
 **会自动跑的东西（每个动作改完必须全绿）**：
 
