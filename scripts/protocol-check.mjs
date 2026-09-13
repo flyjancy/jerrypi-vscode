@@ -412,6 +412,18 @@ function checkWebviewElementIds() {
   // 于是测试测到有箭头、真机上没有。这条断言把"只能有一份拼装"钉死。
   // 路径点击必须是**一处委托**：`data-open-path` 出现在标题行与正文两处，
   // 只在标题按钮上挂 handler 会让正文那条变成死链（M5 实测：看着可点、点了没反应）。
+  // M14 的宿主半边：**运行中**的卡片也要有可点路径 —— 所以 tool_execution_start
+  // 与快照重建两处都必须调 openablePathsOfToolCall。第一版只在快照里调了，
+  // 于是运行中的卡片点不开（而且当时的断言是个恒真式，什么也没验）。
+  const controllerSource = fs.readFileSync(path.join(REPO_ROOT, "src/pi/controller.ts"), "utf8");
+  const startHandler = controllerSource.slice(
+    controllerSource.indexOf("private onToolExecutionStart"),
+    controllerSource.indexOf("private onToolExecutionUpdate"),
+  );
+  check("tool_execution_start 里铸造了可点路径（M14 的宿主半边）",
+    /openablePathsOfToolCall\(/.test(startHandler) && /openablePaths/.test(startHandler));
+  check("快照重建 pending 行时也铸造可点路径",
+    /openablePathsOfToolCall\(/.test(controllerSource.slice(controllerSource.indexOf("for (const toolCallId of session.state.pendingToolCalls)"))));
   check("路径点击用捕获阶段的一处委托（标题与正文都覆盖）",
     /transcript\.addEventListener\("click", onTranscriptClick, true\)/.test(mainCode) &&
       /closest\("\[data-open-path\]"\).*getAttribute\("data-open-path"\)/s.test(mainCode.replace(/\n/g, " ")) &&
