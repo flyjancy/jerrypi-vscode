@@ -10,7 +10,8 @@
 | # | 陷阱（一句话） | 出处 |
 | --- | --- | --- |
 | 1 | 它的 `sessionDir` 参数是"**直接装 `.jsonl` 的目录**"，不是"sessions 根" —— 差一层就写到没人看得见的地方 | S5-plan §3.1（含实测；根 `PLAN.md` 的 **D5-N3 是错的那条**） |
-| 2 | 会话布局是 `<agentDir>/sessions/--<编码 cwd>--/`，且**不做 realpath**（符号链接 `link` 与 `real` 会得到两个目录） | S5-plan §3.1 |
+| 2 | 会话布局是 `<agentDir>/sessions/--<编码 cwd>--/`；它的 `resolvePath()` **只做 `path.resolve`、不 realpath** —— 但**终端 CLI 拿到的 cwd 是 `process.cwd()`，那是物理路径**（macOS：`/var/…` → `/private/var/…`）。所以双方必须自己对齐：我们对 cwd 做了 `realpathSync`（失败退回 `path.resolve`），否则同一个文件夹会有两个会话目录、互通静默断掉 | S5-plan §3.1 · §11 的 6-8/6-9 · R2 |
+| 18 | 同一台机器上**同一个路径可以有多种写法**：Windows 上 VS Code 给 `c:\…`，而 `os.tmpdir()` 是 `C:\…`（W0 实测）。`sessionCwdMatches` 是**严格字符串比较** → 自定义 agentDir（`filterCwd` 变 true）时会把会话整批滤掉 | S5-plan R10 · §12.3 |
 | 3 | 只有出过**至少一条 assistant 消息**才建会话文件；`getSessionFile()` 在此之前就有值但文件不存在 | S5-plan §3.5 |
 | 4 | `isPersisted()` 返回的是"**会不会**落盘"，不是"落盘了没" —— 判落盘用 `existsSync(getSessionFile())` | S5-plan §3.5 |
 | 5 | `isIdle` 覆盖续跑循环与压缩，但**不覆盖**"已发送、`agent_start` 还没到"那个窗口（本仓用 `pendingSend` 补） | S5-plan D7 |

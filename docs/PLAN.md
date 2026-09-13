@@ -122,21 +122,35 @@ jerrypi-vscode/
   src/extension.ts          activate()：设环境、动态 import pi-runtime、注册视图/命令/状态栏
   src/pi/loader.ts          唯一 import pi 的地方：解析 pi-runtime 路径，`await import(pathToFileURL(...))`，导出类型化句柄
   src/pi/runtime.ts         ModelRuntime 单例；SecretStorage 里的 key 通过 setRuntimeApiKey 注入
-  src/pi/session.ts         PiSession：包装 AgentSession；prompt/steer/followUp/abort；事件 → 协议消息
+  src/pi/session.ts         createSessionHost：包装 AgentSessionRuntime；替换会话后 rebind；事件 → 协议消息
+  src/pi/controller.ts      会话主机（最终版）：pi 事件 → 协议消息、id 唯一权威、重放、会话替换与守卫
+  src/pi/serialize.ts       pi 消息 → ChatItem 的唯一转写器（实时与重放共用）
+  src/pi/model-choice.ts    从模型目录里挑一个可用的（面板不钉模型时的兜底）
+  src/pi/custom-tools.ts    同名覆盖内置 write（按调用捕获 toolCallId，给 S7 用）
+  src/pi/resources.ts       sync 脚本与自测共用的"必须存在的资源路径"清单
+  src/pi/selftest.ts        `Pi: Run Self-Test` 的闸门实现（T1–T12 + GATE 判定）
+  src/pi/selftest-ui.ts     自测专用的最小 ExtensionUIContext（custom 会抛可控错误）
   src/pi/sessions.ts        会话目录推导（resolveSessionDir/sessionsRootOf，复刻 pi 的 per-cwd 编码规则）+ list/continueRecent 封装
   src/pi/bindings.ts        bindExtensions 的 uiContext（QuickPick/InputBox/通知）、onError→Output、commandContextActions
-  src/pi/approval.ts        InlineExtension：tool_call 阻塞 + webview 审批（默认关）
-  src/pi/packages.ts        DefaultPackageManager 封装：installAndPersist / listConfiguredPackages / removeAndPersist（返回 boolean，false 时提示"未移除"）
-  src/pi/filechanges.ts     按 toolCallId 收集 edit 的 patch 与 write 的前后内容（见 5.3）
+  src/pi/approval.ts        （**S8 待建**）InlineExtension：tool_call 阻塞 + webview 审批（默认关）
+  src/pi/packages.ts        （**S9 待建**）DefaultPackageManager 封装：installAndPersist / listConfiguredPackages / removeAndPersist（返回 boolean，false 时提示"未移除"）
+  src/pi/filechanges.ts     （**S7 待建**）按 toolCallId 收集 edit 的 patch 与 write 的前后内容（见 5.3）
   src/host/chatView.ts      WebviewViewProvider；消息路由；v1 单会话
-  src/host/diff.ts          pi-diff: 虚拟文档 + 打开 diff 编辑器（自写，读 filechanges）
+  src/host/diff.ts          （**S7 待建**）pi-diff: 虚拟文档 + 打开 diff 编辑器（自写，读 filechanges）
+  src/commands.ts           命令注册：自测 / 设 key / 打开设置 / 模型与等级选择器 / 新建会话 / 恢复会话
   src/host/statusBar.ts     模型名 + 上下文用量
   src/host/modelPicker.ts   模型 / 思考等级选择器（宿主侧 QuickPick，不认识 session）
   src/host/sessionPicker.ts 会话选择器（宿主侧 QuickPick；sessionToItem 是纯函数，便于断言）
   src/host/sessionActions.ts 会话替换的"忙时先问一句"与结果文案（弹窗在宿主层）
-  src/host/config.ts        读 VS Code 配置；SecretStorage 存取 API key
-  src/host/net.ts           代理/证书策略（见 5.3）
+  src/host/config.ts        （**S6 待建**）读 VS Code 配置；SecretStorage 存取 API key
+  src/host/net.ts           （**S6 待建**，`jerrypi.proxy` 目前写了不生效）代理/证书策略（见 5.3）
+  src/host/uiContext.ts     VS Code UI → pi ExtensionUIContext（QuickPick/InputBox/通知）
+  src/host/webviewHtml.ts   面板 HTML 外壳（CSP + nonce + localResourceRoots 的约定）
+  src/host/workspace.ts     会话 cwd 的确定（第一个 workspace folder；没打开工作区时退回主目录并明说）
   src/shared/protocol.ts    ClientMessage / ServerMessage 联合类型
+  src/shared/format.ts      照抄 pi 语义的纯格式化函数（tokens / 上下文用量 / 会话名 / 会话时间）
+  src/shared/toolText.ts    工具正文净化（剥 ANSI、滤控制字符、按 UTF-8 字节裁剪）
+  src/shared/urlPolicy.ts   链接/图片的 scheme 白名单（渲染层与宿主层共用同一判定）
   src/webview/main.ts       聊天 UI（移植自 Zetaphor，去掉多 tab 与 checkpoint）
   src/webview/render.ts     markdown（marked，照抄 pi export-html 模板的消毒配置：HTML 当纯文本 + URL scheme 白名单 + escapeHtml）、工具卡片、思考块
   src/webview/style.css
@@ -203,8 +217,8 @@ jerrypi-vscode/
 
 每步都可独立验证；括号内是验证方式。
 
-- **S0 脚手架与发布链路**：`package.json`（name `jerrypi`，publisher `flyjancy`，`engines.vscode ^1.123.0`，**必须含 `contributes.commands`（至少 `jerrypi.focusChat`），否则 vsce 因有 `main` 而无 `activationEvents`/`contributes` 直接拒绝打包**）、`tsconfig`、`esbuild.mjs`、`sync-pi-runtime.mjs`、空 `activate()` 注册该命令；`npm run package` 产出 .vsix；创建 publisher，按 5.4 的"同一文件"规则发布 0.1.0 空壳预发布版（已含 pi-runtime，验证体积与安装链路）。（Mac 上 F5 能看到 `Pi: Focus Chat`；`sync-pi-runtime.mjs` 全部 7 条校验通过；.vsix 解包到干净目录后无 `.node` 文件、chord/jiti/photon/fixture 都在、隔离 import 与隔离加载扩展都成功；受限机上能从 Marketplace 搜到并安装预发布版；记录受限机实测的 `process.versions.node` 与扩展页面显示的 VS Code 版本，若首个 Node 24 的 VS Code 版本不是 1.123 则修正 `engines`。）
-- **S1 可行性闸门（Mac 上从 .vsix 跑一次；受限 Windows 机上从 Marketplace 预发布版跑一次）**：实现 `loader.ts`、`runtime.ts`、`bindings.ts`、最小 `session.ts`，**以及最小版 `Pi: Set API Key`（写 SecretStorage 并 `setRuntimeApiKey`）与 `Pi: Open Settings File`**（从 S6 提前，因为受限机的 `~/.pi/agent/` 是空的且不能拷入文件；pi 内置 deepseek provider，只设 key 即可跑 T4），并加一个 `Pi: Run Self-Test` 命令，把结果写到 Output channel。输出格式固定：首行 `flyjancy.jerrypi <扩展版本> selftest-v1 <平台> node=<版本>`；随后每项一行 `T<编号> PASS|FAIL|SKIP <短错误码>`（T1–T9，第 5 项拆成 T5a/T5b/T5c）；末行 `GATE PASS` 或 `GATE BLOCKED <失败项列表>`。**只有全部 required 项 PASS 才是 GATE PASS，SKIP 不算通过；T5c 为 advisory，不参与判定**；作者核对首行版本号与自己发布的版本一致后才采信。Mac 通过后发布预发布版 0.1.1（之后每次递增），用户在受限机确认版本后运行自测，把结果逐行告诉作者。自测项：
+- **S0 脚手架与发布链路** —— **状态：已实现（0.1.0）**。`package.json`（name `jerrypi`，publisher `flyjancy`，`engines.vscode ^1.123.0`，**必须含 `contributes.commands`（至少 `jerrypi.focusChat`），否则 vsce 因有 `main` 而无 `activationEvents`/`contributes` 直接拒绝打包**）、`tsconfig`、`esbuild.mjs`、`sync-pi-runtime.mjs`、空 `activate()` 注册该命令；`npm run package` 产出 .vsix；创建 publisher，按 5.4 的"同一文件"规则发布 0.1.0 空壳预发布版（已含 pi-runtime，验证体积与安装链路）。（Mac 上 F5 能看到 `Pi: Focus Chat`；`sync-pi-runtime.mjs` 全部 7 条校验通过；.vsix 解包到干净目录后无 `.node` 文件、chord/jiti/photon/fixture 都在、隔离 import 与隔离加载扩展都成功；受限机上能从 Marketplace 搜到并安装预发布版；记录受限机实测的 `process.versions.node` 与扩展页面显示的 VS Code 版本，若首个 Node 24 的 VS Code 版本不是 1.123 则修正 `engines`。）
+- **S1 可行性闸门（Mac 上从 .vsix 跑一次；受限 Windows 机上从 Marketplace 预发布版跑一次）** —— **状态：已实现（0.1.1–0.1.3）**。实现 `loader.ts`、`runtime.ts`、`bindings.ts`、最小 `session.ts`，**以及最小版 `Pi: Set API Key`（写 SecretStorage 并 `setRuntimeApiKey`）与 `Pi: Open Settings File`**（从 S6 提前，因为受限机的 `~/.pi/agent/` 是空的且不能拷入文件；pi 内置 deepseek provider，只设 key 即可跑 T4），并加一个 `Pi: Run Self-Test` 命令，把结果写到 Output channel。输出格式固定：首行 `flyjancy.jerrypi <扩展版本> selftest-v1 <平台> node=<版本>`；随后每项一行 `T<编号> PASS|FAIL|SKIP <短错误码>`（T1–T9，第 5 项拆成 T5a/T5b/T5c）；末行 `GATE PASS` 或 `GATE BLOCKED <失败项列表>`。**只有全部 required 项 PASS 才是 GATE PASS，SKIP 不算通过；T5c 为 advisory，不参与判定**；作者核对首行版本号与自己发布的版本一致后才采信。Mac 通过后发布预发布版 0.1.1（之后每次递增），用户在受限机确认版本后运行自测，把结果逐行告诉作者。自测项：
   1. 打印 `process.versions.node`、`process.versions.electron`、VS Code 版本；断言 Node ≥ 24.15（对应声明下限 1.123）。
   2. 动态 import pi bundle 成功；`VERSION === "0.85.1"`；`getPackageDir()` 以 `pi-runtime` 结尾；5.4 sync 脚本第 4 条列出的全部路径存在可读（主题、导出模板、docs、examples、README、worker、photon wasm、chord context）。
   3. 扩展生命周期（本项在受限机上验证的是 **Windows 路径 + 扩展宿主 + 用户真实扩展共存** 三件事；jiti 等依赖是否齐全已由 sync 脚本第 7 条在打包期保证）：把 `test-fixtures/ext-smoke/` 复制到临时目录；按生产装配路径建会话：`createAgentSessionServices({ cwd, agentDir, modelRuntime: <runtime.ts 单例>, resourceLoaderOptions: { additionalExtensionPaths: [<临时目录>/index.ts 的文件路径] } })` → `createAgentSessionFromServices({ services, sessionManager, customTools: [wrappedWrite] })` → `createAgentSessionRuntime` → 对 `runtime.session` rebind（`bindExtensions()` + `subscribe()`）；断言 **`runtime.services.resourceLoader.getExtensions().errors` 中不含 smoke 路径**（用户自己扩展的错误单独列为诊断，不参与判定）、`session.extensionRunner.getRegisteredCommands()` 含 `smoke`、session_start 标记文件已写出；`prompt("/smoke")` 后第二个标记文件已写出；`prompt("/smoke-custom")`（该命令调用 `ctx.ui.custom()`）以可控错误结束并经 `onError` 上报，会话仍可用。结束后 `dispose()` 并删除临时目录。（G6。）
@@ -215,12 +229,12 @@ jerrypi-vscode/
   8. 图片 worker 往返：以 `pi-runtime/dist/bundle/chunks/image-resize-worker.js` 的准确路径构造 `Worker`，`postMessage` 一张 3000×3000 PNG 的 `{ inputBytes, mimeType, options }`，10 秒超时内收到含缩小尺寸的结果，然后 `terminate()`。另外单独调 `resizeImage()` 断言尺寸变小，两者都要过。
   9. 会话替换（新增，覆盖 S5 与 `commandContextActions` 的真实路径）：在第 7 项的 runtime 上 `await runtime.newSession()` → rebind，断言 `runtime.session` 是新对象、会话文件路径不同、smoke 扩展的 session_start 标记再次写出、`getRegisteredCommands()` 仍含 `smoke`；再 `await runtime.switchSession(<第 7 项的会话文件>)` → rebind，断言历史消息数与第 7 项一致且事件订阅仍能收到 `agent_start`。
 
-  **闸门规则：除 T5c 外的全部 required 项（T1–T9）在受限 Windows 机上任一非 PASS，即 GATE BLOCKED，不进入 S2，回到第 4 节重新决策。** T5a/T5b 失败意味着 A3 不成立，需用户决定是否接受"只读 agent"。
-- **S2 协议与基础聊天**：`protocol.ts`、`chatView.ts`、webview 输入框 + 流式文本 + 思考块 + 中止按钮 + 流式期间的 steer/followUp 发送 + 队列条 + 面板重开时的状态重放。（验收：多轮对话；折叠再展开面板不丢历史；流式期间发送不出现 "Agent is already processing" 错误，消息进入队列条；队列非空时 `agent_end` 后输入仍禁用，直到 `agent_settled`；喂入 `<img src=x onerror=…>`、`<script>…</script>`、`[x](javascript:alert(1))` 三种内容，断言不执行、标签以文本显示、链接被降级为纯文本。）
+  **闸门规则：除 T5c 外的全部 required 项（T1–T9）在受限 Windows 机上任一非 PASS，即 GATE BLOCKED，不进入 S2，回到第 4 节重新决策。**（**2026-09-13 补记**：S5 给闸门加了 T10/T11/T12，所以现在共 **14 项 = 12 gating + 2 advisory（T5c/T12）**；见 `docs/S5-plan.md` 的 §6 与 §11。） T5a/T5b 失败意味着 A3 不成立，需用户决定是否接受"只读 agent"。
+- **S2 协议与基础聊天** —— **状态：已实现（0.1.4）**。`protocol.ts`、`chatView.ts`、webview 输入框 + 流式文本 + 思考块 + 中止按钮 + 流式期间的 steer/followUp 发送 + 队列条 + 面板重开时的状态重放。（验收：多轮对话；折叠再展开面板不丢历史；流式期间发送不出现 "Agent is already processing" 错误，消息进入队列条；队列非空时 `agent_end` 后输入仍禁用，直到 `agent_settled`；喂入 `<img src=x onerror=…>`、`<script>…</script>`、`[x](javascript:alert(1))` 三种内容，断言不执行、标签以文本显示、链接被降级为纯文本。）
 - **S3 工具调用卡片**：bash / read / edit / write 的调用参数与结果展示，可折叠，bash 输出流式更新，点击文件路径打开文件。（让 agent 列目录并改一个文件，G2。）
   **状态：已实现（0.1.5）**。实现记录与验收清单见 [`S3-plan.md`](S3-plan.md)；diff 渲染（`edit` 的 patch）与工具审批按原计划留给 S7/S8。
-- **S4 模型与思考等级**：模型选择器（QuickPick）、思考等级切换、状态栏显示模型与上下文用量。（G4。）
-- **S5 会话管理**：新建（`runtime.newSession()`）、列表（`SessionManager.list(cwd, sessionDir)`，`sessionDir` 从生效的 agentDir 推导为 **`<agentDir>/sessions/--<编码 cwd>--`** —— 见下面的修正注）、恢复（`runtime.switchSession(path)`）、显示会话名；每次替换后 rebind；VS Code 重启后**自动 `continueRecent(cwd, sessionDir)`**；忙时替换先弹确认；替换后宿主全量重放。（G3。）
+- **S4 模型与思考等级**：模型选择器（QuickPick）、思考等级切换、状态栏显示模型与上下文用量。（G4。）—— **状态：已实现（0.1.6）**。
+- **S5 会话管理** —— **状态：已实现（0.1.7）**：新建（`runtime.newSession()`）、列表（`SessionManager.list(cwd, sessionDir)`，`sessionDir` 从生效的 agentDir 推导为 **`<agentDir>/sessions/--<编码 cwd>--`** —— 见下面的修正注）、恢复（`runtime.switchSession(path)`）、显示会话名；每次替换后 rebind；VS Code 重启后**自动 `continueRecent(cwd, sessionDir)`**；忙时替换先弹确认；替换后宿主全量重放。（G3。）
   > ⚠️ **2026-09-13（S5 实施期）修正**：本行原先写的是 `<agentDir>/sessions`（把 pi 的 `sessionDir` 参数当成了"sessions 根"），**那是错的** —— 那个参数是"**直接装 `.jsonl` 的目录**"（`session-manager.js:1127` 直接 `join` 文件名）。按原写法会话会平铺在根上，`pi --resume` 与 pi 自己的 `listAll()` 都看不到（实测：`list(cwd)` 5 条 / `list(cwd, 平铺目录)` 0 条）。已修：`src/pi/sessions.ts` 的 `resolveSessionDir` 复刻 pi 的编码规则，并用自测 T10/T11/T12 钉住它。详见 `docs/S5-plan.md` 的 §3.1 与 §11。
 - **S6 设置与密钥**：三项 VS Code 设置、`Pi: Clear Stored API Keys`，并把 S1 的最小版 `Pi: Set API Key` / `Pi: Open Settings File` 补完整（provider 选择、校验）。（清空 `models.json` 里的 key 只靠 SecretStorage 也能完成对话。）
 - **S7 diff 审阅**：`filechanges.ts` + `diff.ts`。（验收：让 agent 在**同一条消息里**对同一文件发出两次 edit，两张卡片各自只显示该次 patch；同一条消息里两次 write 同一文件，两张卡片前后内容各自正确；重启 VS Code 恢复会话后，edit 卡片的 diff 仍可打开，write 卡片显示"本次会话不可用"。）

@@ -62,13 +62,13 @@
 
 ### 配置
 
-扩展只叠加三项 VS Code 设置，其余一律沿用 pi 自己的配置：
+扩展计划叠加三项 VS Code 设置，其余一律沿用 pi 自己的配置 —— **注意：这三项目前都还没生效**（下面逐条标明）：
 
 | 设置 | 取值 | 说明 |
 | --- | --- | --- |
 | `jerrypi.approvalMode` | `off`（默认）/ `mutating` / `all` | 工具调用是否需要确认。**尚未生效（S8）**：现在设置它没有任何效果，工具调用一律直接执行 |
-| `jerrypi.proxy` | 代理 URL（可选） | 显式代理；**启用时会替换进程级 `globalThis.fetch`**，详见已知限制 |
-| `jerrypi.agentDir` | 路径（默认留空 = `~/.pi/agent`） | pi 配置目录 |
+| `jerrypi.proxy` | 代理 URL（可选） | 显式代理。**尚未生效（S6）**：现在设置它没有任何效果 —— 代理与证书暂时完全交给 VS Code 的 `http.proxy` / `http.systemCertificates`。S6 实现后请注意它会替换**进程级** `globalThis.fetch`（见已知限制） |
+| `jerrypi.agentDir` | 路径（默认留空 = `~/.pi/agent`） | pi 配置目录。**尚未生效（S6）**：现在固定用 pi 自己的 `~/.pi/agent`（或环境变量 `PI_CODING_AGENT_DIR`） |
 
 - 默认模型、`shellPath`、工具白名单等请在 pi 的 `settings.json` 中修改，扩展提供 **`Pi: Open Settings File`** 直接打开它。
 - 代理与证书默认交给 VS Code 自身的 `http.proxy` / `http.systemCertificates` 处理，无需额外配置。
@@ -119,7 +119,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
    `git tag -a v<版本> -m "jerrypi <版本>；产物 <大小> 字节，SHA-256 <指纹>"`，再 `git push --tags`。
    tag 只在第 5 步核对通过后才打 —— 这样每个 tag 都对应一份**确实发布出去**的产物。
 
-装好扩展后，用 `Pi: Run Self-Test` 跑可行性闸门（T1–T9，结果写在 `jerrypi` Output 频道）：它会验证 pi 运行时能否在扩展宿主里真实加载、扩展生命周期、真实模型流式对话、子进程与中止、文件读写编辑、会话持久化与替换、图片 worker 往返。**跑之前先用 `Pi: Set API Key` 配一把 provider key**（默认 DeepSeek），否则 T4/T6/T7/T9 会以 `E_NO_CREDENTIALS` 失败。
+装好扩展后，用 `Pi: Run Self-Test` 跑可行性闸门（**T1–T12** = 12 个 gating 项 + 2 个 advisory，结果写在 `jerrypi` Output 频道）：它会验证 pi 运行时能否在扩展宿主里真实加载、扩展生命周期、真实模型流式对话、子进程与中止、文件读写编辑、会话持久化与替换、图片 worker 往返，**以及会话目录是否落在 pi 的规范位置、`pi` 自己的 `list(cwd)` 能否看到它（T10/T11）**。**跑之前先用 `Pi: Set API Key` 配一把 provider key**（默认 DeepSeek），否则 T4/T6/T7/T9 会以 `E_NO_CREDENTIALS` 失败。
 
 > `.vsix` 里还包含 `test-fixtures/ext-smoke/index.ts`：它是**打包验收用的最小 pi 扩展**（不是给用户使用的功能），目的是让「从解包产物复跑校验」成为可能。细节见 [`docs/S0-plan.md`](docs/S0-plan.md)。
 
@@ -152,7 +152,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 - **没打开工作区时，会话的 cwd 是用户主目录**：`bash` 与文件工具会以 `~`（Windows 上是 `C:\Users\<你>`）为工作目录运行，Output 里会写一行提示。**请先打开一个工作区**再用面板，否则模型的操作范围不受任何目录约束。
 - **无 Node 的机器上不支持 `npm:` 包源**，也不支持带 `package.json` 的 git 包源（二者都需要 `npm`）；本地路径包源可用。
 - **Bedrock SigV4a** 需要额外的 `@aws-sdk/signature-v4-crt` 包，本扩展不带，相关场景会明确报错。
-- **`jerrypi.proxy` 是进程级副作用**：启用时会包装 `globalThis.fetch`，影响同进程内的其他扩展；默认关闭，关闭或停用时恢复。
+- **`jerrypi.proxy` 是进程级副作用（该设置尚未生效，S6 才实现）**：实现后启用它会包装 `globalThis.fetch`，影响同进程内的其他扩展；默认关闭，关闭或停用时恢复。现在写它没有任何效果。
 - **写入历史提示**：`edit` 的 diff 会随会话持久化；`write` 的前后快照只存在于当前进程内，重启 VS Code 后不再显示。
 - **会话落盘条件**（pi 行为）：只有完成过至少一轮 assistant 回复的会话才会写入磁盘。
 - **项目级设置默认不被信任**：pi CLI 会解析信任并询问用户，而 jerrypi 固定以 `projectTrusted: false` 初始化会话，因此工作区里的 `.pi/settings.json`、`SYSTEM.md` 等项目级资源不会被加载，也**不会有任何提示**。这是刻意的安全默认值（项目级设置能改 `shellPath` 与默认工具），信任流程待 S6 补上；在此之前如需使用项目级配置，请改用全局 `settings.json`。
@@ -230,13 +230,13 @@ To make that possible, the extension **ships pi's official pre-bundled SDK** ins
 
 ### Configuration
 
-The extension only adds three VS Code settings; everything else follows pi's own config:
+The extension plans to add three VS Code settings; everything else follows pi's own config — **note that none of the three is effective yet** (each row says so):
 
 | Setting | Values | Description |
 | --- | --- | --- |
 | `jerrypi.approvalMode` | `off` (default) / `mutating` / `all` | Whether tool calls require confirmation. **Not effective yet (S8)**: setting it does nothing today, tool calls always run immediately |
-| `jerrypi.proxy` | proxy URL (optional) | Explicit proxy; **wraps the process-wide `globalThis.fetch`** when enabled |
-| `jerrypi.agentDir` | path (empty = `~/.pi/agent`) | The pi config directory |
+| `jerrypi.proxy` | proxy URL (optional) | Explicit proxy. **Not effective yet (S6)**: setting it does nothing today — proxy and certificates are entirely up to VS Code's `http.proxy` / `http.systemCertificates`. Once S6 lands it will wrap the **process-wide** `globalThis.fetch` (see known limits) |
+| `jerrypi.agentDir` | path (empty = `~/.pi/agent`) | The pi config directory. **Not effective yet (S6)**: pi's own `~/.pi/agent` (or `PI_CODING_AGENT_DIR`) is always used today |
 
 Use **`Pi: Open Settings File`** to edit pi's `settings.json` for default model, `shellPath`, tool allow-lists, etc. Proxy and certificates are handled by VS Code's own `http.proxy` / `http.systemCertificates` by default.
 
@@ -286,7 +286,7 @@ Common scripts:
    `git tag -a v<version> -m "jerrypi <version>; artifact <size> bytes, SHA-256 <digest>"`, then `git push --tags`.
    Only tag after step 5 checks out, so that every tag corresponds to an artifact that was **actually published**.
 
-Once installed, run the feasibility gate with `Pi: Run Self-Test` (T1–T9, results go to the `jerrypi` output channel): it checks that the pi runtime really loads inside the extension host, extension lifecycle, a real streaming model call, subprocesses and aborts, file read/write/edit, session persistence and replacement, and the image worker round-trip. **Configure a provider key with `Pi: Set API Key` first** (DeepSeek by default), otherwise T4/T6/T7/T9 fail with `E_NO_CREDENTIALS`.
+Once installed, run the feasibility gate with `Pi: Run Self-Test` (**T1–T12** = 12 gating items + 2 advisory, results go to the `jerrypi` output channel): it checks that the pi runtime really loads inside the extension host, extension lifecycle, a real streaming model call, subprocesses and aborts, file read/write/edit, session persistence and replacement, the image worker round-trip, **and that sessions land where pi expects them (`pi`'s own `list(cwd)` must see them — T10/T11)**. **Configure a provider key with `Pi: Set API Key` first** (DeepSeek by default), otherwise T4/T6/T7/T9 fail with `E_NO_CREDENTIALS`.
 
 > The `.vsix` also ships `test-fixtures/ext-smoke/index.ts`: a **minimal pi extension used for packaging acceptance** (not a user-facing feature), so that verification can be re-run against the unpacked artifact. See [`docs/S0-plan.md`](docs/S0-plan.md).
 
@@ -311,7 +311,7 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full notices and lice
 - **With no workspace open, the session cwd is your home directory**: `bash` and the file tools then use `~` (on Windows `C:\Users\<you>`) as the working directory, and the output channel says so. **Open a workspace first**, otherwise nothing constrains where the agent operates.
 - **`npm:` and git package sources are unavailable on machines without Node/npm**; local-path sources work.
 - **Bedrock SigV4a** requires an extra `@aws-sdk/signature-v4-crt` package that is not bundled; affected setups fail with an explicit error.
-- **`jerrypi.proxy` is process-wide**: enabling it wraps `globalThis.fetch` for every extension in the host process. It is off by default and restored on disable/deactivate.
+- **`jerrypi.proxy` is process-wide (the setting is not effective yet — it lands in S6)**: once implemented, enabling it wraps `globalThis.fetch` for every extension in the host process. It is off by default and restored on disable/deactivate. Today the setting does nothing.
 - **Write history**: `edit` diffs are persisted with the session, but `write` before/after snapshots live only for the current process and disappear after a VS Code restart.
 - **Session persistence** (pi behavior): a session is written to disk only after at least one assistant reply.
 - **Project-level settings are not trusted by default**: the pi CLI resolves trust and asks the user, whereas jerrypi always initialises sessions with `projectTrusted: false`. Project-scoped resources such as `.pi/settings.json` and `SYSTEM.md` are therefore not loaded, and **nothing tells you so**. This is a deliberate safe default (project settings can override `shellPath` and the default tool set); the trust flow lands in S6. Until then, put such configuration in the global `settings.json`.
