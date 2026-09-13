@@ -249,6 +249,10 @@ async function main() {
       const collapsed = render.renderToolCard(toolItem({ text: LONG }), false);
       const expanded = render.renderToolCard(toolItem({ text: LONG }), true);
       check("bash 折叠时只渲染最后 5 行", collapsed.includes("第 5 行") && !collapsed.includes("第 4 行"), collapsed.slice(0, 120));
+      check("bash 折叠时说明还有多少行被折起来（否则用户以为点击没生效）",
+        collapsed.includes("还有 4 行"), collapsed.slice(0, 160));
+      const shortBash = render.renderToolCard(toolItem({ text: "只有一行" }), false);
+      check("输出不足 5 行时不显示「还有 N 行」提示", !shortBash.includes("还有"), shortBash.slice(0, 160));
       check("bash 折叠态的 HTML 里不含被折叠掉的内容", !collapsed.includes("第 1 行"));
       check("展开时渲染全部内容", expanded.includes("第 1 行") && expanded.includes("第 9 行"));
       check("展开态带 aria-expanded=true", expanded.includes('aria-expanded="true"'));

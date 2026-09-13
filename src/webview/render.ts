@@ -178,6 +178,15 @@ export function renderToolBody(item: Extract<ChatItem, { kind: "tool" }>, expand
     parts.push(`<pre class="tool-text">${renderPlain(text)}</pre>`);
   } else if (item.toolName === "bash") {
     // 折叠态只给尾部 —— 长命令最有价值的是最后几行（pi 的 BASH_PREVIEW_LINES=5）。
+    //
+    // **必须把"还有多少行被折起来了"说出来**：折叠态对 bash 不是"隐藏"而是"只看尾部"，
+    // 如果输出本来就只有几行，折叠与展开**长得一模一样**，用户会以为点击没生效
+    // （S3 第一次验收就是这样反馈的）。pi 在 TUI 里也插这一行
+    // （`... (N earlier lines, <key> to expand)`），只是它用键位提示、我们用点击。
+    const hidden = text.split("\n").length - TOOL_PREVIEW_LINES;
+    if (hidden > 0) {
+      parts.push(`<div class="tool-note">… 还有 ${hidden} 行（点击标题展开）</div>`);
+    }
     parts.push(`<pre class="tool-text">${renderPlain(lastLines(text, TOOL_PREVIEW_LINES))}</pre>`);
   }
 
