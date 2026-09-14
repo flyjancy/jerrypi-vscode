@@ -166,6 +166,7 @@ async function buildModules(tempDir) {
       `export { loadPi } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/loader"))};`,
       `export { registerCommands } from ${JSON.stringify(path.join(REPO_ROOT, "src/commands"))};`,
       `export { describeAuthSource } from ${JSON.stringify(path.join(REPO_ROOT, "src/shared/format"))};`,
+      `export { sidesOfPatch, pathLabelOf, HUNK_GAP } from ${JSON.stringify(path.join(REPO_ROOT, "src/shared/patch"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -183,7 +184,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 
@@ -1046,6 +1047,100 @@ check(
     if (savedAgentDirEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = savedAgentDirEnv;
     fs.rmSync(keyAgentDir, { recursive: true, force: true });
+  }
+}
+
+// ------------------------------------- S7 第 1 步：unified patch → 两侧（A1）
+//
+// 夹具是 **diff@8.0.4 的实跑输出**（S7-plan §0.1 那一段，逐字节抄下来的），不是
+// "我想象中的 patch" —— 判据的两侧文本也是手写死的期望值，不用被测实现算。
+{
+  /** 造夹具：hunk 头 + 正文行（`-`/`+`/` ` 前缀由调用方写好）。 */
+  const patchOf = (...lines) => `${lines.join("\n")}\n`;
+  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const show = (v) => JSON.stringify(v).slice(0, 160);
+
+  // ① 单行文件整行替换
+  {
+    const p = patchOf("--- a.ts", "+++ a.ts", "@@ -1,1 +1,1 @@", "-a", "+b");
+    const r = sidesOfPatch(p);
+    check("A1：单行文件整行替换 → 两侧", eq(r.left, "a\n") && eq(r.right, "b\n"), show(r));
+    check("A1：同一个 patch 的 hunks 逐行", eq(r.hunks, [{ left: ["a"], right: ["b"] }]), show(r.hunks));
+  }
+
+  // ② 多 hunk（改动相隔很远；左侧必须出现分隔行）
+  {
+    const p = patchOf(
+      "--- a.ts", "+++ a.ts",
+      "@@ -1,7 +1,7 @@",
+      " L0", " L1", "-L2", "+X2", " L3", " L4", " L5", " L6",
+      "@@ -22,9 +22,9 @@",
+      " L21", " L22", " L23", " L24", "-L25", "+Y25", " L26", " L27", " L28", " L29",
+    );
+    const r = sidesOfPatch(p);
+    check(
+      "A1：多 hunk → 两段之间插分隔行（不是假装连着）",
+      eq(r.left, "L0\nL1\nL2\nL3\nL4\nL5\nL6\n⋯（中间省略）\nL21\nL22\nL23\nL24\nL25\nL26\nL27\nL28\nL29\n") &&
+        eq(r.right, "L0\nL1\nX2\nL3\nL4\nL5\nL6\n⋯（中间省略）\nL21\nL22\nL23\nL24\nY25\nL26\nL27\nL28\nL29\n"),
+      show(r),
+    );
+    check(
+      "A1：多 hunk 的 hunks 是两段（每段含它自己的上下文行）",
+      r.hunks.length === 2 &&
+        eq(r.hunks[0], {
+          left: ["L0", "L1", "L2", "L3", "L4", "L5", "L6"],
+          right: ["L0", "L1", "X2", "L3", "L4", "L5", "L6"],
+        }) &&
+        eq(r.hunks[1], {
+          left: ["L21", "L22", "L23", "L24", "L25", "L26", "L27", "L28", "L29"],
+          right: ["L21", "L22", "L23", "L24", "Y25", "L26", "L27", "L28", "L29"],
+        }),
+      show(r.hunks),
+    );
+  }
+
+  // ③ 纯新增（左空）/ ④ 纯删除（右空）
+  {
+    const add = sidesOfPatch(patchOf("--- a.ts", "+++ a.ts", "@@ -0,0 +1,2 @@", "+l1", "+l2"));
+    check("A1：纯新增 → 左侧是空串（不是空行）", eq(add.left, "") && eq(add.right, "l1\nl2\n"), show(add));
+    const del = sidesOfPatch(patchOf("--- a.ts", "+++ a.ts", "@@ -1,2 +0,0 @@", "-a", "-b"));
+    check("A1：纯删除 → 右侧是空串", eq(del.left, "a\nb\n") && eq(del.right, ""), show(del));
+  }
+
+  // ⑤ 无尾换行（标记作用于**紧邻的上一行**；两侧各一次）
+  {
+    const p = patchOf("--- a.ts", "+++ a.ts", "@@ -1,2 +1,2 @@", " a", "-b", "\\ No newline at end of file", "+B", "\\ No newline at end of file");
+    const r = sidesOfPatch(p);
+    check("A1：无尾换行 → 两侧都不补尾换行", eq(r.left, "a\nb") && eq(r.right, "a\nB"), show(r));
+  }
+  // ⑤b 只有一侧无尾换行（评审 N1 实测过的形态）
+  {
+    const p = patchOf("--- a.ts", "+++ a.ts", "@@ -1,2 +1,2 @@", " a", "-b", "\\ No newline at end of file", "+b");
+    const r = sidesOfPatch(p);
+    check("A1：只左侧无尾换行时，右侧照常补", eq(r.left, "a\nb") && eq(r.right, "a\nb\n"), show(r));
+  }
+
+  // ⑥ 容忍：hunk 头不带 ,count（别的 patch 源）+ section heading
+  {
+    const bare = sidesOfPatch(patchOf("--- a.ts", "+++ a.ts", "@@ -2 +2 @@", "-x", "+y"));
+    check("A1：hunk 头不带 ,count 也能解析", eq(bare.left, "x\n") && eq(bare.right, "y\n"), show(bare));
+    const heading = sidesOfPatch(patchOf("--- a.ts", "+++ a.ts", "@@ -1,3 +1,3 @@ function foo()", " a", "-b", "+B", " c"));
+    check("A1：hunk 头带 section heading 也能解析", eq(heading.left, "a\nb\nc\n") && eq(heading.right, "a\nB\nc\n"), show(heading));
+  }
+
+  // ⑦ 正文行里的 \r 是内容（评审 S2：不能"归一化行尾"）
+  {
+    const p = patchOf("--- a.ts", "+++ a.ts", "@@ -1,2 +1,2 @@", " a\r", "-b\r", "+B\r");
+    const r = sidesOfPatch(p);
+    check("A1：正文里的 \\r 原样保留", eq(r.left, "a\r\nb\r\n") && eq(r.right, "a\r\nB\r\n"), show(r));
+  }
+
+  // ⑧ 文件名（标题用）：`+++` 优先；Windows 反斜杠；GNU diff 的时间戳尾巴
+  {
+    check("A1：pathLabelOf 取 +++ 一侧的文件名", pathLabelOf(patchOf("--- a/old.ts", "+++ a/new.ts", "@@ -1 +1 @@", "-a", "+b")) === "new.ts", pathLabelOf(patchOf("--- a/old.ts", "+++ a/new.ts", "@@ -1 +1 @@", "-a", "+b")));
+    check("A1：Windows 形态的路径也取得到 basename", pathLabelOf(patchOf("--- C:\\dir\\old.ts", "+++ C:\\dir\\new.ts", "@@ -1 +1 @@", "-a", "+b")) === "new.ts", pathLabelOf(patchOf("--- C:\\dir\\old.ts", "+++ C:\\dir\\new.ts", "@@ -1 +1 @@", "-a", "+b")));
+    check("A1：带时间戳尾巴时只取文件名", pathLabelOf(patchOf("--- a.ts\t2026-01-01 12:00:00 +0800", "+++ a.ts\t2026-01-01 12:00:00 +0800", "@@ -1 +1 @@", "-a", "+b")) === "a.ts", pathLabelOf(patchOf("--- a.ts\t2026-01-01 12:00:00 +0800", "+++ a.ts\t2026-01-01 12:00:00 +0800", "@@ -1 +1 @@", "-a", "+b")));
+    check("A1：没有任何头时返回空串（不瞎猜）", pathLabelOf("@@ -1 +1 @@\n-a\n+b\n") === "", pathLabelOf("@@ -1 +1 @@\n-a\n+b\n"));
   }
 }
 
