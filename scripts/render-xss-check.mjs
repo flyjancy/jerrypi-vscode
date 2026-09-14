@@ -152,6 +152,43 @@ async function main() {
       isError: false,
     });
     check("工具行转义名字与参数", audit(toolLine) === null && toolLine.includes("&lt;b&gt;"), toolLine);
+    // S7 A5：diff 链接与"不可用"文案（都在 renderToolHead == renderToolHeadLine 的内容里）
+    {
+      const diffItem = render.renderToolLine({
+        kind: "tool",
+        id: "tool-d",
+        toolCallId: 'c"1',
+        toolName: "edit",
+        summary: "a.ts",
+        isError: false,
+        diff: "patch",
+      });
+      check(
+        "diff 链接渲染在标题行里（就地更新走的就是这个函数）",
+        diffItem.includes("data-open-diff=") && diffItem.includes("查看 diff"),
+        diffItem,
+      );
+      check("diff 链接的 toolCallId 被转义", audit(diffItem) === null && !diffItem.includes('c"1'), diffItem);
+      const headLine = render.renderToolHeadLine(
+        { kind: "tool", id: "tool-d", toolCallId: "c1", toolName: "edit", summary: "a.ts", isError: false, diff: "patch" },
+        false,
+      );
+      check("renderToolHeadLine 里也有链接（不是只有 renderToolCard 有）", headLine.includes("data-open-diff="), headLine);
+      const texts = { none: "本次会话不可用", evicted: "较早的改动记录已清理", "too-large": "文件过大，未保留", "read-failed": "快照读取失败" };
+      for (const [why, text] of Object.entries(texts)) {
+        const line = render.renderToolLine({
+          kind: "tool",
+          id: "tool-u",
+          toolCallId: "c2",
+          toolName: "write",
+          summary: "b.ts",
+          isError: false,
+          diffUnavailable: why,
+        });
+        check(`不可用文案（${why}）各自渲染`, line.includes(text) && !line.includes("data-open-diff"), line);
+      }
+    }
+
     const notice = render.renderNotice({ kind: "notice", id: "notice-1", level: "warn", text: "<img src=x>" });
     check("提示行转义内容", audit(notice) === null && notice.includes("&lt;img"), notice);
     const assistant = render.renderAssistant({

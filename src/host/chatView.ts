@@ -20,6 +20,7 @@ import { pickModel, pickThinkingLevel, type PickerBridge } from "./modelPicker";
 import { pickSession, type SessionPickerBridge } from "./sessionPicker";
 import { replaceSessionWithConfirm, reportReplaceOutcome } from "./sessionActions";
 import { MetaStatusBar } from "./statusBar";
+import type { DiffPresenter } from "./diff";
 
 export const CHAT_VIEW_ID = "jerrypi.chat";
 
@@ -27,6 +28,8 @@ export interface ChatViewOptions {
   controller: SessionHostController;
   extensionUri: vscode.Uri;
   output: vscode.OutputChannel;
+  /** S7：打开"这次调用改了什么"的 diff（`extension.ts` 造，白名单在它里面）。 */
+  diff: DiffPresenter;
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -162,7 +165,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async handleMessage(message: ClientMessage): Promise<void> {
-    const { controller, output } = this.options;
+    const { controller, output, diff } = this.options;
     try {
       switch (message.type) {
         case "ready":
@@ -236,6 +239,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             output.appendLine(`[webview] 打开文件失败：${message.path} — ${text}`);
             void vscode.window.showWarningMessage(`jerrypi: 打不开 ${message.path}（${text}）`);
           }
+          return;
+        }
+        case "openDiff": {
+          // 白名单在 presenter 里（store 里没有这条记录 / 已被淘汰都不打开，并记一行原因）。
+          diff.open(message.toolCallId);
           return;
         }
         default: {

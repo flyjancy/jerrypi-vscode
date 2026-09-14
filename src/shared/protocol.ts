@@ -103,6 +103,20 @@ export type ChatItem =
       /** bash 截断时完整输出的临时文件路径（也是可点路径之一）。 */
       fullOutputPath?: string;
       /**
+       * 能不能打开这次调用的 diff（S7）。
+       *
+       * `patch` = `edit`（会话文件里持久化的 `details.patch`）；`snapshot` = `write`（前后
+       * 内容只在**本次进程**的内存里）。**没有这个字段**也可能是"不可用"，见下一项。
+       */
+      diff?: "patch" | "snapshot";
+      /**
+       * 打不开的原因（**只在工具已结束、且没有可打开的 diff 时**才有）。
+       *
+       * 四值各有各的文案 —— 一个布尔装不下"为什么"（S7 第 2 轮评审 S1）。
+       * `none` = store 里没有这次调用的记录（重启后的 `write` 走这档）。
+       */
+      diffUnavailable?: "evicted" | "too-large" | "read-failed" | "none";
+      /**
        * 卡片标题（照 pi 的 call 行）：`~/a.ts:10-20`、`命令 (timeout 30s)`…
        *
        * `link` 是标题里**可点击的那一段**：`text` 是显示形态（家目录缩成 `~`），
@@ -133,6 +147,8 @@ export type ClientMessage =
   | { type: "openExternal"; href: string }
   /** 打开工具卡片里的文件路径。host 会用控制器的白名单做精确比对。 */
   | { type: "openFile"; path: string }
+  /** 打开这次工具调用的 diff（host 侧查 filechanges 的白名单）。 */
+  | { type: "openDiff"; toolCallId: string }
   /** 打开模型选择器（QuickPick 在**宿主**侧，不在 webview 里自绘）。 */
   | { type: "openModelPicker" }
   /** 打开思考等级选择器。 */

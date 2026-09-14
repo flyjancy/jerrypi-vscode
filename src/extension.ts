@@ -12,6 +12,7 @@ import { createVSCodeUIContext } from "./host/uiContext";
 import { loadPi, readRuntimeVersion } from "./pi/loader";
 import { SessionHostController } from "./pi/controller";
 import { createApiKeyStore } from "./pi/runtime";
+import { createDiffPresenter } from "./host/diff";
 import { workspaceCwd } from "./host/workspace";
 import { applyAgentDirSetting, describeAgentDir, readAgentDirSetting, registerAgentDirWatcher } from "./host/config";
 
@@ -61,6 +62,9 @@ export function activate(context: vscode.ExtensionContext): void {
     controller,
     extensionUri: context.extensionUri,
     output: channel,
+    // S7：diff 的内容源是 controller 的 filechanges（切会话不丢），presenter 只负责
+    // 虚拟文档与 `vscode.diff`。
+    diff: createDiffPresenter(context, { store: controller.diffStore, log: channel }),
   });
 
   registerCommands(context, channel, provider);

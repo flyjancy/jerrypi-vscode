@@ -102,6 +102,26 @@ export function renderThinking(text: string, streaming: boolean): string {
   return `<details class="thinking"${streaming ? " open" : ""}><summary>${label}</summary><div class="thinking-body">${renderPlain(text)}</div></details>`;
 }
 
+/** `diffUnavailable` 的四值四文案（与协议一一对应）。 */
+export const DIFF_UNAVAILABLE_TEXT: Record<"evicted" | "too-large" | "read-failed" | "none", string> = {
+  none: "本次会话不可用",
+  evicted: "较早的改动记录已清理",
+  "too-large": "文件过大，未保留",
+  "read-failed": "快照读取失败",
+};
+
+/** 标题行尾的 diff 入口（有记录给链接，没记录给原因）。 */
+function renderToolDiff(item: Extract<ChatItem, { kind: "tool" }>): string {
+  if (item.diff !== undefined) {
+    // `role`/`tabindex` 与路径链接同规格：卡片标题是个 `<button>`，键盘用户得能到达它。
+    return ` <a class="tool-diff" data-open-diff="${escapeHtml(item.toolCallId)}" role="button" tabindex="0">查看 diff</a>`;
+  }
+  if (item.diffUnavailable !== undefined) {
+    return ` <span class="tool-note">${renderPlain(DIFF_UNAVAILABLE_TEXT[item.diffUnavailable])}</span>`;
+  }
+  return "";
+}
+
 /** 工具卡片的标题（不换行的那一行）。 */
 export function renderToolHead(item: Extract<ChatItem, { kind: "tool" }>, now: number = Date.now()): string {
   const icon = item.pending === true ? "…" : item.isError ? "✗" : "✓";
@@ -117,7 +137,8 @@ export function renderToolHead(item: Extract<ChatItem, { kind: "tool" }>, now: n
     `<span class="tool-name">${renderPlain(item.toolName)}</span>` +
     summary +
     pending +
-    duration
+    duration +
+    renderToolDiff(item)
   );
 }
 

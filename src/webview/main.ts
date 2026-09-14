@@ -545,6 +545,15 @@ function onTranscriptClick(event: MouseEvent): void {
     vscode.postMessage({ type: "openFile", path });
     return;
   }
+  // ①b 工具卡片上的「查看 diff」：与路径同一条委托路径（别再出现死链）
+  const diffElement = target?.closest("[data-open-diff]") as HTMLElement | null;
+  const toolCallId = diffElement?.getAttribute("data-open-diff") ?? "";
+  if (toolCallId !== "") {
+    event.preventDefault();
+    event.stopPropagation();
+    vscode.postMessage({ type: "openDiff", toolCallId });
+    return;
+  }
   // ② markdown 里的普通链接：交给扩展用系统浏览器打开
   const anchor = target?.closest("a");
   if (anchor === null || anchor === undefined) return;
@@ -554,10 +563,17 @@ function onTranscriptClick(event: MouseEvent): void {
   vscode.postMessage({ type: "openExternal", href });
 }
 
-/** 键盘可达性：路径是 `role="button" tabindex="0"`，回车/空格也要能打开。 */
+/** 键盘可达性：路径与 diff 链接都是 `role="button" tabindex="0"`，回车/空格也要能打开。 */
 function onTranscriptKeydown(event: KeyboardEvent): void {
   if (event.key !== "Enter" && event.key !== " ") return;
   const target = event.target as HTMLElement | null;
+  const diffId = target?.closest("[data-open-diff]")?.getAttribute("data-open-diff") ?? "";
+  if (diffId !== "") {
+    event.preventDefault();
+    event.stopPropagation();
+    vscode.postMessage({ type: "openDiff", toolCallId: diffId });
+    return;
+  }
   const path = target?.closest("[data-open-path]")?.getAttribute("data-open-path") ?? "";
   if (path === "") return;
   event.preventDefault();

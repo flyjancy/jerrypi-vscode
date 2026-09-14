@@ -18,6 +18,7 @@ import {
   type ChatItem,
 } from "../shared/protocol";
 import { clipToolText, toolTextFromContent, utf8Length } from "../shared/toolText";
+import { diffFieldsOf, type FileChangeStore } from "./filechanges";
 
 /**
  * 序列化的上下文。
@@ -29,6 +30,11 @@ import { clipToolText, toolTextFromContent, utf8Length } from "../shared/toolTex
  */
 export interface SerializeContext {
   cwd: string;
+  /**
+   * S7：diff 的可打开性从 store 派生（**不把 patch 塞进协议** —— 它可以是几十 KB，
+   * 而协议每帧都要过）。没传就是"这次序列化不关心 diff"（自测/纯函数断言用）。
+   */
+  fileChanges?: FileChangeStore;
 }
 
 /** 没有 cwd 时的兜底（不会用到，但让类型不必可空）。 */
@@ -187,6 +193,15 @@ export function serializeMessage(
       ...toolBodyOf(message),
       ...toolMetaOf(message.details),
       ...titleOfItem(message.toolName ?? known?.name, known?.args, context),
+      // S7：diff 字段（`pending` 的卡片走 tool_execution_start 那条路，这里恒为 false）
+      ...(context.fileChanges === undefined
+        ? {}
+        : diffFieldsOf(context.fileChanges, {
+            toolCallId: id,
+            toolName: message.toolName ?? known?.name ?? "tool",
+            isError: message.isError === true,
+            pending: false,
+          })),
       // 空数组不写字段：没有可点路径是常态，写一个 `[]` 只会让两端各写一遍空判断。
       ...(openablePaths.length > 0 ? { openablePaths } : {}),
     };

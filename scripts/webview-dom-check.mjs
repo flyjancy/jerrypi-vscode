@@ -321,6 +321,42 @@ async function main() {
       JSON.stringify(openFileMessages().slice(-2)));
     equal("点路径不会顺带展开/折叠卡片", head.getAttribute("aria-expanded"), "false");
 
+    // ---- S7 A5：diff 链接的点击与键盘（真 DOM 事件层）
+    {
+      const diffMessages = () => posted.filter((m) => m.type === "openDiff");
+      const beforeDiff = diffMessages().length;
+      send({
+        type: "item",
+        item: toolItem({
+          id: "tool-diff",
+          toolCallId: "call_diff",
+          toolName: "edit",
+          title: { text: "a.ts" },
+          diff: "patch",
+        }),
+      });
+      const diffCard = doc.querySelector('[data-id="tool-diff"]');
+      const diffLink = diffCard.querySelector("[data-open-diff]");
+      check("diff 链接渲染出来了", diffLink !== null, diffCard.innerHTML.slice(0, 160));
+      check("diff 链接键盘可达（role/tabindex）", diffLink.getAttribute("role") === "button" && diffLink.getAttribute("tabindex") === "0", diffLink.outerHTML);
+      const diffHead = diffCard.querySelector(".tool-head");
+      click(diffLink);
+      check(
+        "点 diff 链接只发一条 openDiff（带 toolCallId）",
+        diffMessages().length === beforeDiff + 1 && diffMessages().at(-1).toolCallId === "call_diff",
+        JSON.stringify(diffMessages().slice(-2)),
+      );
+      equal("点 diff 链接不会顺带展开卡片", diffHead.getAttribute("aria-expanded"), "false");
+      diffLink.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      check("回车也能打开 diff", diffMessages().length === beforeDiff + 2, JSON.stringify(diffMessages().slice(-2)));
+      send({
+        type: "item",
+        item: toolItem({ id: "tool-gone", toolCallId: "call_gone", toolName: "write", diffUnavailable: "none" }),
+      });
+      const goneCard = doc.querySelector('[data-id="tool-gone"]');
+      check("不可用时没有链接，只有文案", goneCard.querySelector("[data-open-diff]") === null && goneCard.textContent.includes("本次会话不可用"), goneCard.textContent);
+    }
+
     // **正文里的路径**：这就是死链那个 bug —— 它以前冒泡到 markdown 链接处理器里被吞掉。
     send({
       type: "item",

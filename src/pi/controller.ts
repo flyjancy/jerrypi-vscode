@@ -39,8 +39,10 @@ import {
   summarizeArgs,
   toolMetaOf,
   type ToolCallIndex,
+  type SerializeContext,
 } from "./serialize";
 import { createSessionHost, type SessionHost } from "./session";
+import { createFileChanges, recordEditsFromMessages, type FileChangeStore } from "./filechanges";
 import { resolveSessionDir, sessionsRootOf } from "./sessions";
 import { getModelRuntime, type ApiKeyStore } from "./runtime";
 
@@ -149,6 +151,11 @@ interface SessionView {
 
 export class SessionHostController {
   private readonly options: SessionHostControllerOptions;
+
+  /** 给 `diff.ts` 的 presenter 用（白名单与内容都从这里取）。 */
+  get diffStore(): FileChangeStore {
+    return this.fileChanges;
+  }
   private host: SessionHost | undefined;
   private ensuring: Promise<void> | undefined;
   private disposed = false;
@@ -177,6 +184,14 @@ export class SessionHostController {
   private noticeCounter = 0;
 
   /** 工具调用登记表：给 toolResult 补参数摘要（与重放共用同一套转写逻辑）。 */
+  /**
+   * S7：这次调用改了什么（`edit` 的 patch / `write` 的前后内容）。
+   *
+   * 挂在 **controller** 上而不是 SessionHost 上：切会话时 host 会被替换，而 store 要
+   * 活到扩展卸载（重放要靠它把 edit 的 patch 找回来）。
+   */
+  private readonly fileChanges: FileChangeStore = createFileChanges();
+
   private readonly toolCalls: ToolCallIndex = createToolCallIndex();
   /** 已发出的工具行，用于"中止时把仍在执行的标记为已中止"。 */
   private readonly toolItems = new Map<string, ToolItem>();
@@ -309,6 +324,18 @@ export class SessionHostController {
       mode: "rpc",
       sink: this.options.log,
       additionalExtensionPaths: this.options.additionalExtensionPaths,
+      // S7：`write` 的前后内容（只在本次进程内存活；重放拿不到，见 filechanges 的文件头）
+      writeRecorder: {
+        record: (record) =>
+          this.fileChanges.recordWrite({
+            toolCallId: record.toolCallId,
+            path: record.absolutePath,
+            before: record.before,
+            after: record.after,
+            newFile: record.newFile,
+            ...(record.failure === undefined ? {} : { failure: record.failure }),
+          }),
+      },
       // 与 pi CLI 的行为刻意不同：不信任工作区里的项目级设置（见 README 已知限制）。
       projectTrusted: false,
       onEvent: (event) => this.handleEvent(event),
@@ -690,6 +717,11 @@ export class SessionHostController {
     return this.host === undefined ? "" : this.sessionInfo(this.view()).path;
   }
 
+  /** 序列化上下文：cwd + diff 的记录源（S7）。 */
+  private serializeContext(): SerializeContext {
+    return { cwd: this.options.cwd, fileChanges: this.fileChanges };
+  }
+
   snapshot(): ReplaySnapshot {
     const session = this.host === undefined ? undefined : this.view();
     if (session === undefined) {
@@ -703,7 +735,9 @@ export class SessionHostController {
       };
     }
 
-    const { items, truncated } = serializeMessages(session.messages, { cwd: this.options.cwd });
+    // S7：重放先登记（补回首次打开的 edit patch），再序列化 —— 派生字段才拿得到。
+    recordEditsFromMessages(session.messages as never, this.fileChanges);
+    const { items, truncated } = serializeMessages(session.messages, this.serializeContext());
     const knownToolIds = new Set(
       items.filter((item) => item.kind === "tool").map((item) => (item as { id: string }).id),
     );
@@ -715,7 +749,7 @@ export class SessionHostController {
     const streaming = session.state.streamingMessage;
     if (streaming !== undefined && streaming !== null) {
       const lastIndex = Math.max(0, session.messages.length - 1);
-      const partial = serializeMessage(streaming, lastIndex, this.toolCalls, { cwd: this.options.cwd });
+      const partial = serializeMessage(streaming, lastIndex, this.toolCalls, this.serializeContext());
       if (partial !== undefined && partial.kind === "assistant") {
         // **必须复用** activeAssistantId：重开后后续 delta 打的是这个 id，
         // 换一个 id 就等于把回复的后半截丢掉。
@@ -890,10 +924,16 @@ export class SessionHostController {
 
     const session = this.view();
     const raw = session.messages[session.messages.length - 1];
+    // S7：`edit` 的 patch 在这里登记（重放走 `recordEditsFromMessages(session.messages)`，
+    // 同一个函数）；失败的 edit 是 `details = {}`，函数里会自己跳过。
+    recordEditsFromMessages(
+      [raw as { role?: string; toolName?: string; toolCallId?: string; details?: unknown }],
+      this.fileChanges,
+    );
     const index = session.messages.length - 1;
     if (message.role === "assistant") indexToolCalls(raw as never, this.toolCalls);
 
-    const item = serializeMessage(raw, index, this.toolCalls, { cwd: this.options.cwd });
+    const item = serializeMessage(raw, index, this.toolCalls, this.serializeContext());
     if (item === undefined) return;
 
     if (item.kind === "tool") {
