@@ -55,7 +55,7 @@
 | F15 | 现有命令：`Pi: Set API Key`（候选列表是**硬编码常量** `SUGGESTED_PROVIDERS`，位于 `src/pi/runtime.ts:24-32`；`src/commands.ts:64-73` 只是使用者；**没有任何校验**）、`Pi: Open Settings File`（用 `module.getAgentDir()`；**目录不存在时先 `createDirectory` 再写 `{}`**，见 `src/commands.ts:148-151`） | `src/pi/runtime.ts` · `src/commands.ts` |
 | F16 | ⚠️ **修正（评审 S2 指出，已复核）**：`RuntimeCredentials.list()` **区分不出来源** —— 它先把底层（auth.json）条目读出来，再用 `entries.set(providerId, { providerId, type: "api_key" })` **覆盖同名项**：两种来源出来都是 `{ providerId, type }`，同名 provider 只剩一条。⇒「这个 key 是我们存的还是 auth.json 里的」**必须问 `getProviderAuthStatus(id).source`（`runtime` vs `stored`）或 `credentials.hasRuntimeApiKey(id)`**，不能用 `listCredentials()` | `dist/core/runtime-credentials.js` 的 `list()` |
 | F18 | **`AuthStatus.source` 有 6 档**，不是 3 档：`runtime` / `stored`（`model-runtime.js:412-413`）+ `models_json_command` / `environment`（带 label）/ `fallback` / **`models_json_key`**（`provider-composer.js:388-401` 的 `configuredRequestAuthStatus()`）。**验收判据里说的「`models.json` 里的 key」就是 `models_json_key` 这一档** | 上面两个文件的行号 |
-| F19 | 本机 `~/.pi/agent/models.json` **存在**（1816 字节、JSONC、带中文注释的自定义模型定义），但里面**没有任何 `apiKey`/`token` 字段**；凭据在 `auth.json`（`deepseek: api_key`，95 字节）。⇒ 判据那句「清空 `models.json` 里的 key」按字面**今天就已经满足**，所以 C1 必须比字面更强才有意义（见 §1）；另：评审说「models.json 根本不存在」是**它自己核错了** | `grep -o '"\"[a-zA-Z]*[Kk]ey[a-zA-Z]*"\"' ~/.pi/agent/models.json` → 空；`ls -la ~/.pi/agent/` |
+| F19 | 本机 `~/.pi/agent/models.json` **存在**（1816 字节、JSONC、带中文注释的自定义模型定义），但里面**没有任何 `apiKey`/`token`/`secret` 字段**；凭据在 `auth.json`（`deepseek: api_key`，95 字节）。⇒ 判据那句「清空 `models.json` 里的 key」按字面**今天就已经满足**，所以 C1 必须比字面更强才有意义（见 §1）；另：评审第 1 轮说「models.json 根本不存在」是**它自己核错了** | `grep -ciE "apikey\|token\|secret" ~/.pi/agent/models.json` → **1**（唯一那处命中是第 2 行注释里的"每百万 token"）＋ `ls -la ~/.pi/agent/`。**注意**：我这里原来写的那条 `grep -o '"\"[a-zA-Z]*[Kk]ey…"\"'` **没有鉴别力**（无论文件里有没有 key 都是空）—— 评审第 3 轮 N1 抓到的，正是 L1 那条纪律的 grep 版 |
 | F17 | `dist/core/session-manager.js` 的 `sessionCwdMatches()` 是**严格字符串比较**；自定义 agentDir 会让 `list(cwd, sessionDir)` 走 `filterCwd = true` 那条路（S5 的 R10） | `docs/S5-plan.md` R10 · §12.3（W0 实测同一台 Windows 上存在 `c:\…` 与 `C:\…` 两种写法） |
 
 ## 1. 目标与判据
@@ -71,7 +71,7 @@
 2. **C2**：`Pi: Clear Stored API Keys` 之后：① 我们存的 provider 列表（SecretStorage + globalState 名单）为空；② 该 provider 的 `getProviderAuthStatus().source !== "runtime"`；③ **夹具里预置的那份 `auth.json`（内容里就包含同一个 provider 的凭据）的 sha256 与 mtime 一个字节没变**。
    *（评审 B2/B3 的修正：「`getAvailable()` 为空」会被环境变量凭据弄成**永远红**；在「本来就没有 auth.json」的夹具上断言「auth.json 没变」是**恒真空断言**。评审第 2 轮 B1 又指出一处更细的：② 不能写成 `configured === false` —— 夹具的 auth.json 里既然放了同一个 provider，清除内存覆盖层之后 `getProviderAuthStatus` 会**回落到 `stored` 档**（`removeRuntimeApiKey` → `synchronizeCredentialState` → `read()` 回落 auth.json → `storedProviders.add`，见 `model-runtime.js:221/:240/:414`），那时 `configured` 又变回 `true`。**精确的表达是「不再有 `runtime` 来源」**。顺带记清口径：清完之后用户**仍然能靠 auth.json 里的凭据对话** —— 那是正确行为，不是回归。）*
 3. **C3**：`jerrypi.agentDir` 指向别的目录时，**会话、模型、设置三条链路都在新目录上**（不是只有一条跟着走），且 Output 里那行 `agentDir=` **注明来源**（环境变量 / 设置 / 默认）。
-   *（评审第 2 轮 S1：这条声称三条链路，§6 原本只断言了一条 —— A2 只看环境变量写没写、A9 只看 settings.json 的路径。现在补 A13（会话文件落在新目录下）与 A14（凭据落点是新目录的 auth.json）。）*
+   *（评审第 2 轮 S1：这条声称三条链路，§6 原本只断言了一条 —— A2 只看环境变量写没写、A9 只看 settings.json 的路径。现在补 A13（会话文件落在新目录下）与 A14（**runtime 读的是新目录那份 auth.json**）。<br>**第 3 轮 B1 修正**：A14 原写成"写一把 key → `<temp>/auth.json` 出现" —— 那在本设计下**永远不可能绿**（`setRuntimeApiKey` 是纯内存，F5；auth.json 只在写路径被创建，`auth-storage.js:59/:119`；而 §3.2 第一条 + Q4 明说"不写 auth.json"）。评审第 2 轮 S1 的原话是"凭据落点是 `<temp>/auth.json`"，我忠实转写了 —— **错在评审给的改法本身**。现在改成"证明它读的是新目录那份"，这才是"凭据链路跟着 agentDir 走"的可观察形式。）*
 
 ## 2. 本步做什么 / 不做什么
 
@@ -175,7 +175,7 @@ activate() 第一件事
 目标文件 = `<生效 agentDir>/settings.json`（现状已经走 `module.getAgentDir()`，F15）。S6 只补两条：
 - 断言它**跟着 `jerrypi.agentDir` 走**（C3 的一部分）；
 - 文件不存在时：**只在目标目录已存在**的情况下创建空的 `{}`；目录不存在就**报错并提示**，**不要替用户把目录建出来**（评审 N6：用户把设置拼错时，现状的 `createDirectory` 会替他创建一个拼错的目录；AGENTS.md §4 说"不替用户动 `~/.pi/agent` 下的数据"）。
-- **「谁会在什么时候创建这个目录」要写进文案**（评审第 2 轮 S5：Q8 原来的理由「它会被自动创建」与上面这条打架）：创建它的是 **pi**，时机是**写第一个会话时**（`SessionManager` 构造里 `mkdirSync(sessionDir, {recursive: true})`，`session-manager.js:251`/`:603`）。所以错误文案写成：「这个目录还不存在 —— 发一条消息后 pi 会建出来；如果这不是你要的路径，检查 `jerrypi.agentDir`」。
+- **「谁会在什么时候创建这个目录」要写进文案**（评审第 2 轮 S5：Q8 原来的理由「它会被自动创建」与上面这条打架）：创建它的是 **pi**，时机是**写第一个会话时**（`SessionManager` 构造函数里的 `mkdirSync(this.sessionDir, {recursive: true})`，`session-manager.js:603`。同文件的 `:251` 是 `getDefaultSessionDir()` 里的那处 —— 只有**省略** `sessionDir` 时才走，我们永远显式传，不走那条）。所以错误文案写成：「这个目录还不存在 —— 发一条消息后 pi 会建出来；如果这不是你要的路径，检查 `jerrypi.agentDir`」。
 
 ### 3.7 R10（`filterCwd` 的严格比较）：接受，不绕
 
@@ -223,9 +223,12 @@ activate() 第一件事
 | A11 | T13（advisory）：报告 `fetch.toString()` 是否含 `[native code]`、`http.proxySupport` / `http.proxy` 的值、四个代理环境变量的**存在性** —— **只报告不判定** | `src/pi/selftest.ts` | §3.4 |
 | A12 | **漂移守卫（在 fetch 层）**：正向 —— 完整流程里没有任何请求打到 `pi.dev`（并记录全部 host）；反向 —— 点 `Pi: Refresh Model Catalog` 必须有一次打到 `pi.dev`。两条都不可少（只留正向会是恒真断言，见 §3.5 的第 2 轮 B2） | `controller-check` | §3.5 |
 | A13 | **C3 的会话链路**：临时 agentDir 下 `dirname(sessionFile)` 落在 `<temp>/sessions/` 之下（复用 S5 的 `resolveSessionDir(cwd, sessionsRoot)`） | `controller-check` | **C3** |
-| A14 | **C3 的凭据链路**：临时 agentDir 下写一把 key → `<temp>/auth.json` 出现，且真实 `~/.pi/agent/auth.json` 的 sha256 未变 | `controller-check` + `host-check` | **C3** |
+| A14 | **C3 的凭据链路**：夹具在 `<temp>/auth.json` **预置** provider X 的凭据 → 断言 `getProviderAuthStatus(X).source === "stored"`（证明 runtime **读的是新目录那份**）**且** 真实 `~/.pi/agent/auth.json` 的 sha256 未变（没串到真目录） | `controller-check` + `host-check` | **C3** |
 
 **A4/A5 共用的前置条件**（评审第 2 轮 S2：原来只挂在 A4 上，A5 少了一半保护）：临时 agentDir + **子进程里 `env -u` 清掉 `*_API_KEY` / `*_TOKEN` / `ANTHROPIC_*` 之类的凭据环境变量**。不干净的环境会让这两条一个假绿（别人的 key 顶着）、一个假红（环境凭据让 `configured` 永远为真）。
+**auth.json 的有无不共用**（评审第 3 轮 N3）：A4 要"**没有** auth.json"，A5/A14 要"**预置**一份含同一个 provider 的"，所以它们各自用一份夹具（或按顺序重建临时目录），别复用同一个跑。
+
+**留给实施期的一处**（评审第 3 轮 N4）：§1 的 C3 还有半句"Output 那行 `agentDir=` 注明来源"目前只有人工项 M1 盯着 —— 那是一行纯字符串，落在 `host-check` 里顺手就能断言（建议挂到 A2 上）。
 
 **"先红"怎么写**：A1–A3、A6–A9 全部在 `host-check` 的 vscode 桩上加能力（`getConfiguration`、`onDidChangeConfiguration`、记录消息）——**先让它们红**，红的原因是"断言失败"而不是"编译错"。
 
@@ -274,11 +277,11 @@ activate() 第一件事
 | # | 意见（摘要） | 处置 | 我怎么处置的 |
 | --- | --- | --- | --- |
 | **B1** | **F12 的结论是反的**：`NODE_USE_ENV_PROXY` 对 fetch 生效；我那次对照被自己 shell 里的小写 `http_proxy=http://127.0.0.1:7897` 污染了。另：Q2 理由①「我这台是直连」是假的 | **ACCEPT（核心）／部分 REJECT（推论）** | 用 `env -u` 清干净环境 + **不存在的域名**做判别，复核为：启动前设 → `ECONNREFUSED`（走代理）；进程内设 → `ENOTFOUND`（太晚）。**它是对的，F12 整条推翻重写**。但它的推论「这台机器不是直连」**不成立**：清空代理变量后 `https://example.com` 仍是 200（本机既有代理又可直连）。Q2 的结论不变、理由按新事实重写，并采纳它提的零成本方案（启动 VS Code 前设那两个环境变量） |
-| **B2** | A4/C1、A5/C2 会被**环境变量凭据**污染：`getProviderAuthStatus` 有 `environment` 一档，`getAvailable()` 也算它已配置 → 一个假绿、一个假红 | **ACCEPT** | C1 加断言 `source === "runtime"`；C2 改成 `configured === false`；`controller-check` 跑这两条时**子进程清掉相关环境变量**。另：它举的 `ANTHROPIC_AUTH_TOKEN` 在我这个 shell 里不存在（它有），但结论与设计无关 —— 断言不能依赖运行环境 |
+| **B2** | A4/C1、A5/C2 会被**环境变量凭据**污染：`getProviderAuthStatus` 有 `environment` 一档，`getAvailable()` 也算它已配置 → 一个假绿、一个假红 | **ACCEPT** | C1 加断言 `source === "runtime"`；C2 改成 `configured === false`（**→ 第 2 轮 B1 又改成 `source !== "runtime"`，见 §1 C2**）；`controller-check` 跑这两条时**子进程清掉相关环境变量**。另：它举的 `ANTHROPIC_AUTH_TOKEN` 在我这个 shell 里不存在（它有），但结论与设计无关 —— 断言不能依赖运行环境 |
 | **B3** | A5 的「auth.json 字节不变」在「本来就没有 auth.json」的夹具上是**恒真空断言** | **ACCEPT** | 夹具改成**先写一份已知内容的 auth.json** 再比 sha256/mtime；并加「可红验证」：把 `removeRuntimeApiKey` 故意换成 `logout()` → 这条必须变红 |
 | **B4** | `AuthStatus.source` 有 **6 档**不是 3 档，漏掉的那档 `models_json_key` 正是验收判据说的那档 | **ACCEPT** | 新增 F18 记全 6 档；§3.3 的文案与 A6 的断言按 6 档改；C1 的夹具放一份「有 provider 无 apiKey」的 models.json 挡这一档。**它附带说「本机 models.json 根本不存在」是它自己核错了**（存在、1816 字节、JSONC、无 key 字段 —— 见新增的 F19） |
 | **B5** | F8 的证据句是错的：`refresh()` 的默认值是 `options.allowNetwork ?? **this.modelNetworkEnabled**`，而它来自 `PI_OFFLINE`，与 `create({allowModelNetwork:false})` 无关 →「默认不联网」靠的是 pi 内部调用点的纪律，会漂移 | **ACCEPT** | F8 重写并带行号（`:517` / `:88` / `:91` / 内部调用点 `:381/:556/:592/:599`）；§3.5 加**漂移守卫**（新增断言 A12） |
-| **S1** | 三项设置的 `scope` 从头到尾没决定，而 A1 却要断言它；默认 scope 会让**任意仓库的 `.vscode/settings.json` 把 agentDir 指走** | **ACCEPT** | §3.1 定死 `machine`（agentDir / proxy）；新增 **Q9**；A1 补 `scope: machine` |
+| **S1** | 三项设置的 `scope` 从头到尾没决定，而 A1 却要断言它；默认 scope 会让**任意仓库的 `.vscode/settings.json` 把 agentDir 指走** | **ACCEPT** | §3.1 定死 `machine`（agentDir / proxy）；新增 **Q9**；A1 补 `scope: machine`（**→ 第 2 轮 B3 又把三项全定成 `machine`、第 2 轮 N2 把 A1 改成"与 Q9 的裁决一致"，见 §3.1 第 4 条 / §6 A1**） |
 | **S2** | 「灰掉 auth.json 项」建在一个**区分不出来源**的 API 上（`listCredentials()` 把两种来源合并） | **ACCEPT** | F16 改写；§3.2/§3.3/A6 全部改用 `getProviderAuthStatus().source` / `hasRuntimeApiKey()` |
 | **S3** | agentDir 的**生效来源**没被记录 → 用户无法区分「没重载」与「被环境变量压住」 | **ACCEPT** | §3.1 加「记一行 `agentDir=…（来源：环境变量 / 设置 / 默认）`」；M1 的判据改成这一行 |
 | **S4** | 清 key 之后「当前会话怎么办」没写（是立即生效的内存操作） | **ACCEPT** | 确认文案加「当前会话将无法继续发送，直到重新设置 key」 |
@@ -325,7 +328,7 @@ F12 那条错不是"写错了"，是**实验被环境污染**：
 
 **STRONGEST_OBJECTION（它写的是 B2）** —— 采纳：一条恒真的守卫比没有守卫更糟。已据此重写 A12。
 
-### 第 3 轮（2026-09-13）—— **没跑成：评审者的 API 日限额用完了**
+### 第 3 轮（2026-09-13）—— 第一次尝试撞上评审者的 API 日限额，配额恢复后补跑成功
 
 第 3 轮按纪律只做"转写与事实核对"。提示发出去之后评审者返回：
 
@@ -333,7 +336,10 @@ F12 那条错不是"写错了"，是**实验被环境污染**：
 API Error: Request rejected (429) · api key 日限额已用完
 ```
 
-⇒ **第 3 轮由我自己做**（等价于它本来要做的三件事），结论记在下面，**全部标"未经复核"**：
+**第一次尝试**（当天早些时候）：提示发出后评审者返回 `API Error: Request rejected (429) · api key 日限额已用完`。
+⇒ 我先**自己**把这三件事做了一遍（结论见下表），并标了"未经复核"。**随后探到配额恢复，把第 3 轮真跑掉了** —— 它复核了我自查的结论：**发现一处 BLOCKING（A14 永远不可能绿，源头是它第 2 轮自己给的措辞）**，并确认 §10.1 的三处改动"全部通过"。
+
+**我自己那一轮的结论**（保留，供对照）：
 
 | 核对项 | 结果 |
 | --- | --- |
@@ -341,13 +347,39 @@ API Error: Request rejected (429) · api key 日限额已用完
 | **② 转写一致性**（§10 说的改法 vs 正文实际） | 用 16 个"标志串"机械化比对：§10 第 1/2 轮里承诺的每一处改动，在正文里都能找到（✓ 16/16）。编号连续性：F1–F19 / C1–C3 / A1–A14 / Q1–Q9 **无缺号** |
 | **③ 可实施性**（只看这份计划能不能干） | **发现一处真缺口**：§9 的步骤只引用到 A9，新增的 **A10–A14 没有任何步骤认领**。已把 §9 改成"步骤 ↔ 断言"对照表，现在 A1–A14 **全部被引用**（机械化复核：未引用 = 0） |
 
-**未解决分歧**：无（第 1、2 轮共 29 条意见，28 ACCEPT / 1 REJECT / 1 部分 REJECT，全部有理由）。
-**残留风险**：第 3 轮的"核对"是我自己做的 —— 这正是"评审者不会替我看第二遍"的盲区，若用户愿意，可以在日限额恢复后补跑一轮只读核对（不增加设计改动）。
+**第 3 轮（补跑后）的正式结论：VERDICT: BLOCKING，1 条**
+
+| # | 意见（摘要） | 处置 | 我怎么处置的 |
+| --- | --- | --- | --- |
+| **B1** | **A14 永远不可能绿**：`setRuntimeApiKey` 是纯内存（F5）、auth.json 只在写路径被创建（`auth-storage.js:59/:119`），而 §3.2 + Q4 明说"不写 auth.json" → "写一把 key → `<temp>/auth.json` 出现"在本设计下不会发生；**这条的源头是它第 2 轮 S1 的措辞，我忠实转写了** | **ACCEPT** | A14 改成"夹具**预置** `<temp>/auth.json` → 断言 `source === "stored"`（读到了新目录那份）+ 真实 auth.json 的 sha256 未变"；§1 C3 的括注写明这次修正的来龙去脉（**错在评审给的改法本身**） |
+| **S1** | §4 标题改了，§13 还写"见 §4 的 Q1–Q8" —— Q9 恰好是那条安全决策，靠 §13 导航的人会漏 | **ACCEPT** | §13 改成 Q1–Q9 |
+| **S2** | §10.1 漏登了三处未经复核改动里的一处（§4 的 Q9/编号） | **ACCEPT** | 补登第 3 条，并按它本轮的复核结论标注"已复核通过" |
+| **N1** | F19 的证据命令**没有鉴别力**（无论有没有 key 都是空）—— L1 纪律的 grep 版 | **ACCEPT** | 换成 `grep -ciE "apikey\|token\|secret"`（实测 =1，那一处是注释里的"每百万 token"）并注明旧命令为什么不算数 |
+| **N2** | §10 第 1 轮表里 B2/S1 两行已被第 2 轮推翻，行内没有指针 | **ACCEPT** | 两行各加"→ 第 2 轮 B1/N2 又改了，见 …" |
+| **N3** | A4 与 A5 对 auth.json 的前提相反，共用前置那段没提 | **ACCEPT** | 共用前置补一句"auth.json 的有无不共用" |
+| **N4** | C3 的第二句（日志带来源）没有自动断言 | **DEFER（留给实施期）** | 按它的建议记在 §6 表后："落在 `host-check` 里顺手就能断言，建议挂到 A2 上" |
+| **N5** | §3.6 的行号引多了一处（`:251` 是 `getDefaultSessionDir()` 的，我们不走那条） | **ACCEPT** | 只留 `:603`（构造函数），并把 `:251` 的归属写明 |
+
+它同时明确回答：**§10.1 的三处未经复核改动"全部通过"**（§9 对照表：A1–A14 逐个对到步骤、无遗漏无重复；§4 的 Q9/编号：与 §3.1 第 4 条一致；AGENTS.md 的 L1：清单与判别法与它实跑的命令对得上）；F1–F19 除 N1 那条命令外**没有仍然错的**（F2/F8/F12/F16/F18 的行号与结论全部重跑命中）。
+
+**STRONGEST_OBJECTION（B1）** —— 它的结论比这条断言本身更重要，已采纳并写进纪律：
+
+> 三轮下来的防线（先红、能红验证、独立于实现）都是针对"**实现**会不会错"设计的，没有一条针对"**评审给的改法本身**在本计划的设计下成不成立"。
+
+⇒ 已进 `AGENTS.md §2`：**采纳评审意见时，先把它当成一条新断言过一遍"这条在我们自己的设计下能不能绿"**。
+
+**未解决分歧**：无（三轮共 37 条意见：35 ACCEPT / 1 REJECT / 1 部分 REJECT / 1 DEFER，全部有理由）。
+**⚠️ 残留风险**：第 3 轮的 B1 是**采纳在评审结束之后**的 —— 那处修改（A14 的新写法）**没有任何人复核过**，见 §10.1。这也是为什么"评审能收敛"和"计划能动手"是两件事。
 
 ### 10.1 评审后的改动（**未经复核**）
 
-1. **§9 的"步骤 ↔ 断言"表**：第 3 轮自查发现 A10–A14 无人认领，改成对照表（这一处改动**没有经过任何评审**）。
-2. `AGENTS.md §2` 的 **L1 纪律**（实验要在干净环境里做 + 判别输入只有一种解释）：来自第 1 轮 B1，写进纪律文件时**没有经过评审**。
+| # | 改动 | 复核状态 |
+| --- | --- | --- |
+| 1 | **§9 的"步骤 ↔ 断言"表**（A10–A14 原来没人认领） | **第 3 轮已复核通过**（它逐个对过：A1–A14 → 10 个步骤，无遗漏无重复） |
+| 2 | `AGENTS.md §2` 的 **L1 纪律**（干净环境 + 判别输入只有一种解释） | **第 3 轮已复核通过**（清单与判别法与它实跑的命令对得上） |
+| 3 | **§4 的 Q9 / 编号修正**（标题 Q1–Q9、Q9 移到表末、改成"三项全 machine"） | **第 3 轮已复核通过**（与 §3.1 第 4 条一致、不再与第 2 轮 B3 相反） |
+| 4 | **A14 的新写法**（B1 采纳之后改的：预置 auth.json → 断言 `source === "stored"`） | ⚠️ **未经任何复核** —— 第 3 轮已经用完，这是"三轮上限"下必然会留的盲区 |
+| 5 | `AGENTS.md §2` 新增的"**采纳评审意见时先问它能不能绿**" | ⚠️ **未经任何复核**（来自第 3 轮 STRONGEST_OBJECTION） |
 
 ### 10.2 评审者的事实错误（本轮 3 处，按"评审的意见也要自己核"）
 
@@ -367,4 +399,4 @@ _（自动检查 / 提交切分 / 人工验收 / 已知未覆盖。）_
 
 ## 13. 待用户拍板
 
-见 §4 的 Q1–Q8。**默认值都是我的建议**；用户说"可以"之后才动代码（S5 的规矩）。
+见 §4 的 **Q1–Q9**。**默认值都是我的建议**；用户说"可以"之后才动代码（S5 的规矩）。
