@@ -567,7 +567,13 @@ API Error: Request rejected (429) · api key 日限额已用完
 | M2 真渲染：`Pi: Set API Key` 列表（40 个 provider）+ `Pi: Clear Stored API Keys` 多选/OK | ✅ 用户看图确认“视觉功能上没问题”（描述与状态词换行正常、按钮文字正常） |
 | **M1 当场抓到 2 个真问题** | ① 通知里的 `**重载窗口**` 字面显示（已修，`6ca843d`）② **读设置时 section 与 key 搞反**（真 bug，已修 + 桩忠实度 + 3 条断言，`b89abbf`）—— 两者都不可能在任何基于桩的自动断言里复现 |
 
-**Windows（W0/W1）—— 待做（0.1.8 上传后）**
+**Windows（W0/W1）—— ✅ PASS（2026-09-14，0.1.8 从 Marketplace 装）**
+
+| 项 | 结果 |
+| --- | --- |
+| W0 `Pi: Run Self-Test` | **`GATE PASS`：14 PASS / 0 FAIL / 1 SKIP**（`T12 SKIP E_NO_PI` 预期 —— 那台机器没有 `pi`）。T13 在**真宿主**的第一条实测：`fetch=wrapped；http.proxySupport=override；http.proxy=(未设)；代理环境变量存在=[HTTP_PROXY, HTTPS_PROXY, http_proxy, https_proxy]；PI_OFFLINE=未设`（advisory，只报告） |
+| W1 重启 VS Code → 面板 | ✅ 仍自动接过上一会话、会话列表能选、能直接打字 |
+| 顺带证据 | `[jerrypi] agentDir=C:\Users\fengrui\.pi\agent（来源：默认）` —— 9-5 的配置修复在发布包里生效；T10/T11 在 Windows 路径上仍然都过（VS Code 给 `--c--…--` 小写盘符、T11 自造会话是大写 `--C--…Temp…--`），与 S5 记的 R10 一致 |
 
 ### 12.4 已知未覆盖
 

@@ -11,14 +11,14 @@
 
 ## 1. 现在
 
-**进行中**：**S6 第 1–9 步完成，Mac 验收 ✅（M1/M2 通过）**。M1 当场抓到并修了 2 个真问题（通知里的 markdown 记号；读设置时 section/key 搞反的真 bug）。**0.1.8 已上传预发布且与本地逐字节一致**（`compare-vsix` OK，tag `v0.1.8` 已推）。**下一步：你在 Windows 上跑 W0/W1**（2026-09-14）
+**进行中**：**S6 已关闭**（2026-09-14）—— 0.1.8 已发布预发布版，Mac（M1/M2）与 Windows（W0 `GATE PASS` / W1）都验过，发布核验逐字节一致（tag `v0.1.8`）。细节：`docs/S6-plan.md` §11/§12。**下一步：S7（diff 审阅）—— 先写 `docs/S7-plan.md` 送评审**（2026-09-14）
 
 | | |
 | --- | --- |
-| 阶段 | **S5 已关闭**；**S6 实施中**（第 1–9 步完成，Mac 验收 ✅；待上传 0.1.8 + Windows 验收，见 `docs/S6-plan.md` §9/§11/§12） |
+| 阶段 | **S5、S6 均已关闭**；**下一步 S7**（diff 审阅，待写计划） |
 | 最新发布 | **0.1.8**（2026-09-14，预发布；S6 的全部内容；上一个 0.1.7） |
 | 发布核验 | `node scripts/compare-vsix.mjs 0.1.8` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,032,721 字节 / `30505f6e…` 的 SHA-256）；tag `v0.1.8`；留档 `~/jerrypi-releases/jerrypi-0.1.8.vsix`（0.1.7 的核验记录：338 文件 / `04c60b7b…`） |
-| 真机验收 | S4：Mac ✅ ／ Windows ✅（S4-plan §12.3）｜ S5：Mac ✅ ／ Windows ✅（S5-plan §12.3）｜ **S6：Mac ✅（M1/M2，2026-09-14；M1 抓到并修了 2 个真问题）/ Windows 待做**（S6-plan §12.3） |
+| 真机验收 | S4：Mac ✅ ／ Windows ✅（S4-plan §12.3）｜ S5：Mac ✅ ／ Windows ✅（S5-plan §12.3）｜ **S6：Mac ✅ ／ Windows ✅**（**W0 `GATE PASS` 14 PASS / 0 FAIL / 1 SKIP = T12；W1 重启后会话正常**；T13 在真宿主首测：`http.proxySupport=override` —— S6-plan §12.3） |
 | 工作区 | `main` 与 origin 同步（S6 的提交与 `v0.1.8` tag 都已推）；工作区干净（logo 素材已由用户提交为 `77196c1`，并从 VSIX 里排除）。**总计划只有一份**：`docs/PLAN.md`（2026-09-13 已把根目录那份的 233 行评审记录并进去并删除，见 S5-plan §10.1 的 U6） |
 
 **会自动跑的东西（每个动作改完必须全绿）**：
@@ -53,24 +53,17 @@
 | `ctx.ui.custom()` 类扩展命令 | 设计上不支持（终端 TUI 专有），会给明确错误 | README 已知限制 |
 | 模型目录**不联网**刷新 | 我们显式写死 `allowModelNetwork: false`（刻意：不替用户往外发请求），所以新模型名（如 `deepseek-flash`）不会自己出现。现在有显式入口 `Pi: Refresh Model Catalog`（点才联网，A12 守住“自动路径不碰 pi.dev”） | README 已知限制 · S6-plan §3.5 / §6
 
-## 3. 下一步（S6：设置与密钥）
+## 3. 下一步（S7：diff 审阅）
 
-**S5 已关闭**（细节：`docs/S5-plan.md` §11 实施期发现 / §12 实施与验收结果）。
+**S5、S6 已关闭**（S6 的完整过程：`docs/S6-plan.md` §11 实施期发现 / §12 实施与验收结果；发布 0.1.8）。
 
-S6 的范围（`docs/PLAN.md` §6）：三项 VS Code 设置（含 `jerrypi.agentDir`、
-`jerrypi.approvalMode` 只登记不实现）、`Pi: Clear Stored API Keys`，
-把 S1 的最小版 `Pi: Set API Key` / `Pi: Open Settings File` 补完整（provider 选择、校验）。
-验收：清空 `models.json` 里的 key、只靠 SecretStorage 也能完成对话。
+S7 的范围（`docs/PLAN.md` §6）：`filechanges.ts` + `diff.ts` —— 按 `toolCallId` 收集 `edit` 的 patch 与 `write` 的前后内容，`edit` 卡片能打开真实 diff。
+验收（PLAN 原文）：让 agent 在**同一条消息里**对同一文件发出两次 edit，两张卡片各自只显示该次 patch；同一条消息里两次 write 同一文件，两张卡片前后内容各自正确；重启 VS Code 恢复会话后，edit 卡片的 diff 仍可打开，write 卡片显示“本次会话不可用”。
 
-**S6 开头担心过的三件旧债，去向已全部落实**（细节在 `docs/S6-plan.md` §11）：
+**S6 关闭时排给 S8 的一件事**：项目级设置的信任流程（见 §2 与 `PLAN.md` §6 的 S8 注）。
 
-| 事 | 结局 |
-| --- | --- |
-| `jerrypi.agentDir` 一改，会话目录跟着走 | ✅ A13 断言（只设环境变量、不传选项） |
-| `list()` 的 `filterCwd` 严格比较 | ✅ 按 §3.7 **接受**（现实里没有受害者），只记限制与 `pi-traps` 第 18 条 |
-| `Pi: Refresh Model Catalog` | ✅ 已实现 + A8/A12（含 fetch 层漂移守卫） |
-
-下一步：**你在 Windows 机上跑 W0（`Pi: Run Self-Test`，期望 `GATE PASS`，T12 会 SKIP，T13 会多一行）与 W1（重启后会话还在）** → 我回填 `S6-plan §12.3` 并关阶段。
+下一步：写 `docs/S7-plan.md` → 送评审（≤3 轮）→ 把默认值摆给用户 → 用户说“可以”才动代码。
+（S6 的流程可照抄：`docs/S6-plan.md` 是这一整套纪律的最新样例。）
 
 ## 4. 发布流程（每次都一样）
 
