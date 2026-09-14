@@ -496,6 +496,29 @@ API Error: Request rejected (429) · api key 日限额已用完
 
 **第 7 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（tool-text-check **91**，+4；host-check 80）｜`check:controller` 本步未重跑（未改 pi 交互语义；上次 **98/98**）。
 
+### 第 8 步（文档与收尾断言，2026-09-14）
+
+| # | 发现 | 处置 |
+| --- | --- | --- |
+| 8-1 | **A9/A6b/A7 的宿主夹具**（第 4 步欠的）现在才补上：真命令（`registerCommands` + `executeCommand`）+ 真 pi（`loadPi`）+ 统一按 agentDir 缓存的同一实例 | A9（两个分支：目录在/不在）、A6b（候选==`getProviders()`、deepseek 置顶、描述来自 `describeAuthSource`）、A7（三态文案）全部落在 `host-check`；R-S6-2 的“无可用模型时点出目录”在 `setApiKey` 里补上（先红后绿） |
+| 8-2 | **vscode 桩的红得有价值**：`openTextDocument` 第一版返回 `{}` → `showTextDocument(文档)` 记成 `"[object Object]"`，A9 拿不到路径 | 桩改成 `openTextDocument: (uri) => ({ uri })`，`showTextDocument` 记录时兼容“Uri / 文档对象”两种形状（真 vscode 两种都收）；产品代码没改 |
+| 8-3 | ⚠️ **文档指针不一致**：S1/S2/S5-plan、STATUS、README 都写“信任 UI 在 **S6**”，而 `PLAN.md` §6 的 S6 范围里**从来没有它**（四次评审计也没审过它） | 按 AGENTS.md“以 `docs/` 为准”——权威是总计划：README（中英）改成**未排期**并写明原委；`STATUS §2` 记一条（这不是欠账、也不是静默扩大范围；真要做得另开阶段设计） |
+| 8-4 | README 的“常用脚本”表数字停在很早的阶段（`self-test 6 个 / protocol 63 / render 42 / controller 27`） | 更新到当前门禁数，并补上 `host-check` / `settings-check` 两行 |
+| 8-5 | **能红验证**（三处）：A6b 换回硬编码清单 → 红成 `items=2｜getProviders=40`；A9 去掉目录守卫 → 缺目录时不再警告（红）；T13 去掉口令掩码 → 红 2 条 | 全部恢复后：host-check **91/91**、tool-text **91**、settings-check **16/16** |
+| 8-6 | `Pi: Set API Key` 成功文案里的“不写入 auth.json”与 §11 的 5-1 不完全一致 | 改成“你的 key 不会写进 auth.json”（空壳 `{}` 是 pi 自己建的，我们只保证不写凭据） |
+
+**第 8 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（host-check **91/91**，A6b/A7/A9 共 +11；tool-text 91）｜`check:controller` **98/98**（未重跑，本步未改 pi 交互语义）｜`settings-check` 16/16。
+
+### 第 9 步（打包 + 自测，2026-09-14）
+
+| # | 发现 | 处置 |
+| --- | --- | --- |
+| 9-1 | 闸门（T1–T13）以前只有“在 VS Code 里点命令”一条路 —— S5 是拿临时脚本跑的（结果记在 S5-plan §12.1），**不可复现** | 新增 `scripts/selftest-check.mjs` + `npm run check:gate`：与 `Pi: Run Self-Test` 调**同一个** `runSelfTest()`，差异只有报告字段（`vscodeVersion=headless`、`httpProxyConfig=(无头)`、`keys`=空内存 store，凭据走真实 `auth.json`）。这也是 S6-plan §9 第 9 步“自测”的可执行形式 |
+| 9-2 | 无头闸门实测 | **15/15 PASS / GATE PASS**（T5c/T12/T13 都 PASS）。T13 报告：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[HTTP_PROXY, HTTPS_PROXY, http_proxy, https_proxy]；PI_OFFLINE=未设`。注：`wrapped` 不等于“被 VS Code 换过” —— Node 自己的全局 `fetch` 本来就不是 `[native code]` 实现；T13 报的是**身份**，不是好坏 |
+| 9-3 | 打包 0.1.8 | **338 文件 / 5.75 MB**，`check-vsix` OK；`unzip -Z1` 与 0.1.7 的**文件清单逐个相同**（S6 没把开发文件带进包） |
+
+**第 9 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（14 个检查脚本可解析）｜`check:controller` **98/98**｜`npm run check:gate` **15/15 GATE PASS**｜`check-vsix` OK（338 文件 / 5.75 MB）。
+
 ## 12. 实施与验收结果
 
 _（自动检查 / 提交切分 / 人工验收 / 已知未覆盖。）_

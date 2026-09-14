@@ -11,11 +11,11 @@
 
 ## 1. 现在
 
-**进行中**：**S6 第 1–7 步已完成**（设置与 agentDir 贯通；密钥清理 + Set API Key；空凭据目录真对话（A4）；Refresh Catalog + 漂移守卫（A8/A12）；代理 T13/advisory + 纯函数报告（A11））。**只剩第 8 步文档（含 A9/A10、A6 后半、A7 三态文案）就能到打包与 Mac 验收**（2026-09-14）
+**进行中**：**S6 第 1–9 步已完成**（0.1.8 已打包、自动门禁全绿，含 `npm run check:gate` **15/15 GATE PASS**）。**现在等你做 Mac 验收的两个动作（M1/M2，约 3 分钟）**，见 `docs/S6-plan.md` §7；通过后上传 0.1.8 → Windows W0/W1（2026-09-14）
 
 | | |
 | --- | --- |
-| 阶段 | **S5 已关闭**；**S6 实施中**（第 1–7 步完成，见 `docs/S6-plan.md` §9/§11） |
+| 阶段 | **S5 已关闭**；**S6 实施中**（第 1–9 步完成，0.1.8 已打包；待 Mac/Windows 验收，见 `docs/S6-plan.md` §9/§11） |
 | 最新发布 | **0.1.7**（2026-09-13，预发布；S5 的全部内容） |
 | 发布核验 | `node scripts/compare-vsix.mjs 0.1.7` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,025,710 字节 / `04c60b7b…`）；tag `v0.1.7`；留档 `~/jerrypi-releases/jerrypi-0.1.7.vsix` |
 | 真机验收 | S4：Mac ✅ ／ Windows ✅（S4-plan §12.3）｜ **S5：Mac ✅ ／ Windows ✅**（`GATE PASS` 13 PASS / 1 SKIP = T12；W0/W1 明细见 S5-plan §12.3） |
@@ -31,10 +31,11 @@
 | `npm run check:render` | **114** |
 | `node scripts/tool-text-check.mjs` | **91** |
 | `node scripts/webview-dom-check.mjs` | **75** |
-| `node scripts/host-check.mjs` | **80** |
+| `node scripts/host-check.mjs` | **91** |
 | `npm run check:controller`（真模型，**不进 CI**） | **98/98**（含一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
-| `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | S5 跑的是 **14 项（12 gating + T5c/T12 advisory）GATE PASS**；S6 多了 **T13（advisory）** → **待打包时连同 Mac 验收重跑** |
-| `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **338 文件 / 5.75 MB**（门禁 30 MB）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |
+| `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **15 项（12 gating + T5c/T12/T13 advisory）GATE PASS** |
+| `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **15 项（12 gating + T5c/T12/T13 advisory）GATE PASS**（0.1.8，无头跑过；Windows 的 W0 再跑一次真宿主） |
+| `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **0.1.8：338 文件 / 5.75 MB**（门禁 30 MB；文件清单与 0.1.7 逐个相同）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |
 
 ## 2. 欠着的事（已知、刻意未做或暂时做不到）
 
@@ -47,11 +48,10 @@
 | **旧位置**的会话不会被自动搬 | ≤0.1.6 写的会话平铺在 `~/.pi/agent/sessions/` 根上，面板与 `pi --resume` 都看不到（但没丢：`cd ~ && pi --session-dir ~/.pi/agent/sessions --resume`）；符号链接写法下写过的会话同理。**刻意不替用户搬数据** | README 已知限制 · S5-plan §3.8 / §11 的 6-9 |
 | 多写者检测（同一个会话被两边同时写） | 只写进了已知限制，没做检测。候选：记下 `.jsonl` 的 `size+mtime`，下一条消息前比一次 | S5-plan 的 R8 |
 | 「真·后台并行」（切走让旧会话继续跑，像 Codex/Claude 插件那样） | 划出 S5：需要"多会话宿主"（多份 runtime + 事件分流 + 多份 UI 状态），且并行会撞 R8 的两个写者 | S5-plan §2 / §4 D7 / §12.4 |
-| 项目级设置（`.pi/settings.json` 等） | 固定 `projectTrusted: false`，信任流程没做 | **S6** |
-| **三项 `jerrypi.*` 设置都还没实现** | `package.json` 里**从来没声明过** `contributes.configuration`，`src/` 里也没有读它们的地方：`agentDir` / `proxy` 写了不生效（**S6**）、`approvalMode` 写了不生效（**S8**）。README 的配置表逐条标明 | README 配置表 + 已知限制 |
+| 项目级设置（`.pi/settings.json` 等） | 固定 `projectTrusted: false`，信任流程没做。⚠️ **这不是 S6 的欠账**：早期计划（S1/S2/S5）的指针写着“信任 UI 在 S6”，而 `PLAN.md` §6 的 S6 范围里从来没有它（S6 的 4 轮评审也没审过）—— 目前**未排期** | S1-plan §4.3 · S2-plan §7 · S5-plan §4；**以 PLAN.md §6 为准**；S6-plan §11 的 8-3 |
+| **三项 `jerrypi.*` 设置** | `agentDir` **已生效**（进程环境变量 + 重载窗口）；`proxy` 未实现（T13 只报告，Q2 不做第二层）；`approvalMode` 只登记、未生效（**S8**）。README 配置表中英双语逐条标明（`settings-check` 钉住） | README 配置表 + 已知限制 |
 | `ctx.ui.custom()` 类扩展命令 | 设计上不支持（终端 TUI 专有），会给明确错误 | README 已知限制 |
-| 模型目录**不联网**刷新 | 我们显式写死 `allowModelNetwork: false`（刻意：不替用户往外发请求），所以新模型名（如 `deepseek-flash`）不会自己出现。要跟上得复制 `models-store.json` | README 已知限制 · S4 §12.5 |
-| `Pi: Refresh Model Catalog`（显式联网刷新，点了才发请求） | **没做**。候选：与 S6 的 `jerrypi.agentDir` 一起做（store 路径跟着 agentDir 走） | README 已知限制 |
+| 模型目录**不联网**刷新 | 我们显式写死 `allowModelNetwork: false`（刻意：不替用户往外发请求），所以新模型名（如 `deepseek-flash`）不会自己出现。现在有显式入口 `Pi: Refresh Model Catalog`（点才联网，A12 守住“自动路径不碰 pi.dev”） | README 已知限制 · S6-plan §3.5 / §6
 
 ## 3. 下一步（S6：设置与密钥）
 
@@ -62,16 +62,16 @@ S6 的范围（`docs/PLAN.md` §6）：三项 VS Code 设置（含 `jerrypi.agen
 把 S1 的最小版 `Pi: Set API Key` / `Pi: Open Settings File` 补完整（provider 选择、校验）。
 验收：清空 `models.json` 里的 key、只靠 SecretStorage 也能完成对话。
 
-**S6 动工前要注意的三件已经攒下的债**（都是 S5 期间记下的，别丢掉）：
+**S6 开头担心过的三件旧债，去向已全部落实**（细节在 `docs/S6-plan.md` §11）：
 
-| 事 | 为什么归 S6 |
+| 事 | 结局 |
 | --- | --- |
-| `jerrypi.agentDir` 一改，**会话目录要跟着走** | S5 已经把目录推导收进 `src/pi/sessions.ts` 的 `resolveSessionDir(cwd, sessionsRoot)` 一处；S6 只要保证 `sessionsRoot = <生效的 agentDir>/sessions` |
-| `list()` 的 `filterCwd` 在自定义 agentDir 下会变成 `true` → **严格字符串比较**会咬人 | R10（Windows 盘符大小写，W0 已在真机上确认两种写法都存在）；S6 要么归一化比较、要么别依赖它 |
-| `Pi: Refresh Model Catalog`（显式联网刷新） | STATUS §2 记的候选：store 路径跟着 agentDir 走，适合与 S6 一起做 |
+| `jerrypi.agentDir` 一改，会话目录跟着走 | ✅ A13 断言（只设环境变量、不传选项） |
+| `list()` 的 `filterCwd` 严格比较 | ✅ 按 §3.7 **接受**（现实里没有受害者），只记限制与 `pi-traps` 第 18 条 |
+| `Pi: Refresh Model Catalog` | ✅ 已实现 + A8/A12（含 fetch 层漂移守卫） |
 
-下一步：**第 8 步 —— 文档与收尾断言（A9/A10 + A6 的 QuickPick 那一半 + A7 三态文案）**，
-然后才是打包 + Mac 验收（M1/M2）。
+下一步：**等用户做 Mac 验收 —— M1（F5 → 改 `jerrypi.agentDir` → 重载 → 发一条消息 → 改回）与 M2（看 QuickPick/模态框在窄栏里的渲染）**，见 `docs/S6-plan.md` §7。
+通过后：上传 0.1.8（Marketplace 手动）→ Windows W0/W1 → 回填 `S6-plan §12` → 关阶段。
 
 ## 4. 发布流程（每次都一样）
 
