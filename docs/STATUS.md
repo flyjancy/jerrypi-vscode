@@ -11,14 +11,14 @@
 
 ## 1. 现在
 
-**进行中**：**S7 第 1–6 步实施完成，0.1.9 已打包（338 文件 / 5.76 MB），等你做 Mac 验收 M1/M2**（`docs/S7-plan.md` §7：活的 diff + 重载后的口径）。通过后上传 0.1.9 → Windows W0/W1 → 回填 §12 → 关阶段（2026-09-14）
+**进行中**：**S7 实施完成、Mac 验收 ✅（M1/M2 通过）**，0.1.9 已打包（338 文件 / 5.76 MB，§11/§12 已回填）。**下一步：你上传 0.1.9（预发布）→ Windows W0/W1** → 我核验发布物并关阶段（2026-09-14）
 
 | | |
 | --- | --- |
-| 阶段 | **S5、S6 均已关闭**；**S7 实施完成待验收**（计划已过 3 轮评审；0.1.9 已打包） |
+| 阶段 | **S5、S6 均已关闭**；**S7 实施完成、Mac 验收 ✅**（0.1.9 待上传 + Windows 验收） |
 | 最新发布 | **0.1.8**（2026-09-14，预发布；S6 的全部内容；0.1.9 待上传） |
 | 发布核验 | `node scripts/compare-vsix.mjs 0.1.8` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,032,721 字节 / `30505f6e…` 的 SHA-256）；tag `v0.1.8`；留档 `~/jerrypi-releases/jerrypi-0.1.8.vsix`（0.1.7 的核验记录：338 文件 / `04c60b7b…`） |
-| 真机验收 | S4：Mac ✅ ／ Windows ✅（S4-plan §12.3）｜ S5：Mac ✅ ／ Windows ✅（S5-plan §12.3）｜ **S6：Mac ✅ ／ Windows ✅**（**W0 `GATE PASS` 14 PASS / 0 FAIL / 1 SKIP = T12；W1 重启后会话正常**；T13 在真宿主首测：`http.proxySupport=override` —— S6-plan §12.3） |
+| 真机验收 | S4：Mac ✅ ／ Windows ✅（S4-plan §12.3）｜ S5：Mac ✅ ／ Windows ✅（S5-plan §12.3）｜ S6：Mac ✅ ／ Windows ✅（S6-plan §12.3）｜ **S7：Mac ✅（M1/M2 —— 五张卡片各自只显示该次改动；重载后 edit 的 diff 仍可打开、write 变「本次会话不可用」）/ Windows 待做**（S7-plan §12.3） |
 | 工作区 | `main` 与 origin 同步（S6 的提交与 `v0.1.8` tag 都已推）；工作区干净（logo 素材已由用户提交为 `77196c1`，并从 VSIX 里排除）。**总计划只有一份**：`docs/PLAN.md`（2026-09-13 已把根目录那份的 233 行评审记录并进去并删除，见 S5-plan §10.1 的 U6） |
 
 **会自动跑的东西（每个动作改完必须全绿）**：
@@ -26,16 +26,16 @@
 | 命令 | 现在 |
 | --- | --- |
 | `npm run typecheck`（2 套 tsconfig） | ✅ |
-| `npm run self-test` | **9/9**（其中 `SETTINGS-CHECK OK (16/16)`） |
+| `npm run self-test` | **9/9**（其中 host-check 173、webview-dom 81、render 121、settings 16/16） |
 | `npm run check:protocol` | 112 |
 | `npm run check:render` | **114** |
 | `node scripts/tool-text-check.mjs` | **91** |
 | `node scripts/webview-dom-check.mjs` | **75** |
-| `node scripts/host-check.mjs` | **95** |
-| `npm run check:controller`（真模型，**不进 CI**） | **98/98**（含一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
+| `node scripts/host-check.mjs` | **173** |
+| `npm run check:controller`（真模型，**不进 CI**） | **104/104**（含 A7：一条消息两次 edit + 两次 write；以及一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **15 项（12 gating + T5c/T12/T13 advisory）GATE PASS**（T13：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[HTTP_PROXY, HTTPS_PROXY, http_proxy, https_proxy]；PI_OFFLINE=未设`） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **15 项（12 gating + T5c/T12/T13 advisory）GATE PASS**（0.1.8；无头跑过一次，Windows W0 真宿主又跑过一次 —— 14 PASS / 0 FAIL / 1 SKIP = T12） |
-| `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **0.1.8：338 文件 / 5.75 MB**（门禁 30 MB；文件清单与 0.1.7 逐个相同；9-5 修复后已重新打包）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |
+| `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **0.1.9：338 文件 / 5.76 MB**（门禁 30 MB；文件数自 0.1.7 起一直是 338）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |
 
 ## 2. 欠着的事（已知、刻意未做或暂时做不到）
 
