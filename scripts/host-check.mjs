@@ -27,7 +27,7 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const STUB_PATH = path.join(SCRIPT_DIR, "fixtures", "vscode-stub.mjs");
 
 const stub = await import(pathToFileURL(STUB_PATH).href);
-const { resetStub, callsOf, stubCalls, queueQuickPickResponse, queueWarningResponse, queueInformationResponse, fireConfigurationChange } = stub;
+const { resetStub, callsOf, stubCalls, queueQuickPickResponse, queueWarningResponse, queueInformationResponse, queueInputBoxAnswer, fireConfigurationChange } = stub;
 
 const results = [];
 const check = (name, ok, detail = "") => results.push([name, ok, detail]);
@@ -902,6 +902,131 @@ check(
     if (savedAgentDirEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = savedAgentDirEnv;
     fs.rmSync(refreshAgentDir, { recursive: true, force: true });
+  }
+}
+
+// ------------------------------------- S6 第 4 步的后半：`Pi: Set API Key` 的 QuickPick 与三态校验（A6b/A7）
+//
+// 与 A8 同一套夹具：真命令 + 真 pi + 同一缓存实例（`getModelRuntime` 按 agentDir 缓存），
+// 只把 provider 目录之外的运行时入口换成可控的。
+{
+  function makeExtensionContext(extensionPath) {
+    const secrets = new Map();
+    const globalState = new Map();
+    return {
+      extensionUri: vscode.Uri.file(extensionPath),
+      extension: { packageJSON: { version: "0.0.0-check" } },
+      subscriptions: [],
+      secrets: {
+        get: (key) => Promise.resolve(secrets.get(key)),
+        store: (key, value) => { secrets.set(key, value); return Promise.resolve(); },
+        delete: (key) => { secrets.delete(key); return Promise.resolve(); },
+      },
+      globalState: {
+        get: (key, fallback) => (globalState.has(key) ? globalState.get(key) : fallback),
+        update: (key, value) => { globalState.set(key, value); return Promise.resolve(); },
+      },
+    };
+  }
+
+  const savedAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+  const keyAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-host-keys-"));
+  process.env.PI_CODING_AGENT_DIR = keyAgentDir;
+  try {
+    const piModule = await loadPi(REPO_ROOT);
+    const runtime = await getModelRuntime(piModule, piModule.getAgentDir(), {
+      listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {}, removeApiKey: async () => {},
+    });
+    const injected = [];
+    runtime.setRuntimeApiKey = async (id, key) => { injected.push([id, key]); };
+
+    // A6b：候选来自 **pi 自己**（`getProviders()`），描述来自 `describeAuthSource(source)`
+    resetStub();
+    const context = makeExtensionContext(REPO_ROOT);
+    const commandOutput = makeOutput();
+    registerCommands(context, commandOutput);
+    queueQuickPickResponse(undefined); // 看完 items 就按 Esc
+    await vscode.commands.executeCommand("jerrypi.setApiKey");
+    const picks = callsOf("showQuickPick");
+    const items = picks[0]?.items ?? [];
+    const knownItems = items.filter((item) => !String(item.label).startsWith("其他（"));
+    const providerIds = runtime.getProviders().map((provider) => provider.id);
+    check("A6b：QuickPick 的候选数与 `getProviders()` 一致（不是硬编码清单）",
+      knownItems.length === providerIds.length && providerIds.length > 7,
+      `items=${knownItems.length}｜getProviders=${providerIds.length}`);
+    check("A6b：每个 provider id 都在，且 deepseek 被置顶",
+      providerIds.every((id) => knownItems.some((item) => item.label === id)) && String(knownItems[0]?.label) === "deepseek",
+      JSON.stringify(knownItems.slice(0, 3).map((item) => item.label)));
+    const expectedDescription = describeAuthSource(runtime.getProviderAuthStatus("deepseek").source);
+    check("A6b：描述是 `describeAuthSource(source)` 的返回（不是 listCredentials 那样混源的）",
+      String(knownItems.find((item) => item.label === "deepseek")?.description ?? "").includes(expectedDescription),
+      `expected≈${expectedDescription}｜got=${String(knownItems.find((item) => item.label === "deepseek")?.description)}`);
+
+    // A7 三态（Q3：**只本地判定，不发请求**）：run 一次真命令，分别造三种判定结果
+    const runSetKey = async (checkAuthResult, availableModels) => {
+      resetStub();
+      registerCommands(context, commandOutput);
+      runtime.setRuntimeApiKey = async (id, key) => { injected.push([id, key]); };
+      runtime.checkAuth = async () => checkAuthResult;
+      runtime.getAvailable = async () => availableModels;
+      queueQuickPickResponse((all) => all.find((item) => item.label === "deepseek"));
+      queueInputBoxAnswer("sk-host-check-not-a-real-key");
+      await vscode.commands.executeCommand("jerrypi.setApiKey");
+    };
+
+    await runSetKey({ configured: true }, [{}, {}]);
+    const okMessages = callsOf("showInformationMessage");
+    check("A7：正常态 → 信息消息报可用模型数",
+      okMessages.length === 1 && String(okMessages[0].message).includes("2 个可用模型"), String(okMessages[0]?.message));
+    check("A7：key 经过 `injectApiKey` 真的注入了已缓存实例（不是只写了 SecretStorage）",
+      injected.some(([id, key]) => id === "deepseek" && key === "sk-host-check-not-a-real-key"), JSON.stringify(injected));
+
+    await runSetKey(undefined, []);
+    const badAuth = callsOf("showWarningMessage");
+    check("A7：`checkAuth` 无结果 → 警告“不接受 API key”",
+      badAuth.length === 1 && String(badAuth[0].message).includes("不接受 API key"), String(badAuth[0]?.message));
+
+    await runSetKey({ configured: true }, []);
+    const noModels = callsOf("showWarningMessage");
+    check("A7：目录里没有可用模型 → 警告点出**生效的 agentDir 绝对路径**（R-S6-2）",
+      noModels.length === 1 && String(noModels[0].message).includes("没有可用模型") && String(noModels[0].message).includes(keyAgentDir),
+      String(noModels[0]?.message));
+
+    // A9：`Pi: Open Settings File` 打开的是 <生效 agentDir>/settings.json（C3 的一部分）
+    resetStub();
+    registerCommands(context, commandOutput);
+    await vscode.commands.executeCommand("jerrypi.openSettingsFile");
+    const opened = callsOf("showTextDocument");
+    const expectedFile = path.join(keyAgentDir, "settings.json");
+    check("A9：打开的是 <生效 agentDir>/settings.json",
+      opened.length === 1 && String(opened[0].uri).endsWith(expectedFile),
+      `expected …${expectedFile}｜got=${String(opened[0]?.uri)}`);
+    check("A9：目录已存在时，缺失的 settings.json 用 `{}` 建出来",
+      fs.existsSync(expectedFile) && fs.readFileSync(expectedFile, "utf8").trim() === "{}",
+      fs.existsSync(expectedFile) ? JSON.stringify(fs.readFileSync(expectedFile, "utf8")) : "（没建）");
+
+    // A9 的反向分支（评审 N6）：目录不存在时**报错、不替用户建目录**
+    resetStub();
+    registerCommands(context, commandOutput);
+    const missingAgentDir = path.join(os.tmpdir(), `jerrypi-host-missing-${Date.now()}`);
+    process.env.PI_CODING_AGENT_DIR = missingAgentDir;
+    try {
+      await vscode.commands.executeCommand("jerrypi.openSettingsFile");
+      const warn = callsOf("showWarningMessage");
+      check("A9：目录不存在 → 警告里说清“谁会在什么时候建它”",
+        warn.length === 1 && String(warn[0].message).includes("还不存在") && String(warn[0].message).includes("发一条消息"),
+        String(warn[0]?.message));
+      check("A9：目录不存在时不替用户建目录、也不开文件",
+        !fs.existsSync(missingAgentDir) && callsOf("showTextDocument").length === 0,
+        `dirExists=${fs.existsSync(missingAgentDir)}｜opened=${callsOf("showTextDocument").length}`);
+    } finally {
+      process.env.PI_CODING_AGENT_DIR = keyAgentDir;
+      fs.rmSync(missingAgentDir, { recursive: true, force: true });
+    }
+  } finally {
+    if (savedAgentDirEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedAgentDirEnv;
+    fs.rmSync(keyAgentDir, { recursive: true, force: true });
   }
 }
 

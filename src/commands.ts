@@ -70,7 +70,8 @@ export function registerCommands(
     vscode.commands.registerCommand("jerrypi.setApiKey", async () => {
       try {
         const module = await pi();
-        const runtime = await getModelRuntime(module, module.getAgentDir(), keys);
+        const agentDir = module.getAgentDir();
+        const runtime = await getModelRuntime(module, agentDir, keys);
         // 候选来自 **pi 自己**（不是硬编码清单），每项标注来源（6 档，F18/§3.3）
         const known = runtime.getProviders().map((provider) => ({
           label: provider.id,
@@ -126,11 +127,11 @@ export function registerCommands(
           );
         } else if (available.length === 0) {
           void vscode.window.showWarningMessage(
-            `jerrypi: 已保存 ${providerId} 的 key，但 pi 的模型目录里这个 provider 没有可用模型 —— 可能 provider id 拼错了，或 models.json 里没有它。`,
+            `jerrypi: 已保存 ${providerId} 的 key，但 pi 的模型目录里这个 provider 没有可用模型 —— 生效的配置目录是 ${agentDir}（provider id 拼错、models.json 里没有它、或 jerrypi.agentDir 指错了都会这样）。`,
           );
         } else {
           void vscode.window.showInformationMessage(
-            `jerrypi: 已保存 ${providerId} 的 API key（VS Code SecretStorage，不写入 auth.json）—— pi 目录里有 ${available.length} 个可用模型。`,
+            `jerrypi: 已保存 ${providerId} 的 API key（VS Code SecretStorage —— 你的 key 不会写进 auth.json）—— pi 目录里有 ${available.length} 个可用模型。`,
           );
         }
       } catch (error) {

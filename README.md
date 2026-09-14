@@ -62,7 +62,7 @@
 
 ### 配置
 
-扩展计划叠加三项 VS Code 设置，其余一律沿用 pi 自己的配置 —— **注意：这三项目前都还没生效**（下面逐条标明）：
+扩展叠加三项 VS Code 设置，其余一律沿用 pi 自己的配置 —— 三项的状态各不相同（下面逐条标明）：
 
 | 设置 | 取值 | 说明 |
 | --- | --- | --- |
@@ -71,6 +71,8 @@
 | `jerrypi.agentDir` | 路径（默认留空 = `~/.pi/agent`） | pi 配置目录。**已生效**：会话、`auth.json`、`models.json`、`settings.json` 都跟着它走；**改动后需要重载窗口**（pi 在模块加载时读定）。环境变量 `PI_CODING_AGENT_DIR` 已设时以它为准 |
 
 - 默认模型、`shellPath`、工具白名单等请在 pi 的 `settings.json` 中修改，扩展提供 **`Pi: Open Settings File`** 直接打开它。
+- API key 存在 **VS Code SecretStorage**（`Pi: Set API Key`，候选来自 pi 自己认识的 provider、并标注每个 provider 当前的凭据来源），**不会写进 pi 的 `auth.json`**；删除用 **`Pi: Clear Stored API Keys`**（它只删本扩展存的那份，**不碰** `auth.json` / `models.json` —— 那两份是 pi 自己的文件）。
+- 模型目录默认**不联网刷新**；**`Pi: Refresh Model Catalog`** 是唯一的联网入口（点了才发请求，刷新 `<agentDir>/models-store.json`）。
 - 代理与证书默认交给 VS Code 自身的 `http.proxy` / `http.systemCertificates` 处理，无需额外配置。
 
 ### 使用
@@ -100,12 +102,15 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 | `npm run sync` | 把 pi 运行时复制进 `pi-runtime/`，并跑 7 条打包校验（含隔离 import、隔离加载扩展） |
 | `npm run typecheck` | 类型检查（两个 tsconfig：扩展宿主一份、webview 一份带 DOM 类型） |
 | `npm run build` | esbuild 产出三个文件：`dist/extension.js`、`dist/webview.js`、`dist/style.css` |
-| `npm run self-test` | 6 个用例：打包断言的正/负用例、`sync` 幂等性、协议与渲染断言 | 
-| `npm run check:protocol` | 63 条聊天协议断言（纯函数，不需要网络） |
-| `npm run check:render` | 42 条渲染与 XSS 断言（12 个载荷 + 图片策略 + CSP） |
-| `npm run check:controller` | 27 条面板控制器断言；**需要凭据与网络**（没有凭据时打印 SKIPPED 并跳过） |
+| `npm run self-test` | **9 个用例**：打包断言的正/负用例、`sync` 幂等性，以及协议/渲染/工具文本/设置/DOM/host 各套断言 |
+| `npm run check:protocol` | **112** 条聊天协议断言（纯函数，不需要网络） |
+| `npm run check:render` | **114** 条渲染与 XSS 断言（12 个载荷 + 图片策略 + CSP） |
+| `npm run check:controller` | **98** 条面板控制器断言；**需要凭据与网络**（没有凭据时打印 SKIPPED 并跳过；总数随模型是否发起工具调用略有浮动） |
+| `npm run check:gate` | 把 `Pi: Run Self-Test` 这条闸门（T1–T13）搬到终端里跑；**需要凭据与网络** |
+| `node scripts/host-check.mjs` | **91** 条宿主接线断言（vscode 桩 + 真命令） |
+| `node scripts/settings-check.mjs` | **16** 条设置声明与 README 一致性断言 |
 | `npm run package` | 构建 + 打包 `.vsix`；vsce 打包前会自动执行 `vscode:prepublish`（唯一构建入口） |
-| `npm run check-vsix -- jerrypi-0.1.4.vsix` | `.vsix` 体积门禁（< 30 MB）与必需文件校验 |
+| `npm run check-vsix -- jerrypi-0.1.8.vsix` | `.vsix` 体积门禁（< 30 MB）与必需文件校验 |
 | `npm run vscode:prepublish` | 等同于 `sync && build` |
 
 **发布一个新版本**（目前的流程是手动上传）：
@@ -119,7 +124,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
    `git tag -a v<版本> -m "jerrypi <版本>；产物 <大小> 字节，SHA-256 <指纹>"`，再 `git push --tags`。
    tag 只在第 5 步核对通过后才打 —— 这样每个 tag 都对应一份**确实发布出去**的产物。
 
-装好扩展后，用 `Pi: Run Self-Test` 跑可行性闸门（**T1–T12** = 12 个 gating 项 + 2 个 advisory，结果写在 `jerrypi` Output 频道）：它会验证 pi 运行时能否在扩展宿主里真实加载、扩展生命周期、真实模型流式对话、子进程与中止、文件读写编辑、会话持久化与替换、图片 worker 往返，**以及会话目录是否落在 pi 的规范位置、`pi` 自己的 `list(cwd)` 能否看到它（T10/T11）**。**跑之前先用 `Pi: Set API Key` 配一把 provider key**（默认 DeepSeek），否则 T4/T6/T7/T9 会以 `E_NO_CREDENTIALS` 失败。
+装好扩展后，用 `Pi: Run Self-Test` 跑可行性闸门（**T1–T13** = 12 个 gating 项 + 3 个 advisory（T5c/T12/T13），结果写在 `jerrypi` Output 频道）：它会验证 pi 运行时能否在扩展宿主里真实加载、扩展生命周期、真实模型流式对话、子进程与中止、文件读写编辑、会话持久化与替换、图片 worker 往返，**以及会话目录是否落在 pi 的规范位置、`pi` 自己的 `list(cwd)` 能否看到它（T10/T11）**；T13 会报告一行代理身份（fetch 是不是原生、`http.proxy*`、代理环境变量的存在性），**只报告不判定**。**跑之前先用 `Pi: Set API Key` 配一把 provider key**（默认 DeepSeek），否则 T4/T6/T7/T9 会以 `E_NO_CREDENTIALS` 失败。（开发机上也可以 `npm run check:gate` 无头跑同一条闸门。）
 
 > `.vsix` 里还包含 `test-fixtures/ext-smoke/index.ts`：它是**打包验收用的最小 pi 扩展**（不是给用户使用的功能），目的是让「从解包产物复跑校验」成为可能。细节见 [`docs/S0-plan.md`](docs/S0-plan.md)。
 
@@ -152,13 +157,14 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 - **没打开工作区时，会话的 cwd 是用户主目录**：`bash` 与文件工具会以 `~`（Windows 上是 `C:\Users\<你>`）为工作目录运行，Output 里会写一行提示。**请先打开一个工作区**再用面板，否则模型的操作范围不受任何目录约束。
 - **无 Node 的机器上不支持 `npm:` 包源**，也不支持带 `package.json` 的 git 包源（二者都需要 `npm`）；本地路径包源可用。
 - **Bedrock SigV4a** 需要额外的 `@aws-sdk/signature-v4-crt` 包，本扩展不带，相关场景会明确报错。
-- **`jerrypi.proxy` 还没实现**（写了不生效）：将来若实现，它会包装**进程级**的 `globalThis.fetch`，从而影响同进程内的其他扩展。现在请用 VS Code 的 `http.proxy`，或在启动 VS Code 之前设 `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY`。
+- **`jerrypi.proxy` 还没实现**（写了不生效）：将来若实现，它会包装**进程级**的 `globalThis.fetch`，从而影响同进程内的其他扩展。现在请用 VS Code 的 `http.proxy`，或在启动 VS Code 之前设 `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY`。当真机排查时，跑一次 `Pi: Run Self-Test` 看 **T13** 那一行 —— 它会报告 `fetch` 是不是原生、`http.proxySupport` / `http.proxy` 的值（口令会掩掉）与四个代理环境变量是否存在。
 - **写入历史提示**：`edit` 的 diff 会随会话持久化；`write` 的前后快照只存在于当前进程内，重启 VS Code 后不再显示。
 - **会话落盘条件**（pi 行为）：只有完成过至少一轮 assistant 回复的会话才会写入磁盘。
-- **项目级设置默认不被信任**：pi CLI 会解析信任并询问用户，而 jerrypi 固定以 `projectTrusted: false` 初始化会话，因此工作区里的 `.pi/settings.json`、`SYSTEM.md` 等项目级资源不会被加载，也**不会有任何提示**。这是刻意的安全默认值（项目级设置能改 `shellPath` 与默认工具），信任流程待 S6 补上；在此之前如需使用项目级配置，请改用全局 `settings.json`。
+- **项目级设置默认不被信任**：pi CLI 会解析信任并询问用户，而 jerrypi 固定以 `projectTrusted: false` 初始化会话，因此工作区里的 `.pi/settings.json`、`SYSTEM.md` 等项目级资源不会被加载，也**不会有任何提示**。这是刻意的安全默认值（项目级设置能改 `shellPath` 与默认工具）；信任流程**尚未排期**（早期计划写过“S6”，但 `docs/PLAN.md` §6 的 S6 范围里没有它）。在此之前如需使用项目级配置，请改用全局 `settings.json`。
 - **生成中切换模型不影响本轮**：pi 只改 `state.model`，正在跑的那轮仍用旧模型（下一轮生效）。切模型本身是**异步**的（要校验凭据），面板在切换完成前仍显示旧值。
 - **面板里选的模型只在本窗口有效**：面板内的选择不写入 pi 的 `settings.json`（等价于 pi TUI 里"选了但没按 Ctrl+S 保存"），重开窗口会回到 pi 的默认/你自己的设置。写入设置属于 S6。
-- **模型列表是"这台机器上 pi 的目录"，而且不会自己联网更新**：面板直接用 pi 的 `getAvailable()`（不硬编码、不过滤），而 pi 会把**内置目录**与 `<agentDir>/models-store.json`（缓存）合并。我们的运行时**显式关掉了联网刷新**（`allowModelNetwork: false`），所以面板不会替用户往外发请求 —— 代价是新模型名（例如 `deepseek-flash`）**不会自动出现**。判断标准：`models-store.json` 是 pi 的文件格式，任何能刷新它的 pi 环境（另一台装了 pi CLI 的机器）刷出来的文件**可以直接复制**到这台机器的 `<agentDir>` 下，重启面板即生效。将来会提供 `Pi: Refresh Model Catalog`（点了才联网）。
+- **模型列表是"这台机器上 pi 的目录"，而且不会自己联网更新**：面板直接用 pi 的 `getAvailable()`（不硬编码、不过滤），而 pi 会把**内置目录**与 `<agentDir>/models-store.json`（缓存）合并。我们的运行时**显式关掉了自动联网刷新**（`allowModelNetwork: false`），所以面板不会替用户往外发请求 —— 代价是新模型名（例如 `deepseek-flash`）**不会自动出现**。需要跟上时跑 **`Pi: Refresh Model Catalog`**（点了才联网，刷新的是 `<agentDir>/models-store.json`）；也可以把别的 pi 环境刷出来的同格式文件直接复制到这台机器的 `<agentDir>` 下，重启面板即生效。
+- **改了 `jerrypi.agentDir` 之后，旧目录里的东西不会跟过来**：会话、`auth.json`、`models.json` 都按新目录找 —— 旧内容不会丢，但面板与 `pi --resume` 都看不到旧会话（在旧目录下用 `pi` 能看到）。改回去（或在设置里删掉那一项）并重载窗口即可恢复。
 - **模型列表只列"配了凭据"的模型**：用 `getAvailable()` 过滤，所以列表里没有的模型不是 bug，而是那个 provider 没配 API key（`Pi: Set API Key`）。
 - **模型选择器不做"先显示旧列表再刷新"**：直接传一个 Promise 给 VS Code 的 `showQuickPick`（原生加载态）。这台机器上取列表只要 1ms，而 OAuth provider 上先显示一份可能已失效的旧列表反而更糟；真出现明显卡顿再升级成 `createQuickPick`。
 - **远程图片不加载**：markdown 里的 `![](https://…)` 会被降级成 alt 文字。放行远程图片等于让模型可控的 URL 变成一条出网信道（一张 1×1 像素就能把内容编码进 query 发出去），因此消息里的图片**只允许 `data:image/...`**（CSP 里写的是 `img-src <扩展自身资源> data:`，另外放行扩展自己的图标），任何远程 URL 都不会发起请求。
@@ -230,7 +236,7 @@ To make that possible, the extension **ships pi's official pre-bundled SDK** ins
 
 ### Configuration
 
-The extension plans to add three VS Code settings; everything else follows pi's own config — **note that none of the three is effective yet** (each row says so):
+The extension layers three VS Code settings on top of pi's own config; everything else follows pi's own config — the three are **not all in the same state** (each row says which):
 
 | Setting | Values | Description |
 | --- | --- | --- |
@@ -239,6 +245,9 @@ The extension plans to add three VS Code settings; everything else follows pi's 
 | `jerrypi.agentDir` | path (empty = `~/.pi/agent`) | The pi config directory. **Effective**: sessions, `auth.json`, `models.json` and `settings.json` all follow it; **changing it requires a window reload** (pi reads it when its modules load). An existing `PI_CODING_AGENT_DIR` wins |
 
 Use **`Pi: Open Settings File`** to edit pi's `settings.json` for default model, `shellPath`, tool allow-lists, etc. Proxy and certificates are handled by VS Code's own `http.proxy` / `http.systemCertificates` by default.
+
+- API keys live in **VS Code SecretStorage** (`Pi: Set API Key` — the candidate list comes from pi itself, with each provider's current credential source shown) and are **never written into pi's `auth.json`**. Remove them with **`Pi: Clear Stored API Keys`**, which only deletes our copy and **does not touch** `auth.json` / `models.json` (those belong to pi).
+- The model catalog is **not refreshed over the network by itself**; **`Pi: Refresh Model Catalog`** is the only network entry point (it requests only when you click it, refreshing `<agentDir>/models-store.json`).
 
 ### Usage
 
@@ -267,12 +276,15 @@ Common scripts:
 | `npm run sync` | Copies the pi runtime into `pi-runtime/` and runs the 7 packaging checks (including isolated import and isolated extension loading) |
 | `npm run typecheck` | Type checking for both tsconfigs (extension host, and the webview one with DOM types) |
 | `npm run build` | esbuild produces `dist/extension.js`, `dist/webview.js` and `dist/style.css` |
-| `npm run self-test` | 6 cases: positive/negative packaging assertions, `sync` idempotency, protocol and render checks |
-| `npm run check:protocol` | 63 chat-protocol assertions (pure functions, no network) |
-| `npm run check:render` | 42 rendering and XSS assertions (12 payloads, image policy, CSP) |
-| `npm run check:controller` | 27 panel-controller assertions; **needs credentials and network** (prints SKIPPED without them) |
+| `npm run self-test` | 9 cases: positive/negative packaging assertions, `sync` idempotency, plus the protocol/render/tool-text/settings/DOM/host suites |
+| `npm run check:protocol` | 112 chat-protocol assertions (pure functions, no network) |
+| `npm run check:render` | 114 rendering and XSS assertions (12 payloads, image policy, CSP) |
+| `npm run check:controller` | 98 panel-controller assertions; **needs credentials and network** (prints SKIPPED without them; the total drifts slightly with whether the model calls tools) |
+| `npm run check:gate` | Runs the `Pi: Run Self-Test` gate (T1–T13) in a terminal; **needs credentials and network** |
+| `node scripts/host-check.mjs` | 91 host-side wiring assertions (vscode stub + real commands) |
+| `node scripts/settings-check.mjs` | 16 settings-declaration vs README consistency assertions |
 | `npm run package` | Build + package the `.vsix`; vsce runs `vscode:prepublish` first (the single build entry point) |
-| `npm run check-vsix -- jerrypi-0.1.4.vsix` | `.vsix` size gate (< 30 MB) and required-file check |
+| `npm run check-vsix -- jerrypi-0.1.8.vsix` | `.vsix` size gate (< 30 MB) and required-file check |
 | `npm run vscode:prepublish` | Equivalent to `sync && build` |
 
 **Releasing a new version** (currently a manual upload):
@@ -286,7 +298,7 @@ Common scripts:
    `git tag -a v<version> -m "jerrypi <version>; artifact <size> bytes, SHA-256 <digest>"`, then `git push --tags`.
    Only tag after step 5 checks out, so that every tag corresponds to an artifact that was **actually published**.
 
-Once installed, run the feasibility gate with `Pi: Run Self-Test` (**T1–T12** = 12 gating items + 2 advisory, results go to the `jerrypi` output channel): it checks that the pi runtime really loads inside the extension host, extension lifecycle, a real streaming model call, subprocesses and aborts, file read/write/edit, session persistence and replacement, the image worker round-trip, **and that sessions land where pi expects them (`pi`'s own `list(cwd)` must see them — T10/T11)**. **Configure a provider key with `Pi: Set API Key` first** (DeepSeek by default), otherwise T4/T6/T7/T9 fail with `E_NO_CREDENTIALS`.
+Once installed, run the feasibility gate with `Pi: Run Self-Test` (**T1–T13** = 12 gating items + 3 advisory (T5c/T12/T13), results go to the `jerrypi` output channel): it checks that the pi runtime really loads inside the extension host, extension lifecycle, a real streaming model call, subprocesses and aborts, file read/write/edit, session persistence and replacement, the image worker round-trip, **and that sessions land where pi expects them (`pi`'s own `list(cwd)` must see them — T10/T11)**; T13 reports one line about the proxy identity (whether `fetch` is native, `http.proxy*`, which proxy env vars exist) and **never judges**. **Configure a provider key with `Pi: Set API Key` first** (DeepSeek by default), otherwise T4/T6/T7/T9 fail with `E_NO_CREDENTIALS`. (On a dev machine you can also run the same gate headlessly with `npm run check:gate`.)
 
 > The `.vsix` also ships `test-fixtures/ext-smoke/index.ts`: a **minimal pi extension used for packaging acceptance** (not a user-facing feature), so that verification can be re-run against the unpacked artifact. See [`docs/S0-plan.md`](docs/S0-plan.md).
 
@@ -311,10 +323,12 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full notices and lice
 - **With no workspace open, the session cwd is your home directory**: `bash` and the file tools then use `~` (on Windows `C:\Users\<you>`) as the working directory, and the output channel says so. **Open a workspace first**, otherwise nothing constrains where the agent operates.
 - **`npm:` and git package sources are unavailable on machines without Node/npm**; local-path sources work.
 - **Bedrock SigV4a** requires an extra `@aws-sdk/signature-v4-crt` package that is not bundled; affected setups fail with an explicit error.
-- **`jerrypi.proxy` is not implemented** (setting it does nothing): if it ever lands it will wrap the **process-wide** `globalThis.fetch`, affecting every extension in the host process. For now use VS Code's `http.proxy`, or set `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY` before starting VS Code.
+- **`jerrypi.proxy` is not implemented** (setting it does nothing): if it ever lands it will wrap the **process-wide** `globalThis.fetch`, affecting every extension in the host process. For now use VS Code's `http.proxy`, or set `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY` before starting VS Code. When debugging, run `Pi: Run Self-Test` and look at the **T13** line — it reports whether `fetch` is native, the values of `http.proxySupport` / `http.proxy` (credentials masked) and whether the four proxy env vars exist.
 - **Write history**: `edit` diffs are persisted with the session, but `write` before/after snapshots live only for the current process and disappear after a VS Code restart.
 - **Session persistence** (pi behavior): a session is written to disk only after at least one assistant reply.
-- **Project-level settings are not trusted by default**: the pi CLI resolves trust and asks the user, whereas jerrypi always initialises sessions with `projectTrusted: false`. Project-scoped resources such as `.pi/settings.json` and `SYSTEM.md` are therefore not loaded, and **nothing tells you so**. This is a deliberate safe default (project settings can override `shellPath` and the default tool set); the trust flow lands in S6. Until then, put such configuration in the global `settings.json`.
+- **The model list is "pi's catalog on this machine", and it does not refresh itself over the network**: the panel uses pi's `getAvailable()` directly (no hardcoding, no filtering), and pi merges the **built-in catalog** with `<agentDir>/models-store.json` (a cache). Our runtime **explicitly disables automatic network refresh** (`allowModelNetwork: false`), so the panel never sends requests on its own — the price is that new model names (e.g. `deepseek-flash`) **do not appear by themselves**. Run **`Pi: Refresh Model Catalog`** when you want to catch up (network requests only after you click it; it refreshes `<agentDir>/models-store.json`), or copy a same-format file produced by another pi environment into `<agentDir>` on this machine and restart the panel.
+- **Changing `jerrypi.agentDir` does not bring the old directory along**: sessions, `auth.json` and `models.json` are all looked up under the new directory — nothing is lost, but the panel and `pi --resume` will not see the old sessions (run `pi` in the old directory and it will). Change it back (or delete the setting) and reload the window to recover.
+- **Project-level settings are not trusted by default**: the pi CLI resolves trust and asks the user, whereas jerrypi always initialises sessions with `projectTrusted: false`. Project-scoped resources such as `.pi/settings.json` and `SYSTEM.md` are therefore not loaded, and **nothing tells you so**. This is a deliberate safe default (project settings can override `shellPath` and the default tool set); the trust flow is **not scheduled** (early plans said "S6", but S6's scope in `docs/PLAN.md` §6 never included it). Until then, put such configuration in the global `settings.json`.
 - **Remote images are not loaded**: a markdown `![](https://…)` is downgraded to its alt text. Allowing remote images would turn a model-controlled URL into an outbound channel (a 1×1 pixel can encode content in its query string), so inside messages **only `data:image/...` is allowed** (the CSP reads `img-src <extension's own resources> data:` and also allows the extension's own icons); no remote URL is ever fetched.
 - **Images are not displayed**: reading an image shows a single `[Image: image/png]` line. Rendering it would mean pushing base64 through the protocol (a single image can be several MB) and blowing the replay budget; this is also exactly how pi degrades on a terminal without image support.
 - **pi extensions that rely on `ctx.ui.custom()` do not work in the panel**: that API renders a full-screen TUI component and needs a real TUI instance, which an extension host cannot provide. Such commands show an **explicit error** (rather than failing silently); everything else about the extension keeps working.

@@ -128,7 +128,7 @@ jerrypi-vscode/
   src/pi/model-choice.ts    从模型目录里挑一个可用的（面板不钉模型时的兜底）
   src/pi/custom-tools.ts    同名覆盖内置 write（按调用捕获 toolCallId，给 S7 用）
   src/pi/resources.ts       sync 脚本与自测共用的"必须存在的资源路径"清单
-  src/pi/selftest.ts        `Pi: Run Self-Test` 的闸门实现（T1–T12 + GATE 判定）
+  src/pi/selftest.ts        `Pi: Run Self-Test` 的闸门实现（T1–T13 + GATE 判定）
   src/pi/selftest-ui.ts     自测专用的最小 ExtensionUIContext（custom 会抛可控错误）
   src/pi/sessions.ts        会话目录推导（resolveSessionDir/sessionsRootOf，复刻 pi 的 per-cwd 编码规则）+ list/continueRecent 封装
   src/pi/bindings.ts        bindExtensions 的 uiContext（QuickPick/InputBox/通知）、onError→Output、commandContextActions
@@ -137,13 +137,13 @@ jerrypi-vscode/
   src/pi/filechanges.ts     （**S7 待建**）按 toolCallId 收集 edit 的 patch 与 write 的前后内容（见 5.3）
   src/host/chatView.ts      WebviewViewProvider；消息路由；v1 单会话
   src/host/diff.ts          （**S7 待建**）pi-diff: 虚拟文档 + 打开 diff 编辑器（自写，读 filechanges）
-  src/commands.ts           命令注册：自测 / 设 key / 打开设置 / 模型与等级选择器 / 新建会话 / 恢复会话
+  src/commands.ts           命令注册：自测 / 设 key / 清 key / 刷新模型目录 / 打开设置 / 模型与等级选择器 / 新建会话 / 恢复会话
   src/host/statusBar.ts     模型名 + 上下文用量
   src/host/modelPicker.ts   模型 / 思考等级选择器（宿主侧 QuickPick，不认识 session）
   src/host/sessionPicker.ts 会话选择器（宿主侧 QuickPick；sessionToItem 是纯函数，便于断言）
   src/host/sessionActions.ts 会话替换的"忙时先问一句"与结果文案（弹窗在宿主层）
-  src/host/config.ts        （**S6 待建**）读 VS Code 配置；SecretStorage 存取 API key
-  src/host/net.ts           （**S6 待建**，`jerrypi.proxy` 目前写了不生效）代理/证书策略（见 5.3）
+  src/host/config.ts        读 VS Code 配置（三项设置）+ 变更时提示重载；SecretStorage 存取 API key（**S6 已建**）
+  src/host/net.ts           （**未建**：Q2 决定不做第二层代理；第一层交给 VS Code 与 `NODE_USE_ENV_PROXY`，并在 T13 里报告）代理/证书策略（见 5.3）
   src/host/uiContext.ts     VS Code UI → pi ExtensionUIContext（QuickPick/InputBox/通知）
   src/host/webviewHtml.ts   面板 HTML 外壳（CSP + nonce + localResourceRoots 的约定）
   src/host/workspace.ts     会话 cwd 的确定（第一个 workspace folder；没打开工作区时退回主目录并明说）
@@ -236,7 +236,7 @@ jerrypi-vscode/
 - **S4 模型与思考等级**：模型选择器（QuickPick）、思考等级切换、状态栏显示模型与上下文用量。（G4。）—— **状态：已实现（0.1.6）**。
 - **S5 会话管理** —— **状态：已实现（0.1.7）**：新建（`runtime.newSession()`）、列表（`SessionManager.list(cwd, sessionDir)`，`sessionDir` 从生效的 agentDir 推导为 **`<agentDir>/sessions/--<编码 cwd>--`** —— 见下面的修正注）、恢复（`runtime.switchSession(path)`）、显示会话名；每次替换后 rebind；VS Code 重启后**自动 `continueRecent(cwd, sessionDir)`**；忙时替换先弹确认；替换后宿主全量重放。（G3。）
   > ⚠️ **2026-09-13（S5 实施期）修正**：本行原先写的是 `<agentDir>/sessions`（把 pi 的 `sessionDir` 参数当成了"sessions 根"），**那是错的** —— 那个参数是"**直接装 `.jsonl` 的目录**"（`session-manager.js:1127` 直接 `join` 文件名）。按原写法会话会平铺在根上，`pi --resume` 与 pi 自己的 `listAll()` 都看不到（实测：`list(cwd)` 5 条 / `list(cwd, 平铺目录)` 0 条）。已修：`src/pi/sessions.ts` 的 `resolveSessionDir` 复刻 pi 的编码规则，并用自测 T10/T11/T12 钉住它。详见 `docs/S5-plan.md` 的 §3.1 与 §11。
-- **S6 设置与密钥**：三项 VS Code 设置、`Pi: Clear Stored API Keys`，并把 S1 的最小版 `Pi: Set API Key` / `Pi: Open Settings File` 补完整（provider 选择、校验）。（清空 `models.json` 里的 key 只靠 SecretStorage 也能完成对话。）
+- **S6 设置与密钥**：三项 VS Code 设置、`Pi: Clear Stored API Keys`，并把 S1 的最小版 `Pi: Set API Key` / `Pi: Open Settings File` 补完整（provider 选择、校验）。（清空 `models.json` 里的 key 只靠 SecretStorage 也能完成对话。）**状态：已实现（0.1.8，待验收）** —— `jerrypi.agentDir` 已生效（进程环境变量 + 重载窗口）；`approvalMode` 只登记（S8）；`proxy` 未实现（Q2 不做第二层，T13 只报告）；另有 `Pi: Refresh Model Catalog`（点了才联网）。断言与发现见 `docs/S6-plan.md` §6/§11。
 - **S7 diff 审阅**：`filechanges.ts` + `diff.ts`。（验收：让 agent 在**同一条消息里**对同一文件发出两次 edit，两张卡片各自只显示该次 patch；同一条消息里两次 write 同一文件，两张卡片前后内容各自正确；重启 VS Code 恢复会话后，edit 卡片的 diff 仍可打开，write 卡片显示"本次会话不可用"。）
 - **S8 工具审批开关**：`approval.ts`，三档。（开 `all` 后每次工具调用停在面板等确认；拒绝后 agent 收到 block 原因；待审批时点中止，待审批项被清除且 agent 结束。）
 - **S9 pi 包管理**：`Pi: Install Package` / `Pi: List Packages` / `Pi: Remove Package`。（Mac 上：安装 `../pi-config`（裸路径）后 `~/.pi/agent/settings.json` 出现该包，重启后其主题/扩展被加载。受限机上：用随扩展发布的 `test-fixtures/ext-smoke` 目录作为本地包源验证同一流程，因为该机无法拷入 pi-config；验收只要求"本次安装后重启可用"，扩展升级后失效属已知限制。输入 `npm:xxx` 得到明确的"需要 npm"错误。）

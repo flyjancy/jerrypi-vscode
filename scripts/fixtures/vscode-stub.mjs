@@ -230,7 +230,9 @@ export const window = {
     return Promise.resolve(state().inputBoxAnswers.shift());
   },
   showTextDocument(uri, options) {
-    record("showTextDocument", { uri: uri?.toString?.() ?? String(uri), options });
+    // 两种调用形都有：`showTextDocument(Uri)`（chatView 打开工具写的文件）与
+    // `showTextDocument(文档对象)`（`openTextDocument(uri)` 的返回）。
+    record("showTextDocument", { uri: uri?.uri?.toString?.() ?? uri?.toString?.() ?? String(uri), options });
     return Promise.resolve({ uri });
   },
   registerWebviewViewProvider(id, provider, options) {
@@ -287,7 +289,7 @@ export const workspace = {
     writeFile: () => Promise.resolve(),
     stat: () => Promise.resolve({}),
   },
-  openTextDocument: () => Promise.resolve({}),
+  openTextDocument: (uri) => Promise.resolve({ uri }),
 };
 
 export const extensions = { getExtension: () => undefined };
