@@ -167,6 +167,7 @@ async function buildModules(tempDir) {
       `export { registerCommands } from ${JSON.stringify(path.join(REPO_ROOT, "src/commands"))};`,
       `export { describeAuthSource } from ${JSON.stringify(path.join(REPO_ROOT, "src/shared/format"))};`,
       `export { sidesOfPatch, pathLabelOf, HUNK_GAP } from ${JSON.stringify(path.join(REPO_ROOT, "src/shared/patch"))};`,
+      `export { createFileChanges, recordEditsFromMessages, diffFieldsOf } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/filechanges"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -184,7 +185,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 
@@ -1141,6 +1142,132 @@ check(
     check("A1：Windows 形态的路径也取得到 basename", pathLabelOf(patchOf("--- C:\\dir\\old.ts", "+++ C:\\dir\\new.ts", "@@ -1 +1 @@", "-a", "+b")) === "new.ts", pathLabelOf(patchOf("--- C:\\dir\\old.ts", "+++ C:\\dir\\new.ts", "@@ -1 +1 @@", "-a", "+b")));
     check("A1：带时间戳尾巴时只取文件名", pathLabelOf(patchOf("--- a.ts\t2026-01-01 12:00:00 +0800", "+++ a.ts\t2026-01-01 12:00:00 +0800", "@@ -1 +1 @@", "-a", "+b")) === "a.ts", pathLabelOf(patchOf("--- a.ts\t2026-01-01 12:00:00 +0800", "+++ a.ts\t2026-01-01 12:00:00 +0800", "@@ -1 +1 @@", "-a", "+b")));
     check("A1：没有任何头时返回空串（不瞎猜）", pathLabelOf("@@ -1 +1 @@\n-a\n+b\n") === "", pathLabelOf("@@ -1 +1 @@\n-a\n+b\n"));
+  }
+}
+
+// ------------------------------- S7 第 2 步：filechanges 的 store 与重放登记（A2/A4/A10）
+//
+// 三条断言都对着**真实形态**（不是人造夹具）：
+//   - A2① 条数上限只数活记录（评审第 2 轮 B1 的死锁就出在这里）
+//   - A2② patch 可覆盖墓碑（重放的真实形态：会话里 edit 超过上限）
+//   - A4①② 重放只登记 edit、write 的"不可用"是派生的（第 1 轮 B1 的覆盖缺口）
+//   - A10 失败的 edit（`details = {}`）既不登记也不给"不可用"
+{
+  const P = (n) => `--- a.ts\n+++ a.ts\n@@ -1,1 +1,1 @@\n-x${n}\n+y${n}\n`;
+  const editMsg = (id, patch) => ({ role: "toolResult", toolName: "edit", toolCallId: id, details: { patch } });
+  const failedEdit = (id) => ({ role: "toolResult", toolName: "edit", toolCallId: id, details: {}, isError: true });
+  const writeMsg = (id) => ({ role: "toolResult", toolName: "write", toolCallId: id });
+
+  // ---- A2①：条数上限只数活记录（默认墓碑上限很宽，先单看这一条语义）
+  {
+    const store = createFileChanges({ maxPatches: 3 });
+    for (let i = 0; i < 10; i++) store.recordEdit({ toolCallId: `p${i}`, path: "a.ts", patch: P(i) });
+    check("A2①：活记录数 === 上限（墓碑不占名额）", store.size().live === 3, JSON.stringify(store.size()));
+    const tomb = store.get("p0");
+    check("A2①：最早的记录变成墓碑（不是消失）", tomb?.kind === "unavailable" && tomb.why === "evicted", JSON.stringify(tomb));
+    check("A2①：最近 3 条还在", store.get("p9")?.kind === "patch" && store.get("p7")?.kind === "patch", JSON.stringify(store.get("p7")));
+    check(
+      "A2①：墓碑一条也不比活记录少（10 插 3 活 → 7 墓碑）",
+      store.size().tombstones === 7,
+      JSON.stringify(store.size()),
+    );
+  }
+
+  // ---- A2①b：墓碑自己也有上限（超了丢最旧的，回落成 none —— 不是坏链）
+  {
+    const store = createFileChanges({ maxPatches: 1, maxTombstones: 2 });
+    for (let i = 0; i < 5; i++) store.recordEdit({ toolCallId: `q${i}`, path: "a.ts", patch: P(i) });
+    check("A2①b：墓碑条数封顶", store.size().tombstones === 2, JSON.stringify(store.size()));
+    check("A2①b：最旧的墓碑被丢掉（get 不到 → 派生为 none）", store.get("q0") === undefined, JSON.stringify(store.get("q0")));
+    check("A2①b：最新那个墓碑还在（留的是近期的）", store.get("q3")?.kind === "unavailable", JSON.stringify(store.get("q3")));
+  }
+
+  // ---- A2②：patch 可覆盖墓碑（重放的真实形态）
+  {
+    const store = createFileChanges({ maxPatches: 1, maxTombstones: 10 });
+    store.recordEdit({ toolCallId: "e1", path: "a.ts", patch: P(1) });
+    store.recordEdit({ toolCallId: "e2", path: "a.ts", patch: P(2) });
+    check("A2②：上限 1 时 e1 被淘汰成墓碑", store.get("e1")?.kind === "unavailable", JSON.stringify(store.get("e1")));
+    store.recordEdit({ toolCallId: "e1", path: "a.ts", patch: P(1) });
+    check(
+      "A2②：同 id 再登记 patch → 墓碑被救回来（重启后 edit 仍可打开）",
+      store.get("e1")?.kind === "patch",
+      JSON.stringify(store.get("e1")),
+    );
+    check("A2②：救回来之后 e2 变成墓碑（仍然只有一个活记录）", store.get("e2")?.kind === "unavailable", JSON.stringify(store.get("e2")));
+  }
+
+  // ---- A2③：单条过大 / 读失败 → unavailable，且内容**没有**存进来
+  {
+    const store = createFileChanges({ maxSingleBytes: 64 });
+    store.recordEdit({ toolCallId: "big", path: "a.ts", patch: `--- a.ts\n+++ a.ts\n@@ -1 +1 @@\n-${"x".repeat(200)}\n+y\n` });
+    const rec = store.get("big");
+    check("A2③：单条超过上限 → unavailable{too-large}", rec?.kind === "unavailable" && rec.why === "too-large", JSON.stringify(rec));
+    check("A2③：没有把 patch 存进来", rec?.kind !== "patch", JSON.stringify(rec));
+    store.recordWrite({ toolCallId: "w1", path: "b.ts", before: null, after: "x", newFile: true, failure: "read-failed" });
+    const w = store.get("w1");
+    check("A2③：write 读失败 → unavailable{read-failed}", w?.kind === "unavailable" && w.why === "read-failed", JSON.stringify(w));
+  }
+
+  // ---- A2④：write 的前后内容按 FIFO 淘汰；字节上限对两侧都生效
+  {
+    const store = createFileChanges({ maxSnapshots: 2, maxSnapshotBytes: 1000 });
+    store.recordWrite({ toolCallId: "w1", path: "b.ts", before: null, after: "one", newFile: true });
+    store.recordWrite({ toolCallId: "w2", path: "b.ts", before: "one", after: "two", newFile: false });
+    store.recordWrite({ toolCallId: "w3", path: "b.ts", before: "two", after: "three", newFile: false });
+    check("A2④：write 超过条数上限 → 最旧的成墓碑", store.get("w1")?.kind === "unavailable" && store.get("w2")?.kind === "snapshot", JSON.stringify(store.get("w1")));
+    const fat = createFileChanges({ maxSnapshotBytes: 8 });
+    fat.recordWrite({ toolCallId: "big", path: "b.ts", before: "x".repeat(50), after: "y".repeat(50), newFile: false });
+    check("A2④：write 超过字节上限 → 也成墓碑", fat.get("big")?.kind === "unavailable", JSON.stringify(fat.get("big")));
+  }
+
+  // ---- A4：重放口径（① 空 store；② 先有实时快照再重放 —— ② 才是能红的那条）
+  {
+    const store = createFileChanges();
+    recordEditsFromMessages([editMsg("e1", P(1)), writeMsg("w1")], store);
+    check(
+      "A4①：重放登记 edit 的 patch（write 没有 details，登记不了）",
+      store.get("e1")?.kind === "patch" && store.get("w1") === undefined,
+      JSON.stringify([store.get("e1"), store.get("w1")]),
+    );
+    check(
+      "A4①：没有记录的 write → 派生为 diffUnavailable:none",
+      JSON.stringify(diffFieldsOf(store, { toolCallId: "w1", toolName: "write", isError: false, pending: false })) ===
+        JSON.stringify({ diffUnavailable: "none" }),
+      JSON.stringify(diffFieldsOf(store, { toolCallId: "w1", toolName: "write", isError: false, pending: false })),
+    );
+
+    const s2 = createFileChanges();
+    s2.recordWrite({ toolCallId: "w1", path: "b.ts", before: null, after: "one", newFile: true });
+    recordEditsFromMessages([editMsg("e1", P(1)), writeMsg("w1")], s2);
+    check(
+      "A4②：重放**不会**把实时快照改写成 unavailable",
+      s2.get("w1")?.kind === "snapshot" &&
+        JSON.stringify(diffFieldsOf(s2, { toolCallId: "w1", toolName: "write", isError: false, pending: false })) ===
+          JSON.stringify({ diff: "snapshot" }),
+      JSON.stringify([s2.get("w1"), diffFieldsOf(s2, { toolCallId: "w1", toolName: "write", isError: false, pending: false })]),
+    );
+  }
+
+  // ---- A10：失败的 edit（details = {}）既不登记、也不给"不可用"
+  {
+    const store = createFileChanges();
+    recordEditsFromMessages([failedEdit("bad")], store);
+    check("A10：失败的 edit 不登记", store.get("bad") === undefined, JSON.stringify(store.get("bad")));
+    const fields = diffFieldsOf(store, { toolCallId: "bad", toolName: "edit", isError: true, pending: false });
+    check("A10：失败的工具卡片两个字段都缺席", JSON.stringify(fields) === "{}", JSON.stringify(fields));
+    const ok = diffFieldsOf(store, { toolCallId: "missing", toolName: "edit", isError: false, pending: false });
+    check("A10：成功的 edit 但没有记录 → 才给 none", JSON.stringify(ok) === JSON.stringify({ diffUnavailable: "none" }), JSON.stringify(ok));
+  }
+
+  // ---- 运行中的卡片什么都不给（第 3 轮之后补的缺口）
+  {
+    const store = createFileChanges();
+    check(
+      "pending 的卡片既无 diff 也无文案",
+      JSON.stringify(diffFieldsOf(store, { toolCallId: "x", toolName: "write", isError: false, pending: true })) === "{}",
+      JSON.stringify(diffFieldsOf(store, { toolCallId: "x", toolName: "write", isError: false, pending: true })),
+    );
   }
 }
 

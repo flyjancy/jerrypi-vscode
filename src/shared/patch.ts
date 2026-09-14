@@ -116,7 +116,7 @@ function flatten(hunks: PatchHunkSides[], side: "left" | "right", noNewline: boo
  * GNU diff 的 `\t<时间戳>`。**不 import `node:path`** —— 本文件会被打进浏览器产物
  * （`esbuild.mjs` 第 10 条），所以 basename 要自己同时按 `/` 与 `\` 切。
  */
-export function pathLabelOf(patch: string): string {
+export function patchPathOf(patch: string): string {
   const lines = patch.split("\n");
   let minus: string | undefined;
   let plus: string | undefined;
@@ -126,13 +126,19 @@ export function pathLabelOf(patch: string): string {
     if (line.startsWith("--- ") && minus === undefined) minus = line.slice(4);
     else if (line.startsWith("+++ ") && plus === undefined) plus = line.slice(4);
   }
-  const pick = (value: string | undefined): string => {
+  const clean = (value: string | undefined): string => {
     if (value === undefined) return "";
-    const tab = value.indexOf("\t");
+    const tab = value.indexOf("\t"); // GNU diff 会跟一个 \t<时间戳>
     const path = (tab === -1 ? value : value.slice(0, tab)).trim();
-    if (path === "" || path === "/dev/null") return "";
-    const parts = path.split(/[/\\]/);
-    return parts[parts.length - 1] ?? "";
+    return path === "/dev/null" ? "" : path;
   };
-  return pick(plus) || pick(minus);
+  return clean(plus) || clean(minus);
+}
+
+/** basename（标题用）：同时按 `/` 与 `\` 切 —— Windows 的 `C:\\a\\b.ts` 也要取到 `b.ts`。 */
+export function pathLabelOf(patch: string): string {
+  const path = patchPathOf(patch);
+  if (path === "") return "";
+  const parts = path.split(/[/\\]/);
+  return parts[parts.length - 1] ?? "";
 }
