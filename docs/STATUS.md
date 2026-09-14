@@ -11,7 +11,7 @@
 
 ## 1. 现在
 
-**进行中**：**S6 第 1–9 步已完成**（0.1.8 已打包、自动门禁全绿，含 `npm run check:gate` **15/15 GATE PASS**）。**现在等你做 Mac 验收的两个动作（M1/M2，约 3 分钟）**，见 `docs/S6-plan.md` §7；通过后上传 0.1.8 → Windows W0/W1（2026-09-14）
+**进行中**：**S6 第 1–9 步已完成，但 M1（真机验收）当场抓到一个真 bug 并已修**（`readAgentDirSetting` 把 section 与 key 搞反 → 真机上永远“来源：默认”；修后真机复跑已是“来源：设置”；host-check 95/95 钉住）。**现在等你重做 Mac 验收的两个动作（M1/M2，约 3 分钟）**，见 `docs/S6-plan.md` §7（2026-09-14）
 
 | | |
 | --- | --- |
@@ -31,11 +31,11 @@
 | `npm run check:render` | **114** |
 | `node scripts/tool-text-check.mjs` | **91** |
 | `node scripts/webview-dom-check.mjs` | **75** |
-| `node scripts/host-check.mjs` | **91** |
+| `node scripts/host-check.mjs` | **95** |
 | `npm run check:controller`（真模型，**不进 CI**） | **98/98**（含一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
-| `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **15 项（12 gating + T5c/T12/T13 advisory）GATE PASS** |
+| `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **15 项（12 gating + T5c/T12/T13 advisory）GATE PASS**（T13：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[HTTP_PROXY, HTTPS_PROXY, http_proxy, https_proxy]；PI_OFFLINE=未设`） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **15 项（12 gating + T5c/T12/T13 advisory）GATE PASS**（0.1.8，无头跑过；Windows 的 W0 再跑一次真宿主） |
-| `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **0.1.8：338 文件 / 5.75 MB**（门禁 30 MB；文件清单与 0.1.7 逐个相同）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |
+| `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **0.1.8：338 文件 / 5.75 MB**（门禁 30 MB；文件清单与 0.1.7 逐个相同；9-5 修复后已重新打包）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |
 
 ## 2. 欠着的事（已知、刻意未做或暂时做不到）
 

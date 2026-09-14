@@ -517,8 +517,11 @@ API Error: Request rejected (429) · api key 日限额已用完
 | 9-2 | 无头闸门实测 | **15/15 PASS / GATE PASS**（T5c/T12/T13 都 PASS）。T13 报告：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[HTTP_PROXY, HTTPS_PROXY, http_proxy, https_proxy]；PI_OFFLINE=未设`。注：`wrapped` 不等于“被 VS Code 换过” —— Node 自己的全局 `fetch` 本来就不是 `[native code]` 实现；T13 报的是**身份**，不是好坏 |
 | 9-3 | 打包 0.1.8 | **338 文件 / 5.75 MB**，`check-vsix` OK；`unzip -Z1` 与 0.1.7 的**文件清单逐个相同**（S6 没把开发文件带进包） |
 | 9-4 | **M1 按原写法会卡在“没有凭据”上**（2026-09-14，·**未经复核**）：指向空目录后 `auth.json` 不在，而面板发消息需要一把 key | M1 里补一句“若面板报没有凭据，先 `Pi: Set API Key` 设一把 deepseek key”—— 这一步本身就是 C1 的真机形态（空目录 + 只靠 SecretStorage 对话），不额外增加人工项 |
+| 9-5 | ⚠️ **M1 真机抓到真 bug（自动门禁全绿也没拦住）**：`readAgentDirSetting()` 写成 `getConfiguration("jerrypi").get("jerrypi.agentDir")` —— **section 与 key 重复**，真机一路查成 `jerrypi.jerrypi.agentDir`，静默拿到默认值。A1/A2/A3 全没抱到它：A2 只测纯函数、A3 只测监听，而 host-check 的 vscode 桩当时也不区分这两种写法（忠实度不够）。用户按 M1 做了 6 次重载都是“来源：默认”；我用探针在同一 profile 里对比（同一种读法，探针读到值、jerrypi 读到空）才定位到 | 修真两处：① `config.ts` 新增 `readConfigValue(id, fallback)` —— 只在一处拆 section，三个读函数都用它（完整 id → `section="jerrypi"`、`key="agentDir"`）；② **桩补忠实度**：`getConfiguration(s).get(k)` 按真 vscode 的 `${s}.${k}` 查。host-check 新增 3 条真 API 断言（**95/95**），能红验证：换回旧写法 → `readAgentDirSetting()` 那条红。**真机复跑：`[jerrypi] agentDir=/tmp/jerrypi-m1-agent（来源：设置）`，目录也被 pi 建出来了** |
 
-**第 9 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（14 个检查脚本可解析）｜`check:controller` **98/98**｜`npm run check:gate` **15/15 GATE PASS**｜`check-vsix` OK（338 文件 / 5.75 MB）。
+**第 9 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（host-check **95/95**，含 9-5 的修复）｜`check:controller` **98/98**｜`npm run check:gate` **15/15 GATE PASS**｜`check-vsix` OK（338 文件 / 5.75 MB，修复后重新打包）。
+
+**M1 验收期的这条修复（9-5）正是 S6-plan §7 判“为什么要人工”的那三类中的第③类（真进程）**：段与 key 的语义只有在真 VS Code 里才成立，任何基于桩的自动断言都能被一个不够忠实的桩一起骗过去。
 
 ## 12. 实施与验收结果
 

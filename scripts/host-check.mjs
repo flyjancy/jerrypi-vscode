@@ -27,7 +27,7 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const STUB_PATH = path.join(SCRIPT_DIR, "fixtures", "vscode-stub.mjs");
 
 const stub = await import(pathToFileURL(STUB_PATH).href);
-const { resetStub, callsOf, stubCalls, queueQuickPickResponse, queueWarningResponse, queueInformationResponse, queueInputBoxAnswer, fireConfigurationChange } = stub;
+const { resetStub, callsOf, stubCalls, queueQuickPickResponse, queueWarningResponse, queueInformationResponse, queueInputBoxAnswer, queueConfiguration, fireConfigurationChange } = stub;
 
 const results = [];
 const check = (name, ok, detail = "") => results.push([name, ok, detail]);
@@ -161,7 +161,7 @@ async function buildModules(tempDir) {
       `export { buildWebviewHtml } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/webviewHtml"))};`,
       `export { replaceSessionWithConfirm } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/sessionActions"))};`,
       `export { sessionToItem } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/sessionPicker"))};`,
-      `export { applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/config"))};`,
+      `export { applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/config"))};`,
       `export { clearStoredApiKeys, getModelRuntime } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/runtime"))};`,
       `export { loadPi } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/loader"))};`,
       `export { registerCommands } from ${JSON.stringify(path.join(REPO_ROOT, "src/commands"))};`,
@@ -183,7 +183,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 
@@ -736,6 +736,21 @@ check(
   check("A2：日志那行带来源（M1 的判据）",
     describeAgentDir({ source: "setting", dir: "/tmp/agent-x" }) === "[jerrypi] agentDir=/tmp/agent-x（来源：设置）",
     describeAgentDir({ source: "setting", dir: "/tmp/agent-x" }));
+}
+
+// A2 的**真 API 那一半**（M1 真机验收抓到的 bug，2026-09-14）：
+// `getConfiguration(section).get(key)` 的 `key` 是相对 key —— 第一版传了完整 id
+// （`jerrypi.agentDir`），真机上一路查成 `jerrypi.jerrypi.agentDir`、静默拿到默认值；
+// 而当时的桩不区分这两种写法，所以自动门禁全绿。桩现在按真 vscode 的 `${section}.${key}` 查。
+{
+  resetStub();
+  queueConfiguration("jerrypi", { agentDir: "/tmp/from-config", proxy: "http://proxy.invalid:1", approvalMode: "mutating" });
+  check("A2：readAgentDirSetting() 读到 section 相对 key 下的值（不是 jerrypi.jerrypi.…）",
+    readAgentDirSetting() === "/tmp/from-config", readAgentDirSetting());
+  check("A2：readProxySetting() 同上",
+    readProxySetting() === "http://proxy.invalid:1", readProxySetting());
+  check("A2：readApprovalModeSetting() 同上（它的默认是 off，不能用空串测试）",
+    readApprovalModeSetting() === "mutating", readApprovalModeSetting());
 }
 
 // A3：真注册一个监听器，再**真的**触发一次配置变更事件

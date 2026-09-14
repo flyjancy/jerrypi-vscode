@@ -271,8 +271,16 @@ export const workspace = {
   getConfiguration(section) {
     record("getConfiguration", { section });
     const values = state().configuration.get(section) ?? {};
+    // 真 vscode 的语义：`getConfiguration("a").get("b")` 查的是 **`a.b`**。
+    // 所以这里按 `${section}.${key}` 查 —— “把完整 id 当 key 传”的写法会像真机一样查不到。
+    // （S6 第一版就是这个 bug，而当时的桩不区分这两种写法，于是自动门禁全绿；M1 真机一跑就露馅。）
+    const flat = {};
+    for (const [key, value] of Object.entries(values)) flat[`${section}.${key}`] = value;
     return {
-      get: (key, fallback) => values[key] ?? fallback,
+      get: (key, fallback) => {
+        const id = `${section}.${key}`;
+        return Object.hasOwn(flat, id) ? flat[id] : fallback;
+      },
       update: () => Promise.resolve(),
     };
   },

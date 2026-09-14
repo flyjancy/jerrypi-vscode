@@ -62,18 +62,36 @@ export function applyAgentDirSetting(
   return { source: "setting", dir: wanted };
 }
 
-/** 读设置值（唯一读 vscode 的地方，薄到不需要断言）。 */
+/**
+ * 读一个设置（按**完整 id**，例如 `jerrypi.agentDir`）。
+ *
+ * ⚠️ 为什么需要这个助手（2026-09-14，M1 真机验收抓到的 bug）：
+ * `getConfiguration(section).get(key)` 里的 `key` 是**相对 key** —— 传完整 id 会查成
+ * `jerrypi.jerrypi.agentDir`，静默拿到默认值。S6 第一版就是 `getConfiguration("jerrypi").get("jerrypi.agentDir")`，
+ * 而 host-check 的 vscode 桩当时不区分这两种写法（于是自动门禁全绿）；真机一跑就露馅。
+ * 把“拆 section”收进一处后，调用方永远只写完整 id，这个错误在类型与结构上都不再可能出现。
+ */
+export function readConfigValue<T>(id: string, fallback: T): T {
+  const dot = id.indexOf(".");
+  const section = dot < 0 ? undefined : id.slice(0, dot);
+  const key = dot < 0 ? id : id.slice(dot + 1);
+  const config =
+    section === undefined ? vscode.workspace.getConfiguration() : vscode.workspace.getConfiguration(section);
+  return config.get<T>(key, fallback);
+}
+
+/** 读设置值（唯一读 vscode 的地方，薄到不需要断言 —— 除非把 section 与 key 搞反，见上）。 */
 export function readAgentDirSetting(): string {
-  return vscode.workspace.getConfiguration("jerrypi").get<string>(AGENT_DIR_SETTING, "");
+  return readConfigValue<string>(AGENT_DIR_SETTING, "");
 }
 
 /** 读另外两项（S6 只登记，见 §2/§3.4）。 */
 export function readProxySetting(): string {
-  return vscode.workspace.getConfiguration("jerrypi").get<string>(PROXY_SETTING, "");
+  return readConfigValue<string>(PROXY_SETTING, "");
 }
 
 export function readApprovalModeSetting(): string {
-  return vscode.workspace.getConfiguration("jerrypi").get<string>(APPROVAL_MODE_SETTING, "off");
+  return readConfigValue<string>(APPROVAL_MODE_SETTING, "off");
 }
 
 /** 给 Output 写一行"生效的 agentDir + 来源"（M1 的判据就是这一行）。 */
