@@ -168,6 +168,7 @@ async function buildModules(tempDir) {
       `export { describeAuthSource } from ${JSON.stringify(path.join(REPO_ROOT, "src/shared/format"))};`,
       `export { sidesOfPatch, pathLabelOf, HUNK_GAP } from ${JSON.stringify(path.join(REPO_ROOT, "src/shared/patch"))};`,
       `export { createFileChanges, recordEditsFromMessages, diffFieldsOf } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/filechanges"))};`,
+      `export { createCustomTools } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/custom-tools"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -185,7 +186,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 
@@ -1258,6 +1259,41 @@ check(
     check("A10：失败的工具卡片两个字段都缺席", JSON.stringify(fields) === "{}", JSON.stringify(fields));
     const ok = diffFieldsOf(store, { toolCallId: "missing", toolName: "edit", isError: false, pending: false });
     check("A10：成功的 edit 但没有记录 → 才给 none", JSON.stringify(ok) === JSON.stringify({ diffUnavailable: "none" }), JSON.stringify(ok));
+  }
+
+  // ---- A6：真写工具（真 pi、不用模型）—— 同一文件顺序两次写，before/after 必须接得上
+  //
+  // ⚠️ 这是 host-check **第一次真执行 pi 的工具、真写盘**（此前它只碰 ModelRuntime 与
+  // catalog，不碰文件系统）。所以按 AGENTS.md §4 的纪律：在 `os.tmpdir()` 下建一次性
+  // 目录、`finally` 清理，**清理前断言目标就在那个目录之下**。
+  {
+    const piModule = await loadPi(REPO_ROOT);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-write-"));
+    const target = path.join(dir, "note.txt");
+    const records = [];
+    try {
+      const tools = createCustomTools(piModule, dir, { record: (r) => records.push(r) });
+      const writeTool = tools.find((tool) => tool.name === "write");
+      check("A6：createCustomTools 里能找到被包装的 write", writeTool !== undefined, JSON.stringify(tools.map((t) => t.name)));
+      if (writeTool !== undefined) {
+        await writeTool.execute("id-1", { path: target, content: "X" }, undefined, undefined, { cwd: dir });
+        await writeTool.execute("id-2", { path: target, content: "Y" }, undefined, undefined, { cwd: dir });
+        check("A6：第一次写 → before=null / newFile", records[0]?.before === null && records[0]?.newFile === true, JSON.stringify(records[0]));
+        check("A6：第一次写的 after 是写进去的内容", records[0]?.after === "X", JSON.stringify(records[0]?.after));
+        check(
+          "A6：第二次写 → before 正是第一次写进去的内容（互斥队列内读盘）",
+          records[1]?.before === "X" && records[1]?.after === "Y",
+          JSON.stringify(records[1]),
+        );
+        check("A6：磁盘上最终是第二次的内容", fs.readFileSync(target, "utf8") === "Y", fs.readFileSync(target, "utf8"));
+      }
+    } finally {
+      // 清理守卫：只删我们自己建在 tmpdir 下的那个目录。
+      if (!dir.startsWith(os.tmpdir() + path.sep)) {
+        throw new Error(`host-check: 拒绝清理不在 tmpdir 下的目录：${dir}`);
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 
   // ---- 运行中的卡片什么都不给（第 3 轮之后补的缺口）

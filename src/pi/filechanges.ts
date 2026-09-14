@@ -62,12 +62,15 @@ export interface FileChangeOptions {
   maxTombstones?: number;
 }
 
+/** 读旧内容的硬上限（`custom-tools.ts` 在 `stat` 之后按它决定读不读）。 */
+export const MAX_SNAPSHOT_READ_BYTES = 2 * 1024 * 1024;
+
 const DEFAULTS = {
   maxPatches: 100,
   maxSnapshots: 20,
   maxPatchBytes: 8 * 1024 * 1024,
   maxSnapshotBytes: 8 * 1024 * 1024,
-  maxSingleBytes: 2 * 1024 * 1024,
+  maxSingleBytes: MAX_SNAPSHOT_READ_BYTES,
   maxTombstones: 500,
 };
 

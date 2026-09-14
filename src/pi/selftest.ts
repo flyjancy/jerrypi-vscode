@@ -33,6 +33,7 @@ import {
 import type { ApiKeyStore } from "./runtime";
 import { getModelRuntime } from "./runtime";
 import { describeProxyIdentity } from "../shared/format";
+import type { WriteRecord } from "./custom-tools";
 import { createSessionHost, type SessionHost } from "./session";
 import { resolveSessionDir, sessionsRootOf } from "./sessions";
 import { createSelfTestUIContext } from "./selftest-ui";
@@ -367,9 +368,11 @@ class SelfTestRun {
         mode,
         sink: this.sink,
         additionalExtensionPaths: [fixtureIndex],
-        writeProbe: {
-          record: (toolCallId: string, absolutePath: string) => {
-            appendFileSync(markerWrite, `${toolCallId}\t${absolutePath}\n`);
+        writeRecorder: {
+          record: (record: WriteRecord) => {
+            // 一行一条 JSON：既是"包装真的被调用"的证据（T6），也是 S7 A9 要的
+            // before/after 记录（tab 分隔装不下多行的文件内容）。
+            appendFileSync(markerWrite, `${JSON.stringify(record)}\n`);
           },
         },
         onEvent: (event: AgentSessionEvent) => {
@@ -1011,15 +1014,30 @@ class SelfTestRun {
       fail("E_TOOL_OVERRIDE", "wrappedWrite 没有被调用（标记文件为空）");
     }
     const lastCall = writeMarker.trim().split("\n").at(-1) ?? "";
-    const [recordedId, recordedPath] = lastCall.split("\t");
-    if (recordedId === undefined || recordedId.length === 0) {
-      fail("E_TOOL_OVERRIDE", `标记内容缺少 toolCallId：${lastCall}`);
+    let recorded: WriteRecord | undefined;
+    try {
+      recorded = JSON.parse(lastCall) as WriteRecord;
+    } catch {
+      fail("E_TOOL_OVERRIDE", `标记不是一行 JSON：${lastCall.slice(0, 120)}`);
     }
-    if (recordedPath !== target) {
-      fail("E_TOOL_OVERRIDE", `记录路径 ${recordedPath} != ${target}`);
+    if (typeof recorded.toolCallId !== "string" || recorded.toolCallId.length === 0) {
+      fail("E_TOOL_OVERRIDE", `标记内容缺少 toolCallId：${lastCall.slice(0, 120)}`);
+    }
+    if (recorded.absolutePath !== target) {
+      fail("E_TOOL_OVERRIDE", `记录路径 ${recorded.absolutePath} != ${target}`);
+    }
+    // A9（S7）：包装不仅要"被调用"，还要把**该次调用**的前后内容记对。
+    if (recorded.before !== null) {
+      fail(
+        "E_WRITE_SNAPSHOT",
+        `这是本目录里对该文件的第一次写，before 应为 null；实际 ${JSON.stringify(recorded.before)?.slice(0, 80)}`,
+      );
+    }
+    if (recorded.newFile !== true || !recorded.after.includes("jerrypi-selftest")) {
+      fail("E_WRITE_SNAPSHOT", `after/newFile 不对：newFile=${String(recorded.newFile)} after=${JSON.stringify(recorded.after)?.slice(0, 80)}`);
     }
 
-    return `内容正确；patch ${String(patch).length} 字符；wrappedWrite 捕获 toolCallId=${recordedId}；model=${describeModel(session)}`;
+    return `内容正确；patch ${String(patch).length} 字符；wrappedWrite 捕获 toolCallId=${recorded.toolCallId}（before=null/newFile 已核对）；model=${describeModel(session)}`;
   }
 
   // -------------------------------------------------------------------------

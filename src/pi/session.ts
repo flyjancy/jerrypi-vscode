@@ -23,7 +23,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { bindSession, type EventSink, type RuntimeMode, type SessionBinding } from "./bindings";
-import { createCustomTools, type WriteProbe } from "./custom-tools";
+import { createCustomTools, type WriteRecorder } from "./custom-tools";
 import type { PiModule } from "./loader";
 import { getModelRuntime, type ApiKeyStore } from "./runtime";
 
@@ -39,7 +39,7 @@ export interface SessionHostOptions {
   /** 自测用：把 pi 自己挑的模型改掉时的目标模型（一般不需要）。 */
   model?: unknown;
   additionalExtensionPaths?: string[];
-  writeProbe?: WriteProbe;
+  writeRecorder?: WriteRecorder;
   /**
    * 是否信任工作区里的项目级设置。
    *
@@ -88,7 +88,7 @@ export async function createSessionHost(options: SessionHostOptions): Promise<Se
       },
     });
 
-    const customTools: ToolDefinition[] = createCustomTools(pi, cwd, options.writeProbe);
+    const customTools: ToolDefinition[] = createCustomTools(pi, cwd, options.writeRecorder);
 
     const created = await pi.createAgentSessionFromServices({
       services,
