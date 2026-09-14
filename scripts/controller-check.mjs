@@ -23,6 +23,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import { delimiter } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -59,6 +60,7 @@ async function loadModules(tempDir) {
       `export { SessionHostController } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/controller"))};`,
       `export { createSelfTestUIContext } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/selftest-ui"))};`,
       `export { loadPi } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/loader"))};`,
+      `export { getModelRuntime } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/runtime"))};`,
     ].join("\n"),
     "utf8",
   );
@@ -114,7 +116,7 @@ async function main() {
   }
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-controller-check-"));
-  const { SessionHostController, createSelfTestUIContext, loadPi } = await loadModules(tempDir);
+  const { SessionHostController, createSelfTestUIContext, loadPi, getModelRuntime } = await loadModules(tempDir);
   const pi = await loadPi(REPO_ROOT);
   const sourceAgentDir = agentDirOf(pi);
   if (!fs.existsSync(path.join(sourceAgentDir, "auth.json"))) {
@@ -834,6 +836,66 @@ async function main() {
         check("D15：新建会话之后**仍然**是面板里选的那个模型（不被兜底改回去）",
           controller.snapshot().meta.model === "deepseek/deepseek-v4-flash-vision-exp",
           controller.snapshot().meta.model);
+      }
+    }
+
+    // ------------------------------- 2. agentDir 贯通（C3 的三条链路，S6 第 2 步）
+    //
+    // 关键：**不传 `agentDir` 选项**，只设 `process.env.PI_CODING_AGENT_DIR` —— 这样走的是真链路：
+    // 设置 → 环境变量 → `pi.getAgentDir()` → 各调用方（`controller.ts:288` 的 `?? pi.getAgentDir()`）。
+    // 传选项只能证明"参数被尊重"，那是从 S5 起就一直成立的事（S6-plan §10 第 4 轮 S1）。
+    {
+      const c3Root = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-c3-"));
+      const c3Agent = path.join(c3Root, "agent");
+      const c3Cwd = path.join(c3Root, "cwd");
+      for (const dir of [c3Agent, c3Cwd]) fs.mkdirSync(dir, { recursive: true });
+      // 夹具：auth.json 里放一个**只在这里存在**的 provider —— "读到了新目录"与"读了默认目录"
+      // 必然给出不同答案，所以这两条断言能红，不是恒绿。
+      const probeProvider = "jerrypi-c3-probe";
+      // 夹具只要一个**只在这里存在**的 provider —— 这两条断言**都不发模型请求**（见下），
+      // 所以不必拷真凭据进来（少一次"把用户的 key 抄进临时目录"）。
+      fs.writeFileSync(path.join(c3Agent, "auth.json"), JSON.stringify({ [probeProvider]: { type: "api_key", key: "sk-not-a-real-key" } }), "utf8");
+      const realAuth = path.join(pi.getAgentDir(), "auth.json");
+      const sha = (file) => (fs.existsSync(file) ? crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") : undefined);
+      const realBefore = sha(realAuth);
+      const savedEnv = process.env.PI_CODING_AGENT_DIR;
+      const savedRoot = process.env.PI_CODING_AGENT_SESSION_DIR;
+      delete process.env.PI_CODING_AGENT_SESSION_DIR; // 免得上游的会话目录开关干扰这条断言
+      process.env.PI_CODING_AGENT_DIR = c3Agent;
+      let c3;
+      try {
+        const effective = pi.getAgentDir();
+        check("A13/A14 的前提：设了环境变量之后 pi.getAgentDir() 真的变成它",
+          path.resolve(effective) === path.resolve(c3Agent), effective);
+
+        const c3Keys = { listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {} };
+        c3 = new SessionHostController({ pi, cwd: c3Cwd, keys: c3Keys, uiContext: createSelfTestUIContext(log), log, onMessage: () => {} });
+        await c3.ensure();
+        // A13 只看**路径**（`ensure()` 之后就有），所以不需要真对话 —— 上一版先发一条消息，
+        // 结果"链路被改坏"时红在 `ensure()` 的凭据错误上，报的是一句和本断言无关的话。
+        const file = c3.session?.sessionManager?.getSessionFile() ?? "";
+        const selfRoot = path.join(c3Agent, "sessions") + path.sep;
+        check("A13：只设环境变量（不传选项）→ 会话落在 <agentDir>/sessions/ 下", file.startsWith(selfRoot), file);
+
+        // A14 也只用本地判定：`ensure()` 已经用生效的 agentDir 建过 ModelRuntime（同一个缓存实例），
+        // `getProviderAuthStatus` 读的是 auth.json，不发请求。
+        const status = c3.session?.sessionManager === undefined ? {} : (await getModelRuntime(pi, effective, c3Keys)).getProviderAuthStatus(probeProvider);
+        check("A14：新目录 auth.json 里的 provider 被认出（source=stored）",
+          status.configured === true && status.source === "stored", JSON.stringify(status));
+
+        const defaultDir = path.join(process.env.HOME ?? "/", ".pi", "agent");
+        const other = await getModelRuntime(pi, defaultDir, c3Keys);
+        check("A14 的反向：默认目录里没有这个 provider（证明夹具有鉴别力）",
+          other.getProviderAuthStatus(probeProvider).configured !== true,
+          JSON.stringify(other.getProviderAuthStatus(probeProvider)));
+        check("A14：真实 ~/.pi/agent/auth.json 的 sha256 未变", sha(realAuth) === realBefore, realBefore);
+      } catch (error) {
+        check("A13/A14：agentDir 贯通", false, error instanceof Error ? error.message : String(error));
+      } finally {
+        await c3?.dispose().catch(() => undefined);
+        if (savedEnv === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = savedEnv;
+        if (savedRoot !== undefined) process.env.PI_CODING_AGENT_SESSION_DIR = savedRoot;
+        fs.rmSync(c3Root, { recursive: true, force: true });
       }
     }
 

@@ -145,8 +145,16 @@ export function registerCommands(
         const module = await pi();
         const agentDir = module.getAgentDir();
         const file = join(agentDir, "settings.json");
+        if (!existsSync(agentDir)) {
+          // S6 §3.6（评审 N6）：**不要替用户把目录建出来** —— 用户把 `jerrypi.agentDir`
+          // 拼错时，旧代码会替他在那个拼错的路径上创建一个目录。
+          // 创建这个目录的是 **pi**，时机是写第一个会话时（`session-manager.js:603`）。
+          void vscode.window.showWarningMessage(
+            `jerrypi: ${agentDir} 还不存在 —— 发一条消息后 pi 会建出来；如果不是你要的路径，检查 jerrypi.agentDir。`,
+          );
+          return;
+        }
         if (!existsSync(file)) {
-          await vscode.workspace.fs.createDirectory(vscode.Uri.file(agentDir));
           await writeFile(file, "{}\n", "utf8");
         }
         const document = await vscode.workspace.openTextDocument(vscode.Uri.file(file));

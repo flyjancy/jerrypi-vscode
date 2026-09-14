@@ -431,6 +431,19 @@ API Error: Request rejected (429) · api key 日限额已用完
 | 1-5 | `host-check` 的 vscode 桩缺 5 个能力（读设置、变更事件、信息消息） | 桩扩成：`getConfiguration(section)`（按段预置值）、`onDidChangeConfiguration`、`fireConfigurationChange(...)`、`queueInformationResponse`、`showInformationMessage(message, ...items)` —— 全部只"记录 + 预置返回"，不含业务判断（桩纪律） |
 | 1-6 | **能红验证**（AGENTS.md §2 要求） | ① 把 `jerrypi.proxy` 的 scope 故意改成 `window` → `settings-check` 1 条红；② 故意让 `applyAgentDirSetting` 覆盖已设的环境变量 → `host-check` 2 条红。都恢复后全绿 |
 
+### 第 2 步（agentDir 贯通，2026-09-13）
+
+| # | 发现 | 处置 |
+| --- | --- | --- |
+| 2-1 | **`controller-check` 里没有 `keys`**（各处都是内联的桩对象）→ 新断言直接引 `keys` 会红成"keys is not defined" | 用局部的 `c3Keys` |
+| 2-2 | A13/A14 的第一版夹具只放了那个 probe provider → `ensure()` 拿不到凭据、真对话跑不起来（红成"No API key found"） | 先并入真凭据；随后发现**这两条断言根本不需要对话**（`ensure()` 之后会话路径就有、ModelRuntime 也是同一个缓存实例）→ 去掉 prompt 与真凭据 |
+| 2-3 | **能红验证暴露了一个更值钱的问题**：第一版的失败发生在 `ensure()` 里，报的是"没有 API key"——**一句和本断言无关的话** | 把断言前移到 `ensure()` 之后、去掉 prompt → 再故意把 `controller.ts:288` 的 `?? pi.getAgentDir()` 改成写死路径，**红得精准**（报出 `/tmp/hardcoded-agent-dir/sessions/…`）。这正是 AGENTS.md 那条"红必须是断言失败"的延伸：**红的那句话也要能指到问题** |
+| 2-4 | A14 的夹具第一版用真凭据里的 provider（`deepseek`）→ **不具鉴别力**（默认目录里也有它，"读错目录"照样是 `stored`） | 改用**只在临时目录里存在**的 provider id（`jerrypi-c3-probe`），并加一条**反向**断言（默认目录里它不是 configured）证明鉴别力 |
+
+**A9（`Pi: Open Settings File` 打开的是 `<生效 agentDir>/settings.json`）的实现已按 §3.6 落地，但断言还没写**：它要跑注册后的命令（桩要支持 `workspace.fs.stat` 的可控失败与 `openTextDocument` 的记录）。下一步做第 4 步（host-check）时一起补 —— **不能忘**。
+
+**第 2 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**｜`check:controller` **87/87**（A13/A14 共 +5，含那条反向的鉴别力断言）｜闸门 **14/14 GATE PASS**（改前跑过一次）。
+
 **第 1 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（其中新增 `SETTINGS-CHECK OK (16/16)`，在用例 6 里跑）｜`host-check` **67/67**（A2/A3 共 +10）｜`check:controller` **82/82**｜闸门 **14/14 GATE PASS**。
 
 ## 12. 实施与验收结果
