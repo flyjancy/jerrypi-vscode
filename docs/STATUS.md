@@ -11,14 +11,14 @@
 
 ## 1. 现在
 
-**进行中**：**S6 第 1–9 步已完成，但 M1（真机验收）当场抓到一个真 bug 并已修**（`readAgentDirSetting` 把 section 与 key 搞反 → 真机上永远“来源：默认”；修后真机复跑已是“来源：设置”；host-check 95/95 钉住）。**现在等你重做 Mac 验收的两个动作（M1/M2，约 3 分钟）**，见 `docs/S6-plan.md` §7（2026-09-14）
+**进行中**：**S6 第 1–9 步完成，Mac 验收 ✅（M1/M2 通过）**。M1 当场抓到并修了 2 个真问题（通知里的 markdown 记号；读设置时 section/key 搞反的真 bug），0.1.8 已带修复重新打包。**下一步：你在 Marketplace 手动上传 0.1.8（预发布），再到 Windows 跑 W0/W1**（2026-09-14）
 
 | | |
 | --- | --- |
-| 阶段 | **S5 已关闭**；**S6 实施中**（第 1–9 步完成，0.1.8 已打包；待 Mac/Windows 验收，见 `docs/S6-plan.md` §9/§11） |
+| 阶段 | **S5 已关闭**；**S6 实施中**（第 1–9 步完成，Mac 验收 ✅；待上传 0.1.8 + Windows 验收，见 `docs/S6-plan.md` §9/§11/§12） |
 | 最新发布 | **0.1.7**（2026-09-13，预发布；S5 的全部内容） |
 | 发布核验 | `node scripts/compare-vsix.mjs 0.1.7` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,025,710 字节 / `04c60b7b…`）；tag `v0.1.7`；留档 `~/jerrypi-releases/jerrypi-0.1.7.vsix` |
-| 真机验收 | S4：Mac ✅ ／ Windows ✅（S4-plan §12.3）｜ **S5：Mac ✅ ／ Windows ✅**（`GATE PASS` 13 PASS / 1 SKIP = T12；W0/W1 明细见 S5-plan §12.3） |
+| 真机验收 | S4：Mac ✅ ／ Windows ✅（S4-plan §12.3）｜ S5：Mac ✅ ／ Windows ✅（S5-plan §12.3）｜ **S6：Mac ✅（M1/M2，2026-09-14；M1 抓到并修了 2 个真问题）/ Windows 待做**（S6-plan §12.3） |
 | 工作区 | `main` 与 origin 同步（S5 的提交与 `v0.1.7` tag 都已推）；工作区干净（logo 素材已由用户提交为 `77196c1`，并从 VSIX 里排除）。**总计划只有一份**：`docs/PLAN.md`（2026-09-13 已把根目录那份的 233 行评审记录并进去并删除，见 S5-plan §10.1 的 U6） |
 
 **会自动跑的东西（每个动作改完必须全绿）**：
@@ -70,8 +70,7 @@ S6 的范围（`docs/PLAN.md` §6）：三项 VS Code 设置（含 `jerrypi.agen
 | `list()` 的 `filterCwd` 严格比较 | ✅ 按 §3.7 **接受**（现实里没有受害者），只记限制与 `pi-traps` 第 18 条 |
 | `Pi: Refresh Model Catalog` | ✅ 已实现 + A8/A12（含 fetch 层漂移守卫） |
 
-下一步：**等用户做 Mac 验收 —— M1（F5 → 改 `jerrypi.agentDir` → 重载 → 发一条消息 → 改回）与 M2（看 QuickPick/模态框在窄栏里的渲染）**，见 `docs/S6-plan.md` §7。
-通过后：上传 0.1.8（Marketplace 手动）→ Windows W0/W1 → 回填 `S6-plan §12` → 关阶段。
+下一步：**你在 Marketplace 手动上传 `jerrypi-0.1.8.vsix`（勾“预发布”）** → 在 Windows 机上跑 W0（`Pi: Run Self-Test`，期望 `GATE PASS`，T12 会 SKIP，T13 会多一行）与 W1（重启后会话还在）→ 我回填 `S6-plan §12.3` 并关阶段。
 
 ## 4. 发布流程（每次都一样）
 
