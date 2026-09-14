@@ -99,3 +99,29 @@ function calendarDaysBetween(then: Date, now: Date): number {
     new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
   return Math.round((midnight(now) - midnight(then)) / (24 * 60 * 60 * 1000));
 }
+
+/**
+ * pi 的 `AuthStatus.source` → 一句人话（S6-plan §3.3 / §0.2 F18：**是 6 档不是 3 档**）。
+ *
+ * 为什么抽成纯函数：那四档（models_json_key / models_json_command / fallback / environment）
+ * 在集成层造不出来（唯一的产地是 pi 的 `provider-composer.js`），而在纯函数层可以 6 个输入
+ * 6 个输出地断言 —— 能红、零夹具（S6-plan §6 的 A6 / §10 第 4 轮 S4）。
+ */
+export function describeAuthSource(source: string | undefined): string {
+  switch (source) {
+    case "runtime":
+      return "已配置（面板保存的 key）";
+    case "stored":
+      return "已配置（pi 的 auth.json）";
+    case "models_json_key":
+      return "已配置（models.json 里写的 key）";
+    case "models_json_command":
+      return "已配置（models.json 里配的命令）";
+    case "fallback":
+      return "已配置（provider 自带）";
+    case "environment":
+      return "已配置（环境变量）";
+    default:
+      return "未配置";
+  }
+}

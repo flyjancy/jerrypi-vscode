@@ -35,6 +35,8 @@ export interface ApiKeyStore {
   listProviders(): readonly string[];
   getApiKey(providerId: string): Promise<string | undefined>;
   saveApiKey(providerId: string, apiKey: string): Promise<void>;
+  /** S6：清掉我们存的那把（SecretStorage + 名单）。**不碰** pi 自己的 auth.json/models.json。 */
+  removeApiKey(providerId: string): Promise<void>;
 }
 
 /** 基于 VS Code SecretStorage + globalState 的实现。 */
@@ -47,6 +49,11 @@ export function createApiKeyStore(context: vscode.ExtensionContext): ApiKeyStore
     async saveApiKey(providerId, apiKey) {
       await context.secrets.store(SECRET_KEY_PREFIX + providerId, apiKey);
       providers.add(providerId);
+      await context.globalState.update(PROVIDERS_STATE_KEY, [...providers]);
+    },
+    async removeApiKey(providerId) {
+      await context.secrets.delete(SECRET_KEY_PREFIX + providerId);
+      providers.delete(providerId);
       await context.globalState.update(PROVIDERS_STATE_KEY, [...providers]);
     },
   };
@@ -122,4 +129,41 @@ async function injectStoredApiKeys(runtime: ModelRuntime, keys: ApiKeyStore): Pr
       await runtime.setRuntimeApiKey(providerId, apiKey);
     }
   }
+}
+
+/** 清理结果：成功的 provider 与失败的（带原因）。逐个 try/catch，不让一个失败拖垮其余的。 */
+export interface ClearKeysResult {
+  ok: string[];
+  failed: { providerId: string; reason: string }[];
+}
+
+/**
+ * 清掉**我们自己存的** API key（`Pi: Clear Stored API Keys` 的核心）。
+ *
+ * 刻意不依赖 vscode：值在 `host-check` 的桩上验 ①，在 `controller-check` 上用**真**
+ * `ModelRuntime` 验 ②③（S6-plan §6 的 A5 / §10 第 4 轮 S3）。
+ *
+ * ⚠️ 顺序与 API 都是有讲究的（S6-plan §3.2 / §0.2 F6）：
+ *   1. 用 `removeRuntimeApiKey()`，**绝不用 `logout()`** —— 后者会去删 **auth.json 里用户
+ *      自己的凭据**（`RuntimeCredentials.delete()` → 底层 store 的 delete）。
+ *   2. **先清内存里的那把、成功之后再删 SecretStorage**：反过来的话，一旦
+ *      `removeRuntimeApiKey` 抛出（它内部会同步凭据快照，失败时包成
+ *      `CredentialSynchronizationError`），就会留下"SecretStorage 已删、内存里那把还在"的
+ *      夹生状态。
+ */
+export async function clearStoredApiKeys(
+  providerIds: readonly string[],
+  deps: { keys: ApiKeyStore; runtime: ModelRuntime },
+): Promise<ClearKeysResult> {
+  const result: ClearKeysResult = { ok: [], failed: [] };
+  for (const providerId of providerIds) {
+    try {
+      await deps.runtime.removeRuntimeApiKey(providerId);
+      await deps.keys.removeApiKey(providerId);
+      result.ok.push(providerId);
+    } catch (error) {
+      result.failed.push({ providerId, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return result;
 }

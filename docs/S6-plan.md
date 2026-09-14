@@ -442,6 +442,21 @@ API Error: Request rejected (429) · api key 日限额已用完
 
 **A9（`Pi: Open Settings File` 打开的是 `<生效 agentDir>/settings.json`）的实现已按 §3.6 落地，但断言还没写**：它要跑注册后的命令（桩要支持 `workspace.fs.stat` 的可控失败与 `openTextDocument` 的记录）。下一步做第 4 步（host-check）时一起补 —— **不能忘**。
 
+### 第 3–4 步（密钥清理 / Set API Key 补完，2026-09-14）
+
+| # | 发现 | 处置 |
+| --- | --- | --- |
+| 3-1 | 计划里"清 key 的核心函数"落地时发现 `ApiKeyStore` 接口要先长 `removeApiKey`，而那会牵动所有内联桩对象 | 只在接口与 `createApiKeyStore` 上加；测试里的内联桩是 `.mjs`（不受 typecheck），逐个补上即可 |
+| 3-2 | **A5 的 ②③ 只能落在 `controller-check`**（要真 `ModelRuntime` + 真 auth.json），① 在 `host-check` —— 这正是 §10 第 4 轮 S3 预判的拆分，落地时确认了 | 按 S3 的建议拆 |
+| 3-3 | **可红验证真的抓到了 F6 那个陷阱**：把核心里的 `removeRuntimeApiKey` 故意换成 `logout()` → A5③ 立刻红，而且报出的新 sha256 是 `44136fa…`（正是 `{}` + 换行的 sha256）—— 也就是说 **auth.json 真的被清空了**（用户自己的凭据没了） | 保留这条断言与它的可红验证记录 |
+| 3-4 | `Pi: Set API Key` 里新增的 `const module = await pi()` 与下面原有的重名 → TS2451 | 去掉重复声明，复用同一个 |
+| 4-1 | 计划让 `describeAuthSource` 在 `tool-text-check` 里断言，实现时发现 `host-check` 已经能 bundle 任意模块、且它本来就是"纯函数 + 接线"的归属地 | 落在 `host-check`（**偏离计划一行**，记在这里）：6 档各不相同 + 未知来源 → 未配置 + 面板存的与 auth.json 的能区分开 |
+| 4-2 | **T6 抖动**：跑闸门时出现一次 `GATE BLOCKED T6`，立刻重跑就 PASS（T6 是"让 agent 依次调 write→read→edit"的模型相关项） | 记档（S5-plan §11 的 1-5 记过同类）。**候选**：给 T6 加重试或把提示词写得更死 —— 但那会让它"更容易过"而不是"更准"，留待观察 |
+
+**第 3–4 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**｜`host-check` **75/75**（A5 核心契约 +5、A6 +3）｜`check:controller` **92/92**（A5 ②③ +5）｜闸门重跑 **14/14 GATE PASS**｜settings-check 16/16。
+
+**⚠️ 仍欠**：A9（`Pi: Open Settings File` 的断言）与 A6 的"QuickPick items 来自 `getProviders()`"那一半（要驱动真命令 + pi 加载）。
+
 **第 2 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**｜`check:controller` **87/87**（A13/A14 共 +5，含那条反向的鉴别力断言）｜闸门 **14/14 GATE PASS**（改前跑过一次）。
 
 **第 1 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（其中新增 `SETTINGS-CHECK OK (16/16)`，在用例 6 里跑）｜`host-check` **67/67**（A2/A3 共 +10）｜`check:controller` **82/82**｜闸门 **14/14 GATE PASS**。

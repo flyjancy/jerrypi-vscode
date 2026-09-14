@@ -7,7 +7,8 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import { loadPi } from "./pi/loader";
-import { createApiKeyStore, DEFAULT_PROVIDER, injectApiKey, SUGGESTED_PROVIDERS } from "./pi/runtime";
+import { clearStoredApiKeys, createApiKeyStore, DEFAULT_PROVIDER, getModelRuntime, injectApiKey } from "./pi/runtime";
+import { describeAuthSource } from "./shared/format";
 import { runSelfTest } from "./pi/selftest";
 import { workspaceCwd } from "./host/workspace";
 
@@ -63,13 +64,20 @@ export function registerCommands(
 
     vscode.commands.registerCommand("jerrypi.setApiKey", async () => {
       try {
+        const module = await pi();
+        const runtime = await getModelRuntime(module, module.getAgentDir(), keys);
+        // 候选来自 **pi 自己**（不是硬编码清单），每项标注来源（6 档，F18/§3.3）
+        const known = runtime.getProviders().map((provider) => ({
+          label: provider.id,
+          description: `${provider.name === provider.id ? "" : `${provider.name} · `}${describeAuthSource(runtime.getProviderAuthStatus(provider.id).source)}`,
+        }));
+        const ordered = [
+          ...known.filter((item) => item.label === DEFAULT_PROVIDER),
+          ...known.filter((item) => item.label !== DEFAULT_PROVIDER),
+        ];
         const picked = await vscode.window.showQuickPick(
-          [
-            { label: DEFAULT_PROVIDER, description: "默认" },
-            ...SUGGESTED_PROVIDERS.filter((id) => id !== DEFAULT_PROVIDER).map((id) => ({ label: id })),
-            { label: CUSTOM_PROVIDER },
-          ],
-          { title: "jerrypi: 选择 provider", ignoreFocusOut: true },
+          [...ordered, { label: CUSTOM_PROVIDER, description: "pi 不认识的 provider id（例如 models.json 里自定义的）" }],
+          { title: `jerrypi: 选择 provider（pi 认识 ${known.length} 个）`, ignoreFocusOut: true },
         );
         if (picked === undefined) return;
 
@@ -82,6 +90,12 @@ export function registerCommands(
           });
           if (typed === undefined || typed.trim().length === 0) return;
           providerId = typed.trim();
+          if (runtime.getProvider(providerId) === undefined) {
+            // 本地判定：pi 不认识它 —— 允许继续（用户可能在 models.json 里自定义），但要说清后果
+            void vscode.window.showWarningMessage(
+              `jerrypi: pi 不认识 provider "${providerId}" —— 模型列表可能是空的，除非你在 models.json 里定义过它。`,
+            );
+          }
         }
 
         const apiKey = await vscode.window.showInputBox({
@@ -93,15 +107,27 @@ export function registerCommands(
         const trimmed = apiKey.trim();
 
         await keys.saveApiKey(providerId, trimmed);
-        const module = await pi();
         // 关键：pi 的 setRuntimeApiKey 只写内存，重载窗口即丢。
         // 所以除了"创建时注入"，这里还要把 key 注入**已经缓存的那个实例**，
         // 否则用户设完 key 必须重载窗口才生效——而重载又会丢掉刚设的值。
         await injectApiKey(module, module.getAgentDir(), keys, providerId, trimmed);
 
-        void vscode.window.showInformationMessage(
-          `jerrypi: 已保存 ${providerId} 的 API key（VS Code SecretStorage，不写入 auth.json）`,
-        );
+        // 本地校验（Q3：**不发请求、不花钱**）：① 凭据解析得出来吗 ② pi 的目录里它有没有模型
+        const check = await runtime.checkAuth(providerId);
+        const available = await runtime.getAvailable(providerId);
+        if (check === undefined) {
+          void vscode.window.showWarningMessage(
+            `jerrypi: 已保存 ${providerId} 的 key，但这个 provider 不接受 API key（pi 侧未配置成功）—— 检查 provider id 是否正确。`,
+          );
+        } else if (available.length === 0) {
+          void vscode.window.showWarningMessage(
+            `jerrypi: 已保存 ${providerId} 的 key，但 pi 的模型目录里这个 provider 没有可用模型 —— 可能 provider id 拼错了，或 models.json 里没有它。`,
+          );
+        } else {
+          void vscode.window.showInformationMessage(
+            `jerrypi: 已保存 ${providerId} 的 API key（VS Code SecretStorage，不写入 auth.json）—— pi 目录里有 ${available.length} 个可用模型。`,
+          );
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         void vscode.window.showErrorMessage(`jerrypi: 保存 API key 失败：${message}`);
@@ -137,6 +163,45 @@ export function registerCommands(
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         void vscode.window.showErrorMessage(`jerrypi: 打开会话列表失败：${message}`);
+      }
+    }),
+
+    // S6：清掉**我们存的** key（绝不用 `logout()` —— 那会删 auth.json 里用户自己的凭据）
+    vscode.commands.registerCommand("jerrypi.clearStoredApiKeys", async () => {
+      try {
+        const providers = keys.listProviders();
+        if (providers.length === 0) {
+          void vscode.window.showInformationMessage("jerrypi: 没有面板保存的 API key（pi 自己的 auth.json / models.json 不归本扩展管）。");
+          return;
+        }
+        const pickedItems = await vscode.window.showQuickPick(
+          providers.map((providerId) => ({ label: providerId })),
+          { title: `jerrypi: 选择要清除的 key（共 ${providers.length} 个）`, canPickMany: true, ignoreFocusOut: true },
+        );
+        if (pickedItems === undefined || pickedItems.length === 0) return;
+
+        const confirmed = await vscode.window.showWarningMessage(
+          `将从 VS Code SecretStorage 删除 ${pickedItems.length} 个 provider 的 key。**当前会话将无法继续发送**，直到重新设置 key（pi 的 auth.json / models.json 不受影响）。继续吗？`,
+          { modal: true },
+          "清除",
+        );
+        if (confirmed !== "清除") return;
+
+        const module = await pi();
+        const agentDir = module.getAgentDir();
+        const runtime = await getModelRuntime(module, agentDir, keys);
+        const result = await clearStoredApiKeys(pickedItems.map((item) => item.label), { keys, runtime });
+
+        if (result.failed.length === 0) {
+          void vscode.window.showInformationMessage(`jerrypi: 已清除 ${result.ok.length} 个 provider 的 key。`);
+        } else {
+          void vscode.window.showWarningMessage(
+            `jerrypi: 清除了 ${result.ok.length} 个；${result.failed.length} 个失败 —— ${result.failed.map((f) => `${f.providerId}: ${f.reason}`).join("；")}`,
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        void vscode.window.showErrorMessage(`jerrypi: 清除 key 失败：${message}`);
       }
     }),
 

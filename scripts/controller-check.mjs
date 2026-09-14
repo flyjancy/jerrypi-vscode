@@ -61,6 +61,7 @@ async function loadModules(tempDir) {
       `export { createSelfTestUIContext } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/selftest-ui"))};`,
       `export { loadPi } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/loader"))};`,
       `export { getModelRuntime } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/runtime"))};`,
+      `export { clearStoredApiKeys } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/runtime"))};`,
     ].join("\n"),
     "utf8",
   );
@@ -116,7 +117,7 @@ async function main() {
   }
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-controller-check-"));
-  const { SessionHostController, createSelfTestUIContext, loadPi, getModelRuntime } = await loadModules(tempDir);
+  const { SessionHostController, createSelfTestUIContext, loadPi, getModelRuntime, clearStoredApiKeys } = await loadModules(tempDir);
   const pi = await loadPi(REPO_ROOT);
   const sourceAgentDir = agentDirOf(pi);
   if (!fs.existsSync(path.join(sourceAgentDir, "auth.json"))) {
@@ -896,6 +897,53 @@ async function main() {
         if (savedEnv === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = savedEnv;
         if (savedRoot !== undefined) process.env.PI_CODING_AGENT_SESSION_DIR = savedRoot;
         fs.rmSync(c3Root, { recursive: true, force: true });
+      }
+    }
+
+    // ------------------------------- 3. 清 key（A5 的 ②③，真 ModelRuntime + 真 auth.json）
+    //
+    // 夹具的 auth.json 里放一个**只在这里存在**的 provider：于是"清掉内存那把"之后
+    // `getProviderAuthStatus` 会**回落到 `stored`**（S6-plan §10 第 2 轮 B1 的教训）——
+    // 所以断言写的是 `source !== "runtime"`，不是 `configured === false`。
+    {
+      const a5Root = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-a5-"));
+      const a5Agent = path.join(a5Root, "agent");
+      fs.mkdirSync(a5Agent, { recursive: true });
+      const probe = "jerrypi-a5-probe";
+      const authFile = path.join(a5Agent, "auth.json");
+      fs.writeFileSync(authFile, JSON.stringify({ [probe]: { type: "api_key", key: "sk-from-auth-json" } }), "utf8");
+      const sha = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+      const authBefore = sha(authFile);
+      const mtimeBefore = fs.statSync(authFile).mtimeMs;
+
+      let providers = [probe];
+      const a5Keys = {
+        listProviders: () => [...providers],
+        getApiKey: async (id) => (id === probe ? "sk-from-secret-storage" : undefined),
+        saveApiKey: async (id) => { providers = [...new Set([...providers, id])]; },
+        removeApiKey: async (id) => { providers = providers.filter((p) => p !== id); },
+      };
+      try {
+        const runtime = await getModelRuntime(pi, a5Agent, a5Keys);
+        const before = runtime.getProviderAuthStatus(probe);
+        check("A5 的前提：注入之后来源是 runtime（面板存的）",
+          before.source === "runtime", JSON.stringify(before));
+
+        const result = await clearStoredApiKeys([probe], { keys: a5Keys, runtime });
+        check("A5：清掉这一个", result.ok.length === 1 && result.failed.length === 0, JSON.stringify(result));
+        check("A5①：我们的 provider 列表空了", a5Keys.listProviders().length === 0, JSON.stringify(a5Keys.listProviders()));
+
+        const after = runtime.getProviderAuthStatus(probe);
+        check("A5②：不再有 runtime 来源（回落到 stored 是**正确**的 —— 凭据还在 auth.json 里）",
+          after.source !== "runtime", JSON.stringify(after));
+
+        check("A5③：auth.json 一个字节没变（sha256 + mtime）",
+          sha(authFile) === authBefore && fs.statSync(authFile).mtimeMs === mtimeBefore,
+          `${authBefore} → ${sha(authFile)}`);
+      } catch (error) {
+        check("A5②③：清 key 的真 runtime 断言", false, error instanceof Error ? error.message : String(error));
+      } finally {
+        fs.rmSync(a5Root, { recursive: true, force: true });
       }
     }
 

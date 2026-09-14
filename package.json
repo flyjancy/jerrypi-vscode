@@ -73,6 +73,11 @@
         "category": "Pi"
       },
       {
+        "command": "jerrypi.clearStoredApiKeys",
+        "title": "Clear Stored API Keys",
+        "category": "Pi"
+      },
+      {
         "command": "jerrypi.setApiKey",
         "title": "Set API Key",
         "category": "Pi"

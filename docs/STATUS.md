@@ -11,7 +11,7 @@
 
 ## 1. 现在
 
-**进行中**：**S6 第 2 步已完成**（agentDir 贯通：`controller-check` 新增 A13/A14 走真链路（只设环境变量、不传选项），`Pi: Open Settings File` 按 §3.6 不再替用户建目录）（三项设置声明 + `src/host/config.ts` + activate 最开头应用 + 变更提示重载；`settings-check.mjs` 新增，16/16）；计划的状态是（第 1 轮 16 条、第 2 轮 13 条；28 ACCEPT / 1 REJECT / 1 部分 REJECT。第 3 轮因评审者 API 日限额没跑成，由我自查代替并标了「未经复核」）（**4 轮评审已完成，第 4 轮 NON_BLOCKING = 收敛**；共 47 条意见）—— **Q1–Q9 用户已拍板（全按默认），正在按 §9 的 10 步实施**（2026-09-13）
+**进行中**：**S6 第 3–4 步已完成**（`Pi: Clear Stored API Keys` 走不依赖 vscode 的核心函数、**绝不用 `logout()`**；`Pi: Set API Key` 的候选改由 pi 自己给 + 6 档来源 + 本地三态校验）。**还剩第 5–8 步（A4 真对话 / Refresh Catalog + 漂移守卫 / T13 / 文档）才到 Mac 验收**（2026-09-14）
 
 | | |
 | --- | --- |
@@ -31,8 +31,8 @@
 | `npm run check:render` | **114** |
 | `node scripts/tool-text-check.mjs` | **87** |
 | `node scripts/webview-dom-check.mjs` | **75** |
-| `node scripts/host-check.mjs` | **67** |
-| `npm run check:controller`（真模型，**不进 CI**） | **87/87**（含一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
+| `node scripts/host-check.mjs` | **75** |
+| `npm run check:controller`（真模型，**不进 CI**） | **92/92**（含一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | **14 项（12 gating + T5c/T12 advisory）GATE PASS** |
 | `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **338 文件 / 5.75 MB**（门禁 30 MB）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |
 

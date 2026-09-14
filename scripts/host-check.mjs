@@ -162,6 +162,8 @@ async function buildModules(tempDir) {
       `export { replaceSessionWithConfirm } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/sessionActions"))};`,
       `export { sessionToItem } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/sessionPicker"))};`,
       `export { applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/config"))};`,
+      `export { clearStoredApiKeys } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/runtime"))};`,
+      `export { describeAuthSource } from ${JSON.stringify(path.join(REPO_ROOT, "src/shared/format"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -179,7 +181,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, clearStoredApiKeys, describeAuthSource } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 
@@ -762,6 +764,55 @@ check(
   check("A3：点了「重载窗口」→ 执行 workbench.action.reloadWindow",
     callsOf("executeCommand").some((c) => c.id === "workbench.action.reloadWindow"),
     JSON.stringify(callsOf("executeCommand")));
+}
+
+// ------------------------------------- S6 第 3 步：清 key 的核心契约（A5 的 ① + 顺序 + 不用 logout）
+{
+  const calls = [];
+  const store = { providers: ["p1", "p2"] };
+  const keys = {
+    listProviders: () => [...store.providers],
+    getApiKey: async () => undefined,
+    saveApiKey: async () => {},
+    removeApiKey: async (id) => {
+      calls.push(`store.remove:${id}`);
+      store.providers = store.providers.filter((p) => p !== id);
+    },
+  };
+  const runtime = {
+    removeRuntimeApiKey: async (id) => { calls.push(`runtime.remove:${id}`); },
+    logout: async (id) => { calls.push(`runtime.LOGOUT:${id}`); },
+  };
+  const result = await clearStoredApiKeys(["p1", "p2"], { keys, runtime });
+  check("A5①：清完之后我们存的 provider 列表为空", store.providers.length === 0, JSON.stringify(store.providers));
+  check("A5：逐个都成功了", result.ok.length === 2 && result.failed.length === 0, JSON.stringify(result));
+  check("A5：**不用 `logout()`**（它会删 auth.json 里用户自己的凭据）",
+    calls.every((c) => !c.includes("LOGOUT")), JSON.stringify(calls));
+  check("A5：顺序是先清内存那把、再删 SecretStorage（反过来会留下夹生状态）",
+    calls.join("|") === "runtime.remove:p1|store.remove:p1|runtime.remove:p2|store.remove:p2", JSON.stringify(calls));
+
+  // 一个 provider 失败不能拖垮其余的
+  const calls2 = [];
+  const store2 = { providers: ["bad", "good"] };
+  const r2 = await clearStoredApiKeys(["bad", "good"], {
+    keys: { listProviders: () => [...store2.providers], getApiKey: async () => undefined, saveApiKey: async () => {},
+      removeApiKey: async (id) => { store2.providers = store2.providers.filter((p) => p !== id); } },
+    runtime: { removeRuntimeApiKey: async (id) => { calls2.push(id); if (id === "bad") throw new Error("boom"); } },
+  });
+  check("A5：一个失败不影响其余（失败项带原因）",
+    r2.ok.length === 1 && r2.failed.length === 1 && r2.failed[0].providerId === "bad" && r2.failed[0].reason.includes("boom"),
+    JSON.stringify(r2));
+}
+
+// ------------------------------------- S6 第 4 步：来源文案是纯函数（A6 的纯函数那一半）
+{
+  const sources = ["runtime", "stored", "models_json_key", "models_json_command", "fallback", "environment"];
+  const labels = sources.map((source) => describeAuthSource(source));
+  check("A6：6 档来源都有各不相同的文案（抽成纯函数才可能这样断言）",
+    new Set(labels).size === 6 && labels.every((label) => label.startsWith("已配置")),
+    JSON.stringify(labels));
+  check("A6：未知来源 → 未配置（不瞎猜）", describeAuthSource(undefined) === "未配置", describeAuthSource(undefined));
+  check("A6：面板存的与 auth.json 的能区分开", labels[0] !== labels[1], `${labels[0]} vs ${labels[1]}`);
 }
 
 // ----------------------------------------------------------------- 汇总
