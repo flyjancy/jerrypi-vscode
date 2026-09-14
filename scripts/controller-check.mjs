@@ -86,6 +86,7 @@ async function loadModules(tempDir) {
       `export { loadPi } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/loader"))};`,
       `export { getModelRuntime } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/runtime"))};`,
       `export { clearStoredApiKeys } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/runtime"))};`,
+      `export { refreshModelCatalog } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/runtime"))};`,
     ].join("\n"),
     "utf8",
   );
@@ -141,7 +142,23 @@ async function main() {
   }
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-controller-check-"));
-  const { SessionHostController, createSelfTestUIContext, loadPi, getModelRuntime, clearStoredApiKeys } = await loadModules(tempDir);
+  const { SessionHostController, createSelfTestUIContext, loadPi, getModelRuntime, clearStoredApiKeys, refreshModelCatalog } = await loadModules(tempDir);
+
+  // A12 正向的探针：**必须在任何 ModelRuntime.create() 之前装**（create 期那次 refresh 正是
+  // F8 点名的联网窗口）。包在 fetch 层而不是包 runtime.refresh —— 后者被评审第 2 轮 B2 证明
+  // 几乎恒真（pi 内部那几个调用点我们的流程一步都走不到）；fetch 是目录刷新的真实出口。
+  // 只记 host，不记 URL/header（不碰凭据）。
+  const fetchHosts = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const raw = typeof input === "string" ? input : input instanceof URL ? input.href : (input?.url ?? "");
+    try {
+      fetchHosts.push(new URL(String(raw)).host);
+    } catch {
+      fetchHosts.push(String(raw).slice(0, 60));
+    }
+    return realFetch(input, init);
+  };
   const pi = await loadPi(REPO_ROOT);
   const sourceAgentDir = agentDirOf(pi);
   if (!fs.existsSync(path.join(sourceAgentDir, "auth.json"))) {
@@ -1120,6 +1137,51 @@ async function main() {
     await controller.dispose().catch(() => {});
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+
+  // ------------------------------- A12 漂移守卫（S6 第 6 步，fetch 层）
+  //
+  // 正向：上面那一整套流程（建会话、发消息、切会话、换模型、清 key、CLI 互通）里**没有一次**
+  // 请求打到 pi.dev。不能靠"包一层 runtime.refresh 数调用次数"—— 那是恒真断言（评审第 2 轮 B2）。
+  const piDevHosts = fetchHosts.filter((host) => host === "pi.dev" || host.endsWith(".pi.dev"));
+  check(
+    "A12 正向：完整流程里没有任何请求打到 pi.dev",
+    piDevHosts.length === 0,
+    `hosts=${[...new Set(fetchHosts)].sort().join(", ") || "(无)"}`,
+  );
+
+  // 反向：显式刷新必须真打到 pi.dev —— 证明探针是活的（否则上面那条可能是恒绿）。
+  // 前提：`modelNetworkEnabled = process.env.PI_OFFLINE === undefined`（model-runtime.js:88），
+  // 设了 PI_OFFLINE 的环境里 refresh 不联网 —— 那时只能 SKIP，且要说清原因（不是静默跳过）。
+  if (process.env.PI_OFFLINE !== undefined) {
+    console.log("  skip A12 反向：PI_OFFLINE 已设，refresh 不会联网（这是推导值，见 S6-plan §3.5）");
+  } else {
+    // 每次跑用**全新的 agentDir**（= 全新的 models-store.json）：否则 checkedAt 未满 4 小时时
+    // pi 会直接 return、根本不发请求 → 第二次运行就假红（评审第 4 轮 S2）。
+    // 还要**有凭据**：`models.refresh` 对没有凭据的 provider 在联网前就 return
+    // （`pi-ai/dist/models.js:150-155` 的 `if (!credential) return`）—— 空目录里的第一次实测
+    // 是"0 次 fetch"，不是探针坏了。
+    const a12Root = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-a12-"));
+    const a12Agent = path.join(a12Root, "agent");
+    fs.mkdirSync(a12Agent, { recursive: true });
+    fs.copyFileSync(path.join(sourceAgentDir, "auth.json"), path.join(a12Agent, "auth.json"));
+    try {
+      const runtime = await getModelRuntime(pi, a12Agent, {
+        listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {}, removeApiKey: async () => {},
+      });
+      const before = fetchHosts.length;
+      const result = await refreshModelCatalog(runtime);
+      const newHosts = [...new Set(fetchHosts.slice(before))];
+      check(
+        "A12 反向：点一次刷新 → 探针真的看到 pi.dev",
+        newHosts.some((host) => host === "pi.dev" || host.endsWith(".pi.dev")),
+        `新增 hosts=${newHosts.slice(0, 5).join(", ") || "(无)"}；provider ${result.providersBefore}→${result.providersAfter}；errors=${result.errors.length}`,
+      );
+    } catch (error) {
+      check("A12 反向：点一次刷新 → 探针真的看到 pi.dev", false, error instanceof Error ? error.message : String(error));
+    } finally {
+      fs.rmSync(a12Root, { recursive: true, force: true });
+    }
   }
 
   let failed = 0;

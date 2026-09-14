@@ -472,6 +472,18 @@ API Error: Request rejected (429) · api key 日限额已用完
 
 **第 5 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（protocol 112 / render 114 / tool-text 87 / settings-check 16/16 / webview-dom 75 / host-check 75）｜`check:controller` **96/96**（A4 共 +4）。
 
+### 第 6 步（`Pi: Refresh Model Catalog` + 漂移守卫，2026-09-14）
+
+| # | 发现 | 处置 |
+| --- | --- | --- |
+| 6-1 | **A12 反向的第一版夹具红得有价值**：空 agentDir（没 creds）里刷新 → **0 次 fetch**。不是探针坏了 —— `models.refresh` 对没有凭据的 provider 在联网前就 `return`（`pi-ai/dist/models.js:150-155` 的 `if (!credential) return`） | 夹具补上 `auth.json`（与主流程同法）后才真打 `pi.dev`。这也顺便说明：**没凭据时“刷新”本来就不发请求** |
+| 6-2 | 计数从哪来：`refresh()` 只返回 `{ aborted, errors }`（`pi-ai` 的 `ModelsRefreshResult`），所以实现里必须前后各数一次 | 抽成不依赖 vscode 的核心 `refreshModelCatalog(runtime)`（`src/pi/runtime.ts`）：A8 用**真命令**驱动、A12 反向直接调它；两处共用同一实现 |
+| 6-3 | **host-check 的坑**：`resetStub()` 会把命令注册表一并清掉（状态挂在 `globalThis` 上），第二次驱动命令前必须先重新 `registerCommands` | 已在 A8 的失败分支里写上（否则第二条会是“没反应”的假红） |
+| 6-4 | **能红验证**：把核心里的 `allowNetwork: true` 改成 `false` → A8 红成 `[{"allowNetwork":false}]`、A12 反向红成“新增 hosts=(无)”；恢复后全绿 | 记录在案；改回后 `git diff` 里无残留 |
+| 6-5 | 部分 provider 刷新失败时的反馈形态 | 用**警告**消息（点名失败 provider）+ Output 逐条原因（不是静默，也不是假 PASS） |
+
+**第 6 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（host-check **80/80**，A8 +5）｜`check:controller` **98/98**（A12 正向/反向 +2）。
+
 ## 12. 实施与验收结果
 
 _（自动检查 / 提交切分 / 人工验收 / 已知未覆盖。）_

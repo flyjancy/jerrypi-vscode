@@ -88,6 +88,11 @@
         "category": "Pi"
       },
       {
+        "command": "jerrypi.refreshModelCatalog",
+        "title": "Refresh Model Catalog",
+        "category": "Pi"
+      },
+      {
         "command": "jerrypi.newSession",
         "title": "New Session",
         "category": "Pi"

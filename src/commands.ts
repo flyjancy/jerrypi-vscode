@@ -7,7 +7,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import { loadPi } from "./pi/loader";
-import { clearStoredApiKeys, createApiKeyStore, DEFAULT_PROVIDER, getModelRuntime, injectApiKey } from "./pi/runtime";
+import { clearStoredApiKeys, createApiKeyStore, DEFAULT_PROVIDER, getModelRuntime, injectApiKey, refreshModelCatalog } from "./pi/runtime";
 import { describeAuthSource } from "./shared/format";
 import { runSelfTest } from "./pi/selftest";
 import { workspaceCwd } from "./host/workspace";
@@ -202,6 +202,31 @@ export function registerCommands(
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         void vscode.window.showErrorMessage(`jerrypi: 清除 key 失败：${message}`);
+      }
+    }),
+
+    // S6 §3.5：显式联网刷新模型目录 —— 这是"只有用户点它才发请求"的**唯一**入口
+    vscode.commands.registerCommand("jerrypi.refreshModelCatalog", async () => {
+      try {
+        const module = await pi();
+        const runtime = await getModelRuntime(module, module.getAgentDir(), keys);
+        output.appendLine("[jerrypi] 刷新模型目录（显式联网）…");
+        const result = await refreshModelCatalog(runtime);
+        for (const error of result.errors) {
+          output.appendLine(`[jerrypi] 模型目录刷新失败：${error.providerId}: ${error.reason}`);
+        }
+        const summary = `provider ${result.providersBefore} → ${result.providersAfter}，可用模型 ${result.modelsBefore} → ${result.modelsAfter}`;
+        if (result.errors.length === 0) {
+          void vscode.window.showInformationMessage(`jerrypi: 模型目录已刷新 —— ${summary}。`);
+        } else {
+          const names = result.errors.map((error) => error.providerId).join("、");
+          void vscode.window.showWarningMessage(
+            `jerrypi: 模型目录刷新完成（${result.errors.length} 个 provider 失败：${names}）—— ${summary}；细节见 Output。`,
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        void vscode.window.showErrorMessage(`jerrypi: 刷新模型目录失败：${message}`);
       }
     }),
 

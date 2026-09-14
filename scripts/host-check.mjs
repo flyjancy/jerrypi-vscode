@@ -162,7 +162,9 @@ async function buildModules(tempDir) {
       `export { replaceSessionWithConfirm } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/sessionActions"))};`,
       `export { sessionToItem } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/sessionPicker"))};`,
       `export { applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/config"))};`,
-      `export { clearStoredApiKeys } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/runtime"))};`,
+      `export { clearStoredApiKeys, getModelRuntime } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/runtime"))};`,
+      `export { loadPi } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/loader"))};`,
+      `export { registerCommands } from ${JSON.stringify(path.join(REPO_ROOT, "src/commands"))};`,
       `export { describeAuthSource } from ${JSON.stringify(path.join(REPO_ROOT, "src/shared/format"))};`,
     ].join("\n"),
   );
@@ -181,7 +183,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, clearStoredApiKeys, describeAuthSource } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 
@@ -813,6 +815,94 @@ check(
     JSON.stringify(labels));
   check("A6：未知来源 → 未配置（不瞎猜）", describeAuthSource(undefined) === "未配置", describeAuthSource(undefined));
   check("A6：面板存的与 auth.json 的能区分开", labels[0] !== labels[1], `${labels[0]} vs ${labels[1]}`);
+}
+
+// ------------------------------------- S6 第 6 步：`Pi: Refresh Model Catalog`（A8）
+//
+// 驱动的是**真命令**（`registerCommands` 注册、`executeCommand` 调）与**真 pi**（`loadPi` 走
+// `pi-runtime/dist/bundle/index.js`）；只把"刷新"与两个计数源换成可控的 —— 否则这条断言
+// 要么真发网络请求，要么只能对着硬编码文案照镜子。
+{
+  /** 命令里真的会碰到的上下文成员（`commands.ts` 只用了这几个）。 */
+  function makeExtensionContext(extensionPath) {
+    const secrets = new Map();
+    const globalState = new Map();
+    return {
+      extensionUri: vscode.Uri.file(extensionPath),
+      extension: { packageJSON: { version: "0.0.0-check" } },
+      subscriptions: [],
+      secrets: {
+        get: (key) => Promise.resolve(secrets.get(key)),
+        store: (key, value) => { secrets.set(key, value); return Promise.resolve(); },
+        delete: (key) => { secrets.delete(key); return Promise.resolve(); },
+      },
+      globalState: {
+        get: (key, fallback) => (globalState.has(key) ? globalState.get(key) : fallback),
+        update: (key, value) => { globalState.set(key, value); return Promise.resolve(); },
+      },
+    };
+  }
+
+  resetStub();
+  const context = makeExtensionContext(REPO_ROOT);
+  const commandOutput = makeOutput();
+  registerCommands(context, commandOutput);
+  check(
+    "A8：命令注册了 jerrypi.refreshModelCatalog",
+    callsOf("registerCommand").some((call) => call.id === "jerrypi.refreshModelCatalog"),
+    JSON.stringify(callsOf("registerCommand").map((call) => call.id)),
+  );
+
+  // 夹具 agentDir：真的 loadPi + 真的 ModelRuntime（`allowModelNetwork:false`，创建期不联网），
+  // 然后把实例上的三个入口换成可控的 —— 命令拿到的必须是**同一个**缓存实例。
+  const savedAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+  const refreshAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-host-refresh-"));
+  process.env.PI_CODING_AGENT_DIR = refreshAgentDir;
+  try {
+    const piModule = await loadPi(REPO_ROOT);
+    const runtime = await getModelRuntime(piModule, piModule.getAgentDir(), {
+      listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {}, removeApiKey: async () => {},
+    });
+    let providerCount = 2;
+    let modelCount = 3;
+    const refreshCalls = [];
+    const refreshErrors = new Map();
+    runtime.getProviders = () => new Array(providerCount).fill({});
+    runtime.getAvailableSnapshot = () => new Array(modelCount).fill({});
+    runtime.refresh = async (options) => {
+      refreshCalls.push(options);
+      providerCount = 5;
+      modelCount = 9;
+      return { aborted: false, errors: refreshErrors };
+    };
+
+    await vscode.commands.executeCommand("jerrypi.refreshModelCatalog");
+    check("A8：一次点击只调一次 `refresh`，且显式 `allowNetwork: true`",
+      refreshCalls.length === 1 && refreshCalls[0]?.allowNetwork === true, JSON.stringify(refreshCalls));
+    const info = callsOf("showInformationMessage");
+    check("A8：文案里的数字来自刷新**前后**的计数（provider 2 → 5、模型 3 → 9）",
+      info.length === 1 && /2\s*→\s*5/.test(String(info[0].message)) && /3\s*→\s*9/.test(String(info[0].message)),
+      String(info[0]?.message));
+
+    // 有 provider 刷新失败时：失败要在消息与 Output 里都留痕，不能静默
+    // 注意：`resetStub()` 会连命令注册表一起清掉（状态挂在 globalThis 上），所以要重新注册。
+    resetStub();
+    registerCommands(context, commandOutput);
+    refreshErrors.set("broken-provider", new Error("catalog exploded"));
+    providerCount = 5;
+    modelCount = 9;
+    await vscode.commands.executeCommand("jerrypi.refreshModelCatalog");
+    const warns = callsOf("showWarningMessage");
+    check("A8：有刷新失败时用警告消息点名（不静默）",
+      warns.length === 1 && String(warns[0].message).includes("broken-provider"), String(warns[0]?.message));
+    check("A8：失败原因记进 Output",
+      commandOutput.lines.some((line) => line.includes("broken-provider") && line.includes("catalog exploded")),
+      commandOutput.lines.filter((line) => line.includes("broken-provider")).join(" ｜ "));
+  } finally {
+    if (savedAgentDirEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedAgentDirEnv;
+    fs.rmSync(refreshAgentDir, { recursive: true, force: true });
+  }
 }
 
 // ----------------------------------------------------------------- 汇总

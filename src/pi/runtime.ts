@@ -131,6 +131,41 @@ async function injectStoredApiKeys(runtime: ModelRuntime, keys: ApiKeyStore): Pr
   }
 }
 
+/** 模型目录刷新结果。`refresh()` 自己不返回计数（只有 `{ aborted, errors }`），所以要前后各数一次。 */
+export interface CatalogRefreshResult {
+  providersBefore: number;
+  providersAfter: number;
+  modelsBefore: number;
+  modelsAfter: number;
+  errors: { providerId: string; reason: string }[];
+}
+
+/**
+ * `Pi: Refresh Model Catalog` 的核心（不依赖 vscode，便于自动断言）。
+ *
+ * 计数从 `getProviders()` / `getAvailableSnapshot()` 的**前后差**拿（S6-plan §3.5 / 评审第 2 轮 N5）。
+ *
+ * ⚠️ `allowNetwork: true` 是"**只有用户点这条命令才发请求**"的唯一开关。不要把它挂到任何
+ * 自动路径上 —— 这就是 S6-plan §6 的 A12 漂移守卫盯着的那件事（它靠的是 pi 内部每个调用点
+ * 都显式传 `allowNetwork: false`，而那是会漂移的内部细节）。
+ */
+export async function refreshModelCatalog(runtime: ModelRuntime): Promise<CatalogRefreshResult> {
+  const providersBefore = runtime.getProviders().length;
+  const modelsBefore = runtime.getAvailableSnapshot().length;
+  const result = await runtime.refresh({ allowNetwork: true });
+  const errors = [...result.errors.entries()].map(([providerId, error]) => ({
+    providerId,
+    reason: error instanceof Error ? error.message : String(error),
+  }));
+  return {
+    providersBefore,
+    providersAfter: runtime.getProviders().length,
+    modelsBefore,
+    modelsAfter: runtime.getAvailableSnapshot().length,
+    errors,
+  };
+}
+
 /** 清理结果：成功的 provider 与失败的（带原因）。逐个 try/catch，不让一个失败拖垮其余的。 */
 export interface ClearKeysResult {
   ok: string[];
