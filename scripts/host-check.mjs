@@ -166,6 +166,7 @@ async function buildModules(tempDir) {
       `export { loadPi } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/loader"))};`,
       `export { registerCommands } from ${JSON.stringify(path.join(REPO_ROOT, "src/commands"))};`,
       `export { describeAuthSource } from ${JSON.stringify(path.join(REPO_ROOT, "src/shared/format"))};`,
+      `export { PROTOCOL_VERSION } from ${JSON.stringify(path.join(REPO_ROOT, "src/shared/protocol"))};`,
       `export { sidesOfPatch, pathLabelOf, HUNK_GAP } from ${JSON.stringify(path.join(REPO_ROOT, "src/shared/patch"))};`,
       `export { createFileChanges, recordEditsFromMessages, diffFieldsOf } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/filechanges"))};`,
       `export { createCustomTools } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/custom-tools"))};`,
@@ -187,7 +188,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 const vscodeStub = await import(pathToFileURL(STUB_PATH).href);
@@ -224,8 +225,8 @@ await view1.send({ type: "ready", protocol: 4 });
 const stateMessages = view1.posted.filter((m) => m.type === "state");
 check("ready → 恰好回一条 state", stateMessages.length === 1, String(stateMessages.length));
 check(
-  "state 里带 protocol 与 meta（协议 v4 的核心）",
-  stateMessages[0]?.protocol === 4 &&
+  "state 里带 protocol 与 meta（读的是 PROTOCOL_VERSION，不是写死的数字）",
+  stateMessages[0]?.protocol === PROTOCOL_VERSION &&
     typeof stateMessages[0]?.meta === "object" &&
     stateMessages[0]?.meta !== null &&
     "contextWindow" in stateMessages[0].meta,

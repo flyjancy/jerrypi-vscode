@@ -2,7 +2,7 @@
   "name": "jerrypi",
   "displayName": "jerrypi",
   "description": "Drive the Pi coding agent from a VS Code sidebar chat panel — no local Node.js required",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "publisher": "flyjancy",
   "private": true,
   "license": "MIT",
@@ -55,7 +55,11 @@
         "jerrypi.approvalMode": {
           "type": "string",
           "default": "off",
-          "enum": ["off", "mutating", "all"],
+          "enum": [
+            "off",
+            "mutating",
+            "all"
+          ],
           "scope": "machine",
           "markdownDescription": "工具调用是否需要确认。**尚未生效（S8）**：现在设置它没有任何效果，`bash` / `write` / `edit` 一律直接执行 —— 请在受信任的目录里使用。"
         }
