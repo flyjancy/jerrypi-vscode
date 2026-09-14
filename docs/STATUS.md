@@ -34,7 +34,7 @@
 | `node scripts/host-check.mjs` | **95** |
 | `npm run check:controller`（真模型，**不进 CI**） | **98/98**（含一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **15 项（12 gating + T5c/T12/T13 advisory）GATE PASS**（T13：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[HTTP_PROXY, HTTPS_PROXY, http_proxy, https_proxy]；PI_OFFLINE=未设`） |
-| `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **15 项（12 gating + T5c/T12/T13 advisory）GATE PASS**（0.1.8，无头跑过；Windows 的 W0 再跑一次真宿主） |
+| `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **15 项（12 gating + T5c/T12/T13 advisory）GATE PASS**（0.1.8；无头跑过一次，Windows W0 真宿主又跑过一次 —— 14 PASS / 0 FAIL / 1 SKIP = T12） |
 | `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **0.1.8：338 文件 / 5.75 MB**（门禁 30 MB；文件清单与 0.1.7 逐个相同；9-5 修复后已重新打包）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |
 
 ## 2. 欠着的事（已知、刻意未做或暂时做不到）
@@ -51,7 +51,7 @@
 | 项目级设置（`.pi/settings.json` 等） | 固定 `projectTrusted: false`，信任流程没做。⚠️ **这不是 S6 的欠账**：早期计划（S1/S2/S5）的指针写着“信任 UI 在 S6”，而 `PLAN.md` §6 的 S6 范围里从来没有它（S6 的 4 轮评审也没审过）。**用户 2026-09-14 拍板：排到 S8**（与工具审批同阶段，见 `PLAN.md` §6 的 S8 注；具体设计待 S8 计划期，尚未评审） | S1-plan §4.3 · S2-plan §7 · S5-plan §4；**PLAN.md §6 的 S8 注** |
 | **三项 `jerrypi.*` 设置** | `agentDir` **已生效**（进程环境变量 + 重载窗口）；`proxy` 未实现（T13 只报告，Q2 不做第二层）；`approvalMode` 只登记、未生效（**S8**）。README 配置表中英双语逐条标明（`settings-check` 钉住） | README 配置表 + 已知限制 |
 | `ctx.ui.custom()` 类扩展命令 | 设计上不支持（终端 TUI 专有），会给明确错误 | README 已知限制 |
-| 模型目录**不联网**刷新 | 我们显式写死 `allowModelNetwork: false`（刻意：不替用户往外发请求），所以新模型名（如 `deepseek-flash`）不会自己出现。现在有显式入口 `Pi: Refresh Model Catalog`（点才联网，A12 守住“自动路径不碰 pi.dev”） | README 已知限制 · S6-plan §3.5 / §6
+| 模型目录**不会自动联网**刷新 | 我们显式写死 `allowModelNetwork: false`（刻意：不替用户往外发请求），所以新模型名（如 `deepseek-flash`）不会自己出现。现在有显式入口 `Pi: Refresh Model Catalog`（点才联网，A12 守住“自动路径不碰 pi.dev”） | README 已知限制 · S6-plan §3.5 / §6
 
 ## 3. 下一步（S7：diff 审阅）
 
