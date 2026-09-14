@@ -32,6 +32,9 @@
 | 16 | bash 工具在 Windows 上按 `settings.json.shellPath` → `C:\Program Files\Git\bin\bash.exe` → PATH 顺序找 | `docs/PLAN.md` §2 |
 | 17 | 模型目录是"内置 + `<agentDir>/models-store.json`"合并出来的，**联网刷新是另一个开关**（我们写死 `allowModelNetwork: false`） | README 已知限制 · S4-plan §12.5 |
 
+| 23 | `EditToolDetails`（`{diff, patch, firstChangedLine}`）只对**成功**的 edit 存在；**失败的 edit 是 `details = {}`（真值空对象）**，所以 `if (details)` 这种判断会给失败卡片挂上一个点开是空的死链。patch 的语义是"**该次调用**的前后"，不是"当前磁盘 vs 首次原文" | S7-plan §0.1 F1/F5b · §6 A10（能红：判断写成 `if (details)` → A10 红） |
+| 24 | `write` 工具**没有** details（`details: undefined`），而它的 `ops.mkdir`/`ops.writeFile` 是**在 `withFileMutationQueue` 之内**被调用的 —— 想拿"该次调用前后"，必须在 `ops.writeFile` 里先读旧内容；放到外层 `execute` 里读就跑到队列之外，同一条消息里两次写同一文件会读到同一个"旧"内容 | S7-plan §0.1 F8/F9 · §6 A6（能红：读盘挪到写完之后 → A6 两条红） |
+
 **怎么区分"我踩到新坑了"和"我读错了"**：先写一个**最小探针**（临时目录 + 我们发布的那份 bundle），
 把"我以为的行为"和"实际行为"并排打出来 —— S5 的 §3.1、§3.5、§3.8 都是这么定案的。
 探针结论要**连数字一起**写进对应 plan，并在这里加一行。

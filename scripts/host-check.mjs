@@ -1309,6 +1309,66 @@ check(
   }
 }
 
+// ------------------------- S7 第 6 步：漂移守卫（A8）—— 真 pi 生成 + 独立实现当 oracle
+//
+// 为什么必须在这里（而不是 controller-check）：这是**纯函数**，不需要凭据也不需要模型；
+// controller-check 没凭据时整体 SKIP，而 SKIP 不是 PASS（第 2 轮评审 S6）。
+// oracle 是 `diff@8.0.4` 自己（断言期依赖，devDependencies；`--no-dependencies` 保证
+// 不进 VSIX）—— 版本不符**显式失败**，不 SKIP（第 2 轮评审 S5）。
+{
+  const diffPkg = await import("diff/package.json", { with: { type: "json" } }).then((m) => m.default).catch(() => undefined);
+  check("A8：oracle 的版本被钉死（diff@8.0.4）", diffPkg?.version === "8.0.4", String(diffPkg?.version));
+  const Diff = await import("diff");
+  const piModule = await loadPi(REPO_ROOT);
+
+  /** jsdiff 的解析结果 → 每 hunk 的两侧行（**独立实现**，不经过我们的解析器）。 */
+  const hunksFromJsdiff = (patch) => {
+    const parsed = Diff.parsePatch(patch);
+    const hunks = Array.isArray(parsed) ? parsed[0]?.hunks ?? [] : [];
+    return hunks.map((hunk) => {
+      const left = [];
+      const right = [];
+      for (const line of hunk.lines) {
+        if (line === "\\ No newline at end of file") continue;
+        const prefix = line[0];
+        if (prefix === " ") {
+          left.push(line.slice(1));
+          right.push(line.slice(1));
+        } else if (prefix === "-") left.push(line.slice(1));
+        else if (prefix === "+") right.push(line.slice(1));
+      }
+      return { left, right };
+    });
+  };
+
+  const cases = [
+    ["单行文件整行替换", "a\n", "b\n"],
+    ["改中间一行", "L0\nL1\nL2\nL3\nL4\nL5\n", "L0\nL1\nX2\nL3\nL4\nL5\n"],
+    ["多个 hunk（相隔很远）", Array.from({ length: 40 }, (_, i) => `L${i}`).join("\n") + "\n", Array.from({ length: 40 }, (_, i) => (i === 2 ? "X2" : i === 30 ? "Y30" : `L${i}`)).join("\n") + "\n"],
+    ["纯新增（左空）", "", "l1\nl2\n"],
+    ["纯删除（右空）", "a\nb\n", ""],
+    ["无尾换行（两侧）", "a\nb", "a\nB"],
+    ["无尾换行（只左）", "a\nb", "a\nb\n"],
+    ["CRLF 内容原样", "a\r\nb\r\n", "a\r\nB\r\n"],
+  ];
+  for (const [name, oldText, newText] of cases) {
+    const patch = piModule.generateUnifiedPatch("rel/a.ts", oldText, newText);
+    const ours = sidesOfPatch(patch);
+    const expected = hunksFromJsdiff(patch);
+    check(
+      `A8：${name} → hunks 与 jsdiff 逐行一致`,
+      JSON.stringify(ours.hunks) === JSON.stringify(expected),
+      JSON.stringify({ ours: ours.hunks, jsdiff: expected }).slice(0, 240),
+    );
+    // ② 用**原封不动的整份 patch** 往返（不需要重写 hunk 头：jsdiff 自带偏移搜索）
+    check(
+      `A8：${name} → applyPatch(左, patch) === 右`,
+      Diff.applyPatch(ours.left, patch) === ours.right,
+      JSON.stringify({ applied: String(Diff.applyPatch(ours.left, patch)).slice(0, 80), right: ours.right.slice(0, 80) }),
+    );
+  }
+}
+
 // ------------------------------------- S7 第 4 步：打开 diff（A3）
 //
 // 桩这一轮补了三件事（评审第 2 轮 B3：桩不够忠实，断言就是自欺）：

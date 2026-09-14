@@ -1133,6 +1133,82 @@ async function main() {
         }
       }
     }
+    // ------------------------------- S7 A7：同一条消息里两次 edit + 两次 write 同一文件
+    //
+    // PLAN 的验收在自动化里的形态：两处改动必须**各自成卡**（不是并集、不是"当前磁盘 vs
+    // 首次原文"），两次 write 的前后必须**接得上**。
+    //
+    // 话术按第 2 轮评审 S5 的提醒设计：pi 的 edit 指南明写"同一文件的多处改动用一次调用的
+    // 多个 entries"，直说"分两次改"是在跟系统提示对着干 —— 所以让第二次 edit 的 oldText
+    // **只有在第一次生效后才存在**（STAGE-2 → STAGE-3，再 STAGE-3 → STAGE-4），并要求
+    // 每步单独调用。
+    {
+      const a7Target = path.join(cwd, "a7-note.txt");
+      const beforeItems = controller.snapshot().items.length;
+      await controller.prompt(
+        [
+          "请分四步完成，每一步都用**单独一次**工具调用（不要合并、不要用 bash）：",
+          `1. write：把 ${a7Target} 的内容写成两行 STAGE-1 和 tail`,
+          `2. write：把同一个文件的内容写成两行 STAGE-2 和 tail`,
+          "3. edit：把文件里的 STAGE-2 改成 STAGE-3",
+          "4. edit：**再单独调用一次**，把文件里的 STAGE-3 改成 STAGE-4",
+        ].join("\n"),
+        "auto",
+      );
+      const items = controller.snapshot().items.slice(beforeItems).filter((item) => item.kind === "tool");
+      const edits = items.filter((item) => item.toolName === "edit");
+      const writes = items.filter((item) => item.toolName === "write");
+      if (edits.length < 2 || writes.length < 2) {
+        console.log(
+          `      · SKIP：模型这次没有按"四步各自一次调用"执行（edit=${edits.length} write=${writes.length}）—— 本节断言跳过；` +
+            "判定依据是工具调用条数，不是模型措辞",
+        );
+      } else {
+        const editRecords = edits.map((item) => controller.diffStore.get(item.toolCallId));
+        const writeRecords = writes.map((item) => controller.diffStore.get(item.toolCallId));
+        check(
+          "A7：两张 edit 卡片都有可打开的 patch",
+          editRecords.every((record) => record?.kind === "patch"),
+          JSON.stringify(editRecords.map((record) => record?.kind)),
+        );
+        check(
+          "A7：两张 write 卡片都有快照",
+          writeRecords.every((record) => record?.kind === "snapshot"),
+          JSON.stringify(writeRecords.map((record) => record?.kind)),
+        );
+        const [p1, p2] = editRecords;
+        // 判据要小心：**每个 patch 本来就会同时含自己那次的旧文本与新文本**（`-旧`/`+新`），
+        // 所以"不含对方"才是关键 —— 第一版写成"p1 不含 STAGE-3"是错的（那正是 p1 的新文本）。
+        check(
+          "A7：两次 edit 的 patch 各自只含自己那次（不是并集、不是累积）",
+          p1?.kind === "patch" &&
+            p2?.kind === "patch" &&
+            p1.patch.includes("STAGE-2") &&
+            p1.patch.includes("STAGE-3") &&
+            !p1.patch.includes("STAGE-4") &&
+            p2.patch.includes("STAGE-3") &&
+            p2.patch.includes("STAGE-4") &&
+            !p2.patch.includes("STAGE-2"),
+          JSON.stringify([p1?.patch?.slice(0, 120), p2?.patch?.slice(0, 120)]),
+        );
+        check(
+          "A7：两次 edit 的 toolCallId 不同（各自成卡）",
+          edits[0].toolCallId !== edits[1].toolCallId,
+          JSON.stringify(edits.map((item) => item.toolCallId)),
+        );
+        const [w1, w2] = writeRecords;
+        check(
+          "A7：第二次 write 的 before 正是第一次 write 的 after（队列内读盘）",
+          w1?.kind === "snapshot" && w2?.kind === "snapshot" && w2.before === w1.after,
+          JSON.stringify([w1?.after, w2?.before]),
+        );
+        check(
+          "A7：卡片上的 diff 字段与 store 一致（协议那一层也接上了）",
+          edits.every((item) => item.diff === "patch") && writes.every((item) => item.diff === "snapshot"),
+          JSON.stringify([edits.map((item) => item.diff), writes.map((item) => item.diff)]),
+        );
+      }
+    }
   } finally {
     await controller.dispose().catch(() => {});
     fs.rmSync(root, { recursive: true, force: true });
