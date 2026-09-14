@@ -129,13 +129,15 @@ activate() 第一件事
   1. 列出 `keys.listProviders()`（我们存过的那份名单），**来源判定问 `runtime.getProviderAuthStatus(id).source`**：`runtime` = 面板存的（可勾）；`stored` = auth.json 里的（灰掉）；`models_json_key`/`models_json_command`/`fallback`/`environment` = pi 的配置或环境（灰掉，各写一句说明）。⚠️ **不能用 `listCredentials()` 判来源** —— 它把两种来源合并成同一条 `{providerId, type}`（F16，评审 S2）。
   2. 灰掉的项在描述里写清"这是 pi 自己的凭据（auth.json / models.json / 环境变量），本扩展不动"。
   3. 二次确认（模态）："将从 VS Code SecretStorage 删除 N 个 provider 的 key；**当前会话将无法继续发送，直到重新设置 key**（pi 的 auth.json / models.json 不受影响）"。 ← 评审 S4：清 key 是**立即生效**的内存操作，正在开着的会话下一条消息就会失败，文案必须说。
-  4. 逐个清（**不用 `logout`**，F6），每个 provider **单独 try/catch**：先 `runtime.removeRuntimeApiKey(providerId)`（成功才继续），再 `keys.removeApiKey(providerId)`（删 SecretStorage + 名单）。反过来的话，一旦 `removeRuntimeApiKey` 抛出（它内部会走 `synchronizeCredentialState`，失败时包成 `CredentialSynchronizationError`，`model-runtime.js:401-406` / `:374-392`），就会出现"SecretStorage 已删、内存里那把 key 还在"的夹生状态。末尾汇总"成功 N 个、失败 M 个（各自原因）"（评审第 2 轮 S3）。
+  4. **清理动作必须拆成一个不依赖 vscode 的核心函数**（评审第 4 轮 S3）：入参 = `ApiKeyStore` 抽象 + `ModelRuntime` + provider 列表，出参 = `{ok: string[], failed: {provider, reason}[]}`；QuickPick / 模态确认 / 提示文案都留在外层（`src/host/`）。**否则 §6 的 A5 ②③ 无处落地** —— `controller-check` 调不动一条从 QuickPick 开始的命令流，而 `host-check` 拿不到真的 `ModelRuntime`。
+   逐个清（**不用 `logout`**，F6），每个 provider **单独 try/catch**：先 `runtime.removeRuntimeApiKey(providerId)`（成功才继续），再 `keys.removeApiKey(providerId)`（删 SecretStorage + 名单）。反过来的话，一旦 `removeRuntimeApiKey` 抛出（它内部会走 `synchronizeCredentialState`，失败时包成 `CredentialSynchronizationError`，`model-runtime.js:401-406` / `:374-392`），就会出现"SecretStorage 已删、内存里那把 key 还在"的夹生状态。末尾汇总"成功 N 个、失败 M 个（各自原因）"（评审第 2 轮 S3）。
   5. 结束提示里给一句"要让 pi CLI 也忘掉，请用它自己的方式（`auth.json`）"。
 - 保留一个断言：**清理后 `auth.json` 的字节与 mtime 都不变**（C2）。
 
 ### 3.3 `Pi: Set API Key` 补完：provider 选择与校验
 
 - **候选来源**改掉硬编码（F15）：`runtime.getProviders()` → `{ id, name }`（`createProvider` 里 `name: input.name ?? input.id`）。`DEFAULT_PROVIDER = "deepseek"` 仍置顶；找不到时退回首项。
+- **来源文案抽成一个纯函数 `describeAuthSource(status) → string`**（评审第 4 轮 S4）：6 档在集成层造不出来（那四档的唯一产地是 `provider-composer.js:392-400`），抽成纯函数之后可以在 `tool-text-check` 里对 6 个输入断言 6 个输出 —— 能红、零夹具。
 - **标注已配置**：`runtime.getProviderAuthStatus(id).source` —— 完整 6 档都要有文案（F18）：`runtime`（面板存的）/ `stored`（auth.json）/ `models_json_key`（models.json 里写的）/ `models_json_command`（models.json 里配的命令）/ `fallback` / `environment`（环境变量，带变量名 label）。后四档统一归成"pi 侧配的凭据，本扩展不动"但**保留各自的说法**（用户排查时这四个词能救命）。
 - **校验（全部本地、不发请求）**：
   1. provider 必须在 pi 认识的列表里 → 不在就警告"pi 不认识这个 provider，模型列表可能是空的"，但**允许**继续（用户可能在 models.json 里自定义了 provider）；
@@ -164,7 +166,7 @@ activate() 第一件事
 正确的守卫在 **fetch 层**（目录刷新的真实出口是 `https://pi.dev`：`core/remote-catalog-provider.js:4` 的 `DEFAULT_CATALOG_BASE_URL`、`:67` 的 URL 构造、`:56` 的 `if (!context.allowNetwork || …) return`）：
 
 - **正向**：在 `controller-check` 里包一层 `globalThis.fetch` 记录 host，跑一遍完整流程（建会话、发消息、切会话、换模型、清 key），断言**没有任何一次请求打到 `pi.dev`**（顺带把所有 host 记进输出，便于将来对照）；这条能同时覆盖 `create()` 期、`models.refresh` 与未来新增的路径。
-- **反向**（证明探针是活的）：点 `Pi: Refresh Model Catalog` 之后**必须**有一次打到 `pi.dev`；可红验证 = 把该命令的 `allowNetwork` 改成 `false` → 这条变红。
+- **反向**（证明探针是活的）：点 `Pi: Refresh Model Catalog` 之后**必须**有一次打到 `pi.dev`；可红验证 = 把该命令的 `allowNetwork` 改成 `false` → 这条变红。⚠️ **前提**：pi 有 4 小时新鲜度门（`remote-catalog-provider.js:6` 的 `REMOTE_CATALOG_REFRESH_INTERVAL_MS`、`:57-62`：`checkedAt` 未满 4 小时就直接 return）→ 每次跑用**全新的 `modelsStorePath`**，或这次 refresh 传 `force: true`（`pi-ai/dist/models.d.ts:34`）（评审第 4 轮 S2）。
 
 另：`modelNetworkEnabled` 是 `private readonly`（`model-runtime.d.ts:44`），**读不到**，所以"记它的实际取值"这句删掉；要留痕就记 `process.env.PI_OFFLINE` 是否存在，并注明这是**推导值**（F8 的因果链：`modelNetworkEnabled = PI_OFFLINE === undefined`，`model-runtime.js:88`）。（评审第 2 轮 S4）
 
@@ -213,17 +215,17 @@ activate() 第一件事
 | A1 | `package.json` 声明了三项设置，默认值/描述/**`scope` 与 Q9 的裁决一致**（避免"断言写死 machine、用户却选了默认 scope"的自相矛盾 —— 评审第 2 轮 N2） | 新 `scripts/settings-check.mjs`（静态读 package.json + 与 `src/host/config.ts` 的常量对照） | — |
 | A2 | `applyAgentDirSetting()`：没设过环境变量 → 写入；已设过 → **不覆盖**；设置为空 → 不写。**断言前后必须存/删/恢复 `process.env.PI_CODING_AGENT_DIR`**（评审 N5：`host-check` 是单进程跑多条断言，泄露会污染 A9 等） | `host-check`（vscode 桩提供 `getConfiguration`） | C3 |
 | A3 | 变更 `jerrypi.agentDir` → 恰好弹一次"需要重载"的信息消息，且带「重载窗口」按钮 | `host-check`（桩记录 `showInformationMessage` 的 items） | — |
-| A4 | **空凭据目录也能对话且来源正确**（C1）：临时 agentDir（`models.json` 有 provider 无 `apiKey`、无 `auth.json`）+ SecretStorage 里有 key → 一轮真实对话成功，**且 `getProviderAuthStatus(id).source === "runtime"`** | `controller-check`（真模型） | **C1** |
-| A5 | **C2**：`clearStoredApiKeys` 之后 ① `listProviders()` 为空 ② 该 provider `getProviderAuthStatus().source !== "runtime"`（**不是** `configured === false` —— 见 §1 C2 的说明）③ **夹具里预置的 auth.json（含同一个 provider）的 sha256 与 mtime 未变**。**可红验证**：把实现里的 `removeRuntimeApiKey` 故意换成 `logout()` → 这条必须变红（证明它真的能抓 F6 那个陷阱） | `controller-check` + `host-check` | **C2** |
-| A6 | `Pi: Set API Key` 的候选来自 `getProviders()`（不是硬编码），已配置项的来源标注用 `getProviderAuthStatus().source`（**不是 `listCredentials()`**，F16/评审 S2），且 6 档都有对应文案 | `host-check`（桩记录 QuickPick 的 items） | — |
+| A4 | **空凭据目录也能对话且来源正确**（C1）：临时 agentDir（`models.json` 有 provider 无 `apiKey`、无 `auth.json`）+ SecretStorage 里有 key → 一轮真实对话成功，**且 `getProviderAuthStatus(id).source === "runtime"`**。*（那份"有 provider 无 key"的 models.json 只是为了贴近真实布局，**不是断言的必要条件** —— 没写 key 与根本没有 models.json 在 source 判定上等价，`provider-composer.js:388-391` 返回 `undefined`；评审第 4 轮 N4）* | `controller-check`（真模型） | **C1** |
+| A5 | **C2**：`clearStoredApiKeys`（**核心函数**，见 §3.2 步骤 4）之后 ① `listProviders()` 为空 ② 该 provider `getProviderAuthStatus().source !== "runtime"`（**不是** `configured === false` —— 见 §1 C2 的说明）③ **夹具里预置的 auth.json（含同一个 provider）的 sha256 与 mtime 未变**。**可红验证**：把实现里的 `removeRuntimeApiKey` 故意换成 `logout()` → 这条必须变红（证明它真的能抓 F6 那个陷阱）。**脚本归属**（评审第 4 轮 S3）：① 在 `host-check`（要 vscode 的 `secrets`/`globalState` 桩）；**②③ 与可红验证在 `controller-check`，直接调那个核心函数**（它不依赖 vscode，拿得到真 `ModelRuntime` 与真临时 auth.json） | `controller-check` + `host-check` | **C2** |
+| A6 | **拆成两半**（评审第 4 轮 S4：6 档在集成层造不出来，最省事的写法会退化成"对着实现照镜子"）：<br>**(a) 纯函数** `describeAuthSource(status)` → 文案：在 `tool-text-check` 里对 6 个输入断言 6 个输出（**能红、零夹具**）；<br>**(b)** `host-check` 断言 QuickPick 的 items 来自 `getProviders()`（不是硬编码）且每项描述是 `describeAuthSource` 的返回（来源用 `getProviderAuthStatus().source`，**不是 `listCredentials()`** —— F16/评审第 1 轮 S2） | `tool-text-check` + `host-check` | — |
 | A7 | 校验三态：`checkAuth` 有结果 / 无结果 / `getAvailable` 为空 → 三种提示文案 | `host-check` | — |
 | A8 | `Pi: Refresh Model Catalog` 调 `refresh({ allowNetwork: true })`，一次调用；结果文案里的 provider/模型数由 `getProviders()` / `getAvailableSnapshot()` 的**前后差**算出（`refresh()` 的返回不含计数 —— 评审第 2 轮 N5） | `host-check` | — |
-| A9 | `Pi: Open Settings File` 打开的是 `<生效 agentDir>/settings.json` | `host-check` | C3 |
-| A10 | 文档同步：README 中英双语里三项设置的**生效状态标签集合**与 `package.json` 一致 —— 比**可枚举的集合**（三项设置 id + 各自的状态词），**不比自由文本**（比关键词的话，换了措辞但关键词还在就会绿 —— 评审第 2 轮 N3） | 新 `scripts/settings-check.mjs` 的第二段 | — |
-| A11 | T13（advisory）：报告 `fetch.toString()` 是否含 `[native code]`、`http.proxySupport` / `http.proxy` 的值、四个代理环境变量的**存在性** —— **只报告不判定** | `src/pi/selftest.ts` | §3.4 |
-| A12 | **漂移守卫（在 fetch 层）**：正向 —— 完整流程里没有任何请求打到 `pi.dev`（并记录全部 host）；反向 —— 点 `Pi: Refresh Model Catalog` 必须有一次打到 `pi.dev`。两条都不可少（只留正向会是恒真断言，见 §3.5 的第 2 轮 B2） | `controller-check` | §3.5 |
-| A13 | **C3 的会话链路**：临时 agentDir 下 `dirname(sessionFile)` 落在 `<temp>/sessions/` 之下（复用 S5 的 `resolveSessionDir(cwd, sessionsRoot)`） | `controller-check` | **C3** |
-| A14 | **C3 的凭据链路**：夹具在 `<temp>/auth.json` **预置** provider X 的凭据 → 断言 `getProviderAuthStatus(X).source === "stored"`（证明 runtime **读的是新目录那份**）**且** 真实 `~/.pi/agent/auth.json` 的 sha256 未变（没串到真目录） | `controller-check` + `host-check` | **C3** |
+| A9 | `Pi: Open Settings File` 打开的是 `<生效 agentDir>/settings.json`。**夹具目录必须预先 `mkdir`** —— §3.6 改成"目录不存在就报错、不替用户建"之后，未预建的夹具会让命令走报错分支、断言以"没打开"的方式假红（评审第 4 轮 N5） | `host-check` | C3 |
+| A10 | 文档同步：README 中英双语里三项设置的**生效状态标签集合**与 `package.json` 一致 —— 比**可枚举的集合**（三项设置 id + 各自的状态词），**不比自由文本**（评审第 2 轮 N3）。**先挡"空集合 == 空集合"**（评审第 4 轮 N2，留给实施期）：脚本第一步断言 `ids.size === 3`、且状态词全部落在一个**写死的白名单**里，再比两边 | 新 `scripts/settings-check.mjs` 的第二段 | — |
+| A11 | T13（advisory）：报告 `fetch.toString()` 是否含 `[native code]`、`http.proxySupport` / `http.proxy` 的值、四个代理环境变量的**存在性** —— **内容只报告不判定**，但要加一条最低限度的判定："T13 **必须产生一行以 `T13` 开头的输出**"（否则将来报告段抛异常被吞掉，只会少一行、没人发现 —— 评审第 4 轮 N3） | `src/pi/selftest.ts` | §3.4 |
+| A12 | **漂移守卫（在 fetch 层）**：正向 —— 完整流程里没有任何请求打到 `pi.dev`（并记录全部 host）。**探针必须在 `ModelRuntime.create()` 之前装**（create 期那次刷新正是 F8 点名的窗口，装晚了照不到 —— 评审第 4 轮 N1；顺带：我们的 bundle 里 `undici.install()` 出现 0 次，pi 不会反手把 fetch 换回去）。反向 —— 点 `Pi: Refresh Model Catalog` 必须有一次打到 `pi.dev`。**反向那格的前提**：`models-store.json` 里有 `checkedAt` 且未满 4 小时时，pi 会直接 return（`remote-catalog-provider.js:6` 的 `REMOTE_CATALOG_REFRESH_INTERVAL_MS = 4h`、`:57-62`）→ 每次跑必须用**全新的 `modelsStorePath`**，或这次 refresh 传 `force: true`（`pi-ai/dist/models.d.ts:34`），否则第二次运行会假红（评审第 4 轮 S2） | `controller-check` | §3.5 |
+| A13 | **C3 的会话链路**：**设 `process.env.PI_CODING_AGENT_DIR = <temp>`（不传 `agentDir` 选项！）** → `dirname(sessionFile)` 落在 `<temp>/sessions/` 之下（复用 S5 的 `resolveSessionDir(cwd, sessionsRoot)`），跑完恢复环境变量 | `controller-check` | **C3** |
+| A14 | **C3 的凭据链路**（同样走环境变量、不传选项）：夹具在 `<temp>/auth.json` **预置** provider X 的凭据 → 断言 `getProviderAuthStatus(X).source === "stored"`（证明 runtime **读的是新目录那份**）**且** 真实 `~/.pi/agent/auth.json` 的 sha256 未变 | `controller-check` + `host-check` | **C3** |
 
 **A4/A5 共用的前置条件**（评审第 2 轮 S2：原来只挂在 A4 上，A5 少了一半保护）：临时 agentDir + **子进程里 `env -u` 清掉 `*_API_KEY` / `*_TOKEN` / `ANTHROPIC_*` 之类的凭据环境变量**。不干净的环境会让这两条一个假绿（别人的 key 顶着）、一个假红（环境凭据让 `configured` 永远为真）。
 **auth.json 的有无不共用**（评审第 3 轮 N3）：A4 要"**没有** auth.json"，A5/A14 要"**预置**一份含同一个 provider 的"，所以它们各自用一份夹具（或按顺序重建临时目录），别复用同一个跑。
@@ -371,6 +373,32 @@ API Error: Request rejected (429) · api key 日限额已用完
 **未解决分歧**：无（三轮共 37 条意见：35 ACCEPT / 1 REJECT / 1 部分 REJECT / 1 DEFER，全部有理由）。
 **⚠️ 残留风险**：第 3 轮的 B1 是**采纳在评审结束之后**的 —— 那处修改（A14 的新写法）**没有任何人复核过**，见 §10.1。这也是为什么"评审能收敛"和"计划能动手"是两件事。
 
+### 第 4 轮（2026-09-13，**用户明确授权再跑一轮**）—— 收敛：`VERDICT: NON_BLOCKING`
+
+这一轮是用户在看到"第 3 轮的 B1 修法本身没人复核"之后批准的，目的只有两个：**把 B1 的修法复核掉**，以及**扫一遍同类缺陷**（"这条断言在我们自己的设计下能不能绿"）。它做到了，而且**没有产出 BLOCKING**。
+
+| # | 意见 | 处置 | 我怎么处置的 |
+| --- | --- | --- | --- |
+| FOCUS 1 | **A14 的新写法通过**：能绿（`{"configured":true,"source":"stored"}`，对应 `model-runtime.js:414-415`）、能红（我的对照：不预置 auth.json → `{configured:false}`）、**且不会被环境伪造** —— `stored` 的判定（`:414`）在 `environment`（`:419-420`）**之前**，所以哪怕机器上有 `DEEPSEEK_API_KEY`，"读错目录"也只会表现成 `source === "environment"`、蒙混不过去。它说这一点上 A14 比 A4/A5 更结实（那两条还得靠"干净子进程"这个外部前提兜着）；我的实跑方法它挑不出洞 | **通过** | 无改动（只在 §10.1 记下有实测证据） |
+| **S1** | **A13/A14 会绿，但绿的没证明判据里那个字**：C3 的主语是"**`jerrypi.agentDir` 这个设置**"，而 A13/A14 传的是 `agentDir` **选项** → 证明的只是"参数被尊重"（那从 S5 起就一直成立），"设置 → 环境变量 → `pi.getAgentDir()` → 各调用方"这条链的后半段**无人断言** | **ACCEPT** | A13/A14 改成**设 `process.env.PI_CODING_AGENT_DIR`、不传选项**（已核 `controller.ts:288` 的 `?? pi.getAgentDir()`，所以这条链真的会被走到；本仓 `controller-check.mjs:728-734` 有同样的先例） |
+| **S2** | **A12 的反向断言会在第二次运行时假红**：pi 有 4 小时新鲜度门（`remote-catalog-provider.js:6` 的 `REMOTE_CATALOG_REFRESH_INTERVAL_MS`、`:57-62`），`checkedAt` 未满 4 小时直接 return、根本不发请求 | **ACCEPT** | A12 反向那格写明前提：每次跑用**全新的 `modelsStorePath`** 或传 `force: true`（`pi-ai/dist/models.d.ts:34`）；命令本身要不要带 `force` 留给实施期 |
+| **S3** | **A5 的 ②③ 无处落地**：① 要 vscode 桩（host-check）、②③ 要真 `ModelRuntime`（controller-check），而 §3.2 把清理描述成一条从 QuickPick 开始的命令流 | **ACCEPT** | §3.2 步骤 4 要求**拆出不依赖 vscode 的核心函数**（入参 `ApiKeyStore` + `ModelRuntime` + provider 列表；出参成功/失败汇总），UI 留外层；A5 的脚本归属写清（① host-check；②③ 与可红验证在 controller-check 直接调核心函数） |
+| **S4** | **A6 的"6 档文案"在集成层造不出来**，最省事的写法会退化成"对着实现照镜子"（断言文案表有 6 个键） | **ACCEPT** | 抽出纯函数 `describeAuthSource(status)`：`tool-text-check` 里 6 输入/6 输出（能红、零夹具）；`host-check` 只断言接线与来源 |
+| N1 | A12 正向的探针**必须在 `ModelRuntime.create()` 之前装**（create 期那次刷新正是 F8 的窗口） | **ACCEPT** | A12 那格写明；并记下"我们的 bundle 里 `undici.install()` 出现 0 次，pi 不会反手换掉 fetch" |
+| N2 | A10 有"空集合 == 空集合"的恒绿缝 | **ACCEPT（留给实施期）** | 脚本第一步断言 `ids.size === 3` + 状态词落在写死的白名单里 |
+| N3 | A11（advisory）按定义永不红，但至少要保证"它真的输出了" | **ACCEPT（留给实施期）** | 加最低判定："必须产生一行以 `T13` 开头的输出"，内容仍不判定 |
+| N4 | A4 夹具里那份"有 provider 无 `apiKey` 的 models.json"不增加鉴别力（没写 key 与没有该文件在 source 判定上等价，`provider-composer.js:388-391`） | **ACCEPT** | 括注写明"只为贴近真实布局，不是必要前提"，免得实施者以为必须造自定义 provider 条目（那反而有风险） |
+| N5 | A9 的夹具目录必须**预先存在**（§3.6 改成不替用户建目录之后，未预建会走报错分支、假红） | **ACCEPT** | A9 那格补"夹具目录须预先 `mkdir`" |
+
+**它的 STRONGEST_OBJECTION（S1 是 B1 的同族，更温和的一副面孔）** —— 原话值得抄下来：
+
+> B1 是"要求了设计不产生的东西"（永远红）；S1 是"断言的量比判据弱一档"（永远绿，但绿得不值钱）。两者的共同根源是同一件事：**判据里的主语被悄悄换掉了**。
+> 所以那条新纪律还得再追问半句：**"它绿的时候，到底证明了判据里的哪个字？"**
+
+⇒ 已补进 `AGENTS.md §2`。
+
+**收敛结论**：4 轮共 **47 条意见**（41 ACCEPT / 1 REJECT / 1 部分 REJECT / 1 DEFER / 其余为 NIT 采纳），**第 4 轮 NON_BLOCKING** —— 达到我们定义的收敛条件。
+
 ### 10.1 评审后的改动（**未经复核**）
 
 | # | 改动 | 复核状态 |
@@ -378,8 +406,9 @@ API Error: Request rejected (429) · api key 日限额已用完
 | 1 | **§9 的"步骤 ↔ 断言"表**（A10–A14 原来没人认领） | **第 3 轮已复核通过**（它逐个对过：A1–A14 → 10 个步骤，无遗漏无重复） |
 | 2 | `AGENTS.md §2` 的 **L1 纪律**（干净环境 + 判别输入只有一种解释） | **第 3 轮已复核通过**（清单与判别法与它实跑的命令对得上） |
 | 3 | **§4 的 Q9 / 编号修正**（标题 Q1–Q9、Q9 移到表末、改成"三项全 machine"） | **第 3 轮已复核通过**（与 §3.1 第 4 条一致、不再与第 2 轮 B3 相反） |
-| 4 | **A14 的新写法**（B1 采纳之后改的：预置 auth.json → 断言 `source === "stored"`） | ⚠️ **未经任何复核** —— 第 3 轮已经用完，这是"三轮上限"下必然会留的盲区 |
-| 5 | `AGENTS.md §2` 新增的"**采纳评审意见时先问它能不能绿**" | ⚠️ **未经任何复核**（来自第 3 轮 STRONGEST_OBJECTION） |
+| 4 | **A14 的新写法**（B1 采纳之后改的：预置 auth.json → 断言 `source === "stored"`） | **⚠️ 无评审复核，但已有实测**（用户授权后我先跑了前提）：预置 auth.json → `getProviderAuthStatus('deepseek') = {configured:true, source:"stored"}` ✅；不预置 → `{configured:false}`（说明有鉴别力）；真实 auth.json 的 sha256 前后一致 |
+| 5 | `AGENTS.md §2` 新增的"**采纳评审意见时先问它能不能绿**"（第 4 轮又补了半句"**它绿的时候证明了判据里的哪个字**"） | ⚠️ **未经任何复核**（来自第 3、4 轮的 STRONGEST_OBJECTION） |
+| 6 | **第 4 轮 4 条 SHOULD-FIX 的改法**（A13/A14 改走环境变量、A12 的 `force`/新 store 前提、A5 拆核心函数、A6 拆纯函数） | ⚠️ **未经复核** —— 改法是评审给的，但改完的文本没人再看一遍。**这正是 B1 的教训本身**：评审给的改法也要过一遍"在我们自己的设计下能不能绿"。本轮我逐条核了前提（`controller.ts:288` 的 `?? pi.getAgentDir()`、4 小时常量、`configuredRequestAuthStatus` 的 `undefined` 分支），但那是**我**核的 |
 
 ### 10.2 评审者的事实错误（本轮 3 处，按"评审的意见也要自己核"）
 
