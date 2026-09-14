@@ -18,7 +18,7 @@
 | F2 | patch 由**工具自己的执行边界**内生成：`generateUnifiedPatch(path, baseContent, newContent)`，其中 `baseContent`/`newContent` 是**归一化成 LF 后**的内容（`normalizeToLF` → 改 → `restoreLineEndings` 只在写盘时做）。所以 patch 里的行尾恒为 `\n`、且**必然是该次调用前的文件内容 vs 该次调用后的内容** —— 不是"当前磁盘"，也不是"首次保存的原文" | `edit.js:107-130`（`splitBom`/`detectLineEnding`/`normalizeToLF` → `applyEditsToNormalizedContent` → `generateUnifiedPatch`） |
 | F3 | `generateUnifiedPatch` = `Diff.createTwoFilesPatch(path, path, old, new, undefined, undefined, { context: 4, headerOptions: FILE_HEADERS_ONLY })` —— **上下文 4 行**、只有 `--- / +++` 头（没有 index 行、没有时间戳） | `dist/core/tools/edit-diff.js:264`；`diff@8.0.4`（`node_modules/diff/package.json`） |
 | F4 | patch 头里的路径是**模型给的原始路径**（`generateUnifiedPatch(path, …)` 的 `path` 就是 `params.path`），**不是**解析后的绝对路径。本机会话里看到绝对路径，只因为模型写的就是绝对路径 | `edit.js:130` vs `edit.js:95` 的 `resolveToCwd(path, ctx?.cwd || cwd)`；`~/.pi/agent/sessions/--Users-fengrui-Desktop-prj-jerrypi-vscode--/2026-09-14T11-43-13-620Z_*.jsonl` 里的 patch 头 `--- /Users/fengrui/Desktop/prj/jerrypi-vscode/scripts/controller-check.mjs` |
-| F5 | **只有 `edit` 的 toolResult 持久化 `details`**。本机实测：会话文件里 `toolResult(toolName="edit")` 的 `details` 键就是 `['diff','patch','firstChangedLine']`；`write`/`bash`/`read` 的 toolResult 没有 `details` | 上面那个 jsonl（6 条 edit 记录全部有 details）；`dist/core/tools/write.js` 的 `return { content: […], details: undefined }` |
+| F5 | **只有 `edit` 的 toolResult 持久化 `details`**。本机实测：会话文件里 `toolResult(toolName="edit")` 的 `details` 键就是 `['diff','patch','firstChangedLine']`；`write`/`bash`/`read` 的 toolResult 没有 `details` | 上面那个 jsonl（**72 条正常 edit 全部有 details**；3 条失败的见 F5b —— 第一版这里只写了最初看到的 6 条，两处数字不一致是评审 N5 抓到的）；`dist/core/tools/write.js` 的 `return { content: […], details: undefined }` |
 '| F5b | ⚠️ **失败的 edit 带 `details = {}`（真值空对象）**：本机会话实测有 3 条这样的 toolResult（`Found 2 occurrences of edits[0]…`、`No changes made…`、`Could not find edits[1]…`），`isError: true`、`details` 是 `{}`。所以「details 存在」**不等于**「有 patch」——`if (details)` 这一类判断会给失败的 edit 挂上一个点开是空的死链（正是 C4/R4 要防的） | 本机 `~/.pi/agent/sessions/--Users-fengrui-Desktop-prj-jerrypi-vscode--/2026-09-14T11-43-13-620Z_*.jsonl`：72 条正常 edit 全是 `['diff','patch','firstChangedLine']`，3 条失败的全是 `{}`；抛错点在 `edit.js:105-113`（access 失败）与 `edit-diff.js:258-260`（`getNoChangeError`） |
 | F6 | 会话重放拿得到 `details`：`sessionEntryToContextMessages(entry)` 对 `type === "message"` **原样返回 `entry.message`**'（除了 `content == null` 时会重建成 `{...message, content: []}` —— 实测过：`details` 照样在，但「原样」这个说法不准确） | `dist/core/session-manager.js:165-177` |
 | F7 | 包导出面里有 `generateUnifiedPatch`（漂移守卫可以直接调它），**没有** `parsePatch` / `applyPatch` —— 所以"把 patch 解析回两侧文本"必须我们自己写 | `pi-runtime/dist/bundle/index.js` 的 export 列表（`generateDiffString, generateUnifiedPatch, renderDiff …`，逐个 grep 过 `parsePatch`/`applyPatch`：0 次） |
@@ -55,7 +55,7 @@
 | F14 | host 侧的两个序列化入口：实时是 `onMessageEnd`（`raw = session.messages[last]` → `serializeMessage`），重放是 `snapshot()`（`serializeMessages(session.messages)`）。**两个入口都能拿到带 `details` 的原始 message**（F6） | `src/pi/controller.ts:889-905`、`:706` |
 '| F15 | `SessionHostController` 是**每个面板一个、活到扩展卸载**；`SessionHost`（含 runtime/session）会在 `newSession`/`switchSession` 时被替换。所以「本进程内兜底」的 store 要挂在 **controller** 上，不能挂在 host 上（否则切一次会话就丢） | `src/pi/controller.ts:1086`（`private view()`）、`:345`（`this.host = host`）、`:780`（`this.host = undefined`）、`:270`（替换后 `onSessionReplaced`）—— 第一版引的 `:129` 是 `SessionView` 接口里的 `isStreaming`，**引用错、结论对**（评审 S1） |
 | F16 | `vscode` 桩现在**没有** `workspace.registerTextDocumentContentProvider`、也**没有** `commands` 里的 `diff`；`Uri` 只有 `file/parse/joinPath`（没有 `scheme`/`path`/`from`） | `scripts/fixtures/vscode-stub.mjs`（grep 三个名字：0 命中） |
-'| F17 | 本步**不需要**新的 VS Code 命令、不动 pi 的装配路径、不加依赖：`diff@8.0.4` 只是断言期的对照物（它是 pi 与 `pi-agent-core` 的**传递依赖**，我们的 `package.json` 里**根本没有 `dependencies` 键**，pi 在 `devDependencies`；`package` 脚本还带 `--no-dependencies`，所以它本来也进不了 VSIX） | `package.json`（`dependencies` 缺失、pi 在 `devDependencies`）；`npm ls diff` → `@earendil-works/pi-coding-agent@0.85.1 → diff@8.0.4`（评审 S1 的改正） |
+'| F17 | 本步**不需要**新的 VS Code 命令、不动 pi 的装配路径、不加**运行时**依赖：`diff@8.0.4` 只是断言期的对照物（它是 pi 与 `pi-agent-core` 的**传递依赖**，我们的 `package.json` 里**根本没有 `dependencies` 键**，pi 在 `devDependencies`；`package` 脚本还带 `--no-dependencies`）**但**：A8 的 oracle 直接 `import "diff"`，靠传递依赖太脆（pi 换掉它就成了 import 失败，而按本仓纪律 import 失败不算红）→ **把 `diff: "8.0.4"` 写进 `devDependencies`**，并在 A8 里断言版本（不符就**显式失败**，不是 SKIP）。devDependencies 不会进 VSIX，所以这条与本行开头的结论不冲突 | `package.json`（`dependencies` 缺失、pi 在 `devDependencies`）；`npm ls diff` → `@earendil-works/pi-coding-agent@0.85.1 → diff@8.0.4`（评审 S1 的改正、S5 的加固） |
 | F18 | **host-check 里已经有「真 pi」**：它把 `loadPi` 打进临时 bundle，并且在 A6b/A7 里真的加载了 `pi-runtime/dist/bundle/index.js`。所以「纯函数、不需要凭据」的漂移守卫必须放 host-check，不能放 controller-check（那支没凭据时整体 SKIP，而 SKIP 不是 PASS） | `scripts/host-check.mjs:166`（导出 `loadPi`）、`:841-842` 的注释、`:881`/`:955`（真的 `await loadPi(REPO_ROOT)`） |
 
 ## 1. 目标与判据
@@ -73,7 +73,7 @@
 
 **做**：
 
-1. `src/shared/patch.ts`：**纯函数** `sidesOfPatch(patch) → { left, right }`（unified patch → 两侧文本）+ `pathLabelOf(header)`（取文件名给标题用；**不 import `node:path`** —— `src/shared/` 会被打进浏览器产物（`esbuild.mjs:10`），所以 basename 要自己同时按 `/` 与 `\` 切，Windows 的 `C:\a\b.ts` 才取得到 `b.ts`）。
+1. `src/shared/patch.ts`：**纯函数** `sidesOfPatch(patch) → { left, right, hunks: { left: string[]; right: string[] }[] }`（两侧文本给渲染用；`hunks` 是**每个 hunk 各自的行**，给断言与 oracle 对照用 —— 评审 S2 指出：只有扁平两侧时，测试想逐 hunk 比就得拿我们自己插的分隔行去切，那是把 oracle 和实现耦在一起）。另有 `pathLabelOf(patch)`：从 `+++` 取（缺失时退回 `---`）、容忍 GNU diff 的 `\t<时间戳>` 尾巴，**不 import `node:path`** —— `src/shared/` 会打进浏览器产物（`esbuild.mjs:10`），basename 要自己同时按 `/` 与 `\` 切，Windows 的 `C:\a\b.ts` 才取得到 `b.ts`（评审 N2 补的两条）。
 2. `src/pi/filechanges.ts`：按 `toolCallId` 的 store（`edit` 存 patch，`write` 存前后内容）+ `recordEditsFromMessages(messages, context)`（实时与重放**共用同一个函数**）。
 3. 把 `custom-tools.ts` 的 `WriteProbe` 泛化成 `WriteRecorder`（多带 before/after），生产路径接上 store。
 4. `src/host/diff.ts`：`jerrypi-diff:` 虚拟文档 + `vscode.diff`；`openDiff(toolCallId)` 只认 store 里登记过的 id。
@@ -114,14 +114,17 @@ type FileChange =
 | --- | --- | --- |
 | 实时 edit | `controller.onMessageEnd()` → 拿到 toolResult 的原始 message（F14） | `recordEditsFromMessages([message], ctx)` |
 | 实时 write | 我们的 write 包装的 `ops.writeFile`（**在 pi 的互斥队列内**，F8/F9） | `stat` → 读旧内容 → 写 → `store.recordWrite(...)` |
-| 重放/重启/切会话回来 | `controller.snapshot()` → `session.messages`（F6/F14） | `recordEditsFromMessages(session.messages, ctx)`（**同一个函数**，所以实时与重放不可能各写一套） |
+| 重放/重启/切会话回来 | `controller.snapshot()` → `session.messages`（F6/F14） | `recordEditsFromMessages(session.messages, ctx)`（**edit 的实时与重放共用这一个函数**；write 只有实时那一条入口 —— 这句在 write 上从来不成立，评审 N4） |
 
-**两条语义必须写死（评审 B1 的处置）**：
+**三条语义必须写死（B1/B2 两轮评审的共同结论）**：
 
-1. **重放只登记 `edit`，绝不动 `write` 的记录**。`recordEditsFromMessages` 只可能处理带 patch 的 `toolResult`（F5：write 的 toolResult 没有 details 可登记）；write 的「可用/不可用」是**在序列化时从 store 派生**的（store 里有 snapshot → 给 `diff:"snapshot"`；没有 → 给 `diffUnavailable`）—— **重放不会往 store 里写 `unavailable`**。
-2. **登记是 upsert-if-absent**：同 id 已有记录就不覆盖（重放一生中会被调用很多次：容器迁移、切会话回来、`requestState`；幂等才安全）。
+1. **重放只登记 `edit`，绝不碰 `write` 的记录**。`recordEditsFromMessages` 只可能处理带 patch 的 `toolResult`（F5：write 的 toolResult 没有 details 可登记）；write 的「可用/不可用」是**在序列化时从 store 派生**的（store 里有 snapshot → `diff:"snapshot"`；没有 → `diffUnavailable:"none"`）—— 重放不会往 store 里写 `unavailable`。
+2. **按 kind 分开写**（不是一条"upsert-if-absent"套两边 —— 第 1 轮我这么写，第 2 轮 B2 证明它把 edit 锁死了）：
+   - `edit` 的 patch：**可覆盖**（含覆盖墓碑）。它由 `details.patch` 唯一确定（F1/F2），覆盖 = 幂等；而且它在会话文件里躺着、每次重放都能免费再生（F6）—— "已有就别动"只会让被淘汰的 patch 永远回不来，与 C3 的承诺（重启后 edit 的 diff 仍可打开）直接冲突，也与 §3.4 给 URI 加序号的理由（"被淘汰后重新登记"）自相矛盾。
+   - `write` 的 snapshot：**只有实时那一条入口写它**（`ops.writeFile`），重放从不写。所以"不覆盖"不需要额外规则——它天然只有一个写者；store 的 `set` 语义即可。
+3. **同一 id 的两种记录不会互相污染**：墓碑是独立记录，被 patch 覆盖后就不再是墓碑。
 
-> 评审的 B1 说的是「重放会把实时快照改写成 unavailable」。按上面的语义**这个 bug 不成立**（能写 `unavailable` 的只有 write 快照的淘汰/读失败路径）；但它指出的**覆盖缺口是真的**：原 A4 只断言「空 store 重放 → write 不可用」，这条**从写下的第一天起就是绿的**，不会在实现坏掉时红。所以 A4 拆成两条，第二条（先有实时快照、再重放）才是能红的那条。
+> 第 1 轮的 B1（"重放把实时快照改写成 unavailable"）**不成立**（能写 `unavailable` 的只有淘汰/读失败路径）；但它指出的**覆盖缺口是真的**：原 A4 只断言"空 store 重放 → write 不可用"，那条从写下的第一天起就是绿的。而现在这段的第 2 条又修掉了第 1 轮引入的 upsert-if-absent —— 两次评审的方向正好相反，**判据是同一个**：C3 承诺的是"重启后 edit 的 diff 仍可打开"。
 
 三条都遵守同一条纪律：**recorder 的每一步都 try/catch，失败只写 Output，绝不让工具调用失败**（复盘 S6 的 M1：真机才会暴露的恰恰是这些边界）。
 
@@ -147,7 +150,7 @@ type FileChange =
 
 - scheme：`jerrypi-diff:`；URI 形如 `jerrypi-diff:/<toolCallId>/<left|right>/<basename>`，query 里放一个自增序号。**每一段都 `encodeURIComponent`**：`#` 会被 `Uri.parse` 当 fragment、`?` 当 query（这个坑本仓已经踩过并写在 `chatView.ts:230-232`；虚拟 scheme 没有 `Uri.file` 可用，只能自己编码）。
   - **为什么要序号**：VS Code 按 URI 缓存虚拟文档，同一个 id 反复打开时同 URI 可能命中旧内容；内容本身是不可变的，但"同 id 换了内容"（比如被淘汰后重新登记）必须换 URI。
-- `provideTextDocumentContent(uri)` 只认 store 里的 id；找不到就返回空串（VS Code 关闭文档时还会问一次，那时返回空串是正常路径，不记 Output 噪声）。
+- `provideTextDocumentContent(uri)` 只认 store 里的 id（**从 `uri.path` 与 `uri.query` 取** —— 所以桩的 `Uri.parse` 必须真的拆 scheme/path/query/fragment，见 §6 A3/B3）；找不到就返回空串（VS Code 关闭文档时还会问一次，那时返回空串是正常路径，不记 Output 噪声）。
 - `vscode.diff(left, right, title, { preview: true })`；title = basename + 形态：
   - patch：`a.ts（edit 前后 · 仅改动附近）`（basename 用 `pathLabelOf`，同时兼容 `\` 与 `/`）
   - snapshot：`a.ts（write 前 → 后）`，新文件写 `a.ts（新建）`
@@ -157,8 +160,8 @@ type FileChange =
 
 | 位置 | 增量 |
 | --- | --- |
-| `protocol.ts` 的 tool item | `diff?: "patch" \| "snapshot"`；`diffUnavailable?: true` |
-| `serialize.ts` | 从 `details`/store 推出上面两个字段（**不把 patch 本体塞进协议**：它可以是几十 KB，协议是每帧都要过的） |
+| `protocol.ts` 的 tool item | `diff?: "patch" \| "snapshot"`；`diffUnavailable?: "evicted" \| "too-large" \| "read-failed" \| "none"`（**不是一个布尔** —— 三种文案要三种原因，评审 S1）。`none` = store 里什么都没有（重启后的 write 走这档） |
+| `serialize.ts` | 从 store 推出上面两个字段（**不把 patch 本体塞进协议**：它可以是几十 KB，协议是每帧都要过的）。**store 要经 `SerializeContext` 传进来**（现在那里只有 `{cwd}` —— 评审 S1 提醒的接线点） |
 | `render.ts` | 加在 **`renderToolHeadLine`**（不是 `renderToolCard`！见 `render.ts:261-267` 的注释：那是唯一产出按钮内容的地方，就地更新路径也走它 —— 加错地方会「断言全绿、真机不出现」，S3 第一次人工验收就是这么被咬的）。`diff` 存在 → 标题行尾渲染 `<a class="tool-diff" data-open-diff="…" role="button" tabindex="0">查看 diff</a>`（**role/tabindex 不能少**，与路径链接同规格）；`diffUnavailable` → `<span class="tool-note">…</span>`，文案按原因：`本次会话不可用`（evicted / 无记录）、`文件过大，未保留`（too-large）、`快照读取失败`（read-failed） |
 | `main.ts` | 捕获阶段的委托里加一条：`data-open-diff` → `{type:"openDiff", toolCallId}`（与 `data-open-path` 同一条路径），**并且 `onTranscriptKeydown` 也加同一条**（Enter/Space；评审 S4：路径链接有、新链接不能没有） |
 | `chatView.ts` | `case "openDiff":` → `controller.isDiffOpenable(id)` → `diff.open(id)`；拒绝要写 Output |
@@ -166,7 +169,8 @@ type FileChange =
 ### 3.6 内存上限（Q4 的默认值）
 
 - `write` 快照：**条数 20 / 总量 8 MiB**；`edit` 的 patch：**条数 100 / 总量 8 MiB**（两侧都要有字节上限 —— 一次大范围重写的 patch 约等于新旧两份内容，只卡条数等于没卡，评审 S7）。
-- 淘汰口径是 **FIFO**（按插入序，不是 LRU；第一版把它叫 LRU 是错的，评审 N3）：diff 的用途就在改动后几分钟内，按时间淘汰够用，实现简单到能一眼看懂。**淘汰时把该 id 改成 `unavailable{why:"evicted"}`（write 与 edit 一样），不要直接删**，否则卡片会静默失去说明。
+- **条数上限只数「活记录」（patch + snapshot），墓碑另算**（评审第 2 轮 B1）：墓碑也占条目的话，淘汰出来的墓碑会让条数永远降不回去 —— 插第 101 条 → 淘汰 → 又是 101 条 → 无限回退，**这是写不出来的实现**。墓碑单独一个上限（500 条，纯标量），**超了就丢最旧的墓碑**；丢墓碑是安全的：write 侧落回 `diffUnavailable:"none"`（文案仍出得来），edit 侧反而**正好是重放把 patch 重新登记回来**的通道（见 §3.2 第 2 条）。
+- 淘汰口径是 **FIFO**（按插入序，不是 LRU；第一版把它叫 LRU 是错的，评审 N3）：diff 的用途就在改动后几分钟内，按时间淘汰够用，实现简单到能一眼看懂。**淘汰时把该 id 记成 `unavailable{why:"evicted"}`（write 与 edit 一样），不要直接抹掉**，否则卡片会静默失去说明。
 - 读盘/登记前先看大小：单条 > 2 MiB 直接记 `unavailable{why:"too-large"}`（**不读/不存**）——不然一次大 write 就让扩展宿主多背一份内存。
 
 ## 4. 决策与默认值（Q1–Q7，等用户拍板）
@@ -176,7 +180,7 @@ type FileChange =
 | Q1 | 重启后 edit 的 diff 只显示**改动附近 4 行**（补丁视图），不是整文件；多个 hunk 之间插一条两侧相同的「⋯（中间省略）」分隔行 | **接受**（F3/F5：我们拿不到该次调用前的整份文件；分隔行是为了不让人误以为两段是连着的 —— 评审 S3） | 不显示 → 违背 PLAN 验收；给 edit 也做同名包装拿整文件 → 见 §2 不做清单 |
 | Q2 | write 的 diff 重启后消失（只活在进程内） | **接受**，卡片显示"本次会话不可用"（PLAN 原文口径） | 存进 VS Code `globalStorage` → 持久化用户文件内容，另立数据生命周期（要用户单独拍板才做） |
 | Q3 | 入口与文案：标题行尾的「查看 diff」；不可用时按原因给三种文案（`本次会话不可用` / `文件过大，未保留` / `快照读取失败`） | **接受** | 放正文里 → 折叠时点不到；一律写「不可用」分不出原因 |
-| Q4 | 上限口径：write 快照 20 条 / 8 MiB；patch 100 条 / 8 MiB（**两侧都有字节上限**）；单条 > 2 MiB 不读不存；淘汰按 FIFO 并留 `unavailable{why:"evicted"}` | **接受** | 只卡条数 → 大 patch 会把内存吃光（评审 S7）；真 LRU → 收益不值这份复杂度（评审 N3） |
+| Q4 | 上限口径：write 快照 20 条 / 8 MiB；patch 100 条 / 8 MiB（**两侧都有字节上限**）；单条 > 2 MiB 不读不存；淘汰按 FIFO 并留 `unavailable{why:"evicted"}` 墓碑（**条数只数活记录，墓碑另封顶 500 且可丢**） | **接受** | 只卡条数 → 大 patch 会把内存吃光（S7）；把墓碑也算进条数 → 实现回退不下去（第 2 轮 B1）；真 LRU → 收益不值这份复杂度（N3） |
 | Q5 | 只对 `edit` / `write` 提供 diff（`bash` 写文件不管） | **接受** | 见 §2 不做清单 |
 | Q6 | v1 不做 `firstChangedLine` 跳转 | **接受** | 要额外一次 `revealRange`，收益小 |
 | Q7 | 打开方式：当前列、`preview: true`（再点别的 diff 会复用同一组标签） | **接受** | 固定新列 → 会堆一堆编辑器 |
@@ -190,6 +194,7 @@ type FileChange =
 | R3 | 虚拟文档 URI 缓存串味（同一个 id 重复打开拿到旧内容） | 看到过期 diff | URI 里带自增序号（§3.4）；内容不可变，不需要 `onDidChange` |
 | R4 | 卡片上的链接**看着可点、点了没反应** | S6 的 M5 已经出过一次同类事故（`data-open-path` 死链） | 两层同判（§3.5）+ webview-dom 断言点击真的 post 了消息 |
 | R5 | write 包装在未来某次 pi 升级后不再是"同名覆盖" | 快照静默失效（卡片显示"不可用"而不是报错） | T6 继续钉住 `sourceInfo.source === "sdk"`（S1 已建）；升级时先跑 `check:gate` |
+| R6 | A8 的 oracle（`diff`）是**我们自己声明之外的传递依赖**：pi 哪天换掉或重排 node_modules，A8 会变成 import 失败 —— 而 import 失败不算红（AGENTS.md §2） | 漂移守卫静默失效 | `diff: "8.0.4"` 进 `devDependencies`（不进 VSIX）+ A8 里断言 `require("diff/package.json").version === "8.0.4"`，不符**显式失败**（评审第 2 轮 S5） |
 
 ## 6. 检查清单（自动断言，先红后绿）
 
@@ -200,13 +205,13 @@ type FileChange =
 | # | 断言 | 放哪 | 能红验证 |
 | --- | --- | --- | --- |
 | A1 | `sidesOfPatch` 对 5 组夹具（单行文件整行替换 / 多 hunk / 纯新增 / 纯删除 / 无尾换行）逐字符正确；`@@ -5 +5 @@`（不带 count）也能解析 | host-check | 把 hunk 头正则改成贪婪匹配 → "多 hunk"那条红 |
-| A2 | store：三种记录都能取回；**登记是 upsert-if-absent**（同 id 重复登记不覆盖已有记录）；条数或字节超限时最旧的变 `unavailable{why:"evicted"}`（**不是消失**，edit 与 write 都算）；超大输入**没有**把内容存进来 | host-check | 去掉淘汰逻辑 → 上限那条红；把 upsert-if-absent 改成覆盖 → 「重复登记不覆盖」那条红 |
-| A3 | `openDiff`：已登记 → `vscode.diff` 恰好调用一次、两个 URI 都是 `jerrypi-diff:`、左右内容与 `sidesOfPatch` 一致；未登记 → **不调用** + Output 有一行拒绝；标题的文件名从 **Windows 形态的 patch 头**（`--- C:\a\b.ts`）也取得到 `b.ts`；含 `#`/`?`/空格的路径**编码后**不会被解析成 fragment/query | host-check（桩要补 `registerTextDocumentContentProvider` / `diff` / `Uri.from`+编码） | 去掉白名单 → 未登记那条红；去掉编码 → 带 `#` 那条红；basename 只用 `/` 切 → Windows 那条红 |
+| A2 | **store 的两条（对着两种真实形态，不是人造夹具 —— 评审第 2 轮 S6）**：① **条数上限只数活记录**：连插 N+50 条 → 活记录数 === N，且最早那 50 个 id 取回的是 `unavailable{evicted}`；② **patch 可覆盖墓碑**（重放的真实形态：会话里有 >100 次 edit，重放时最早那批已被淘汰）→ 同一 id 先被淘汰成墓碑，再 `record(patch)` → 取回的是 patch、不是墓碑。另：字节超限时最旧的也变墓碑；超大输入**没有**把内容存进来 | host-check | 把墓碑也算进条数 → ① 红（活记录数会小于 N，甚至死循环）；对 patch 也用"不覆盖" → ② 红 |
+| A3 | `openDiff`：已登记 → `vscode.diff` 恰好调用一次、两个 URI 都是 `jerrypi-diff:`、左右内容与 `sidesOfPatch` 一致；未登记 → **不调用** + Output 有一行拒绝；标题的文件名从 **Windows 形态的 patch 头**（`--- C:\a\b.ts`）也取得到 `b.ts`；**含 `#`/`?`/空格的路径**：① 构造出的 URI 文本里出现 `%23`/`%3F`/`%20`，② **桩真解析出来的 `uri.fragment`/`uri.query` 里不含路径片段**（`#` 只在 query 里当分隔符用） | host-check（桩要补 `Uri.from` + **把 `Uri.parse` 升级成真拆 scheme/path/query/fragment** + `registerTextDocumentContentProvider` + `diff`） | 去掉白名单 → 未登记那条红；去掉编码 → ② 里 `uri.fragment` 出现路径尾巴 → 红；basename 只用 `/` 切 → Windows 那条红 |
 | A4 | **重放口径（两条；第 2 条才是能红的那条）**：① 空 store 重放一组 messages（含一条 edit 的 `details.patch` 与一条 write）→ edit 登记成功、write 的 item 是 `diffUnavailable === true`；② **先 `recordWrite` 再重放同一批 messages** → snapshot 仍在、item 是 `diff:"snapshot"`、**没有被写成 unavailable** | host-check | 删掉重放那条调用 → ① 红；把「重放时给没有 details 的 write 补记一条 unavailable」加进去 → ② 红（① 照样绿 —— 那正是原 A4 的盲区） |
-| A5 | 渲染/交互：`diff:"patch"` → 渲染出 `data-open-diff`（**且出现在 `renderToolHeadLine` 的产物里** —— 就地更新路径也走它）；`diffUnavailable` → 有说明文字、**没有**链接；`toolCallId` 里的 `<`/`"` 被转义；**点击**只 post 一条 `{type:"openDiff"}` 且不展开卡片；**Enter/Space** 也能 post | render-xss-check + webview-dom-check | 渲染条件改成「永远渲染链接」→ 第一条红；把链接加在 `renderToolCard` 里 → 就地更新那条红；去掉 keydown 分支 → Enter 那条红 |
-| A6 | 真写工具（真 pi、**不用模型**）：对同一文件顺序两次 `execute("id-1"…)` → 记录为 `(before=null,after=X)`、`(before=X,after=Y)` | host-check（它已经加载真 pi，见 F18） | 把 `before` 改成「写完之后再读」→ 两条都红（第一条从 `null` 变成 `X`，评审 N4） |
+| A5 | 渲染/交互：`diff:"patch"` → 渲染出 `data-open-diff`（**且出现在 `renderToolHeadLine` 的产物里** —— 就地更新路径也走它）；`diffUnavailable` 的**四种 why 各渲染出各自的文案**（`none`/`evicted`/`too-large`/`read-failed`）且**没有**链接；`toolCallId` 里的 `<`/`"` 被转义；**点击**只 post 一条 `{type:"openDiff"}` 且不展开卡片；**Enter/Space** 也能 post | render-xss-check + webview-dom-check | 渲染条件改成「永远渲染链接」→ 第一条红；把链接加在 `renderToolCard` 里 → 就地更新那条红；四种 why 塌成一种文案 → 文案那条红；去掉 keydown 分支 → Enter 那条红 |
+| A6 | 真写工具（真 pi、**不用模型**）：在 `os.tmpdir()` 下的**一次性目录**里对同一文件顺序两次 `execute("id-1"…)` → 记录为 `(before=null,after=X)`、`(before=X,after=Y)`；`finally` 清理，**清理前断言目标路径在该临时目录之下**（AGENTS.md §4） | host-check（它已经加载真 pi，见 F18；`host-check.mjs:160-168` 的导出清单要加 `createCustomTools`/`filechanges`，否则这一步会以"模块不存在"收场 —— 而那不算红） | 把 `before` 改成「写完之后再读」→ 两条都红（第一条从 `null` 变成 `X`，评审 N4） |
 | A7 | 真模型（**PLAN 验收的自动版**）：一条消息里两次 edit + 两次 write 同一文件 → 两张 edit 卡片的 patch **互不包含**对方 marker；两张 write 卡片 `卡2.before === 卡1.after` | controller-check | 把 patch 改成"从当前磁盘重建" → edit 那条红 |
-| A8 | **漂移守卫（两半）**：① 用 pi 的 `generateUnifiedPatch` 现场生成 patch（§0.1 的 5 组输入 + 一组 >2 hunk 的长文件）→ 我们的解析器与 **`diff@8.0.4` 的 `parsePatch`** 对每个 hunk 的旧/新行**逐行一致**（独立实现当 oracle，不是「和输入内容一致」—— 后者对多 hunk 恒假，评审 B2）；② 逐 hunk 用 `applyPatch` 往返（hunk 头重写成 1 基）：`applyPatch(left) === right` | host-check（F18：那里有真 pi；`diff` 只在断言期 import） | 把 `\ No newline` 当成正文行 → ① 红；漏掉最后一个 hunk → ② 红；把 `-` 行也灌进右侧 → ② 红 |
+| A8 | **漂移守卫（两半，开头先断言 `diff` 版本 === 8.0.4，不符显式失败）**：① 用 pi 的 `generateUnifiedPatch` 现场生成 patch（§0.1 的 5 组输入 + 一组 >2 hunk 的长文件）→ **`sidesOfPatch().hunks`** 与 `diff` 的 `parsePatch` 逐 hunk 行**逐行一致**（独立实现当 oracle；不是「和输入内容一致」—— 后者对多 hunk 恒假，评审 B2/S2）；② **直接用原封不动的整份 patch**：`applyPatch(left, patch) === right`（jsdiff 自带偏移搜索，不需要重写 hunk 头；实测两侧插了分隔行也照样对，评审 S3） | host-check（F18：那里有真 pi） | **① 守行内容**：把 `-` 行也灌进左/右 → ① 红。**② 守尾换行与行序**：把 `\ No newline` 当成正文行（解析器多补了一个尾换行）、漏掉最后一个 hunk、行序颠倒 → ② 红（评审 N1：`\ No newline` 那条红法是 ② 的，不是 ① 的 —— `parsePatch` 把它原样留在 `lines` 里） |
 | A9 | `Pi: Run Self-Test` 的 T6 扩展：写包装的记录里 `before/after` 正确（现有断言只查 toolCallId） | selftest（T6，真模型但**复用已有那一轮**） | 记录里塞一个假 before → 红 |
 | A10 | **失败的 edit**（`isError: true, details: {}`，本机实测 3 条）：`recordEditsFromMessages` **不登记**；item 上 `diff` 与 `diffUnavailable` **都缺席**（不是「不可用」，是「这次没改成文件」） | host-check | 把判断写成 `if (details)` → 红 |
 
@@ -237,7 +242,7 @@ type FileChange =
 | --- | --- | --- |
 | 1 | `src/shared/patch.ts` + A1（先红） | typecheck / self-test |
 | 2 | `src/pi/filechanges.ts`（store + `recordEditsFromMessages`）+ A2/A4/A10 | self-test（host-check） |
-| 3 | 写包装改名 `WriteProbe → WriteRecorder` 并带 before/after（**改名让编译器抓误用**）+ A6（host-check）/A9（T6） | self-test + `check:controller` |
+| 3 | 写包装改名 `WriteProbe → WriteRecorder` 并带 before/after（**改名让编译器抓误用**）+ A6（host-check，含临时目录与清理守卫）+ A9（T6） | self-test（含 host-check）+ `check:gate`（T6 要真模型） |
 | 4 | `src/host/diff.ts` + 桩补三件套 + A3 | self-test（host-check） |
 | 5 | 协议/渲染/点击链路 + A5 | self-test（render + webview-dom） |
 | 6 | controller 接线（三条入口）+ 文档（README 中英、`pi-traps`）+ A7（真模型）/A8（host-check 的漂移守卫） | 全部 + `check:gate` |
@@ -270,6 +275,31 @@ type FileChange =
 | **N3** | 按插入序淘汰是 FIFO 不是 LRU；patch 侧淘汰要不要也留 `unavailable`？ | **ACCEPT** | 正名为 FIFO 并写明"为什么不真做 LRU"；淘汰时两类记录都留 `unavailable{why:"evicted"}` |
 | **N4** | A6 的"能红"写得不准（第一条也会红） | **ACCEPT** | 改成"两条都红（第一条从 `null` 变成 `X`）" |
 | **N5** | F6 的"原样返回"不准（`content == null` 会重建） | **ACCEPT** | 按它给的行号改写（`details` 照样在，但"原样"不准确） |
+
+### 第 2 轮（2026-09-14，同一评审者，复核第 1 轮的修订；结论 `VERDICT: BLOCKING`，B3 / S6 / N5）
+
+**处置：14 条全部 ACCEPT。**它先**确认了 B1 的 REJECT 站得住**（"按修订后的语义，我给不出反例"），然后用两节之间的相互矛盾打出两条新洞 —— 两条都在 **edit 侧**，而且都是静默的。
+
+| # | 意见（摘要） | 处置 | 我怎么处置的 |
+| --- | --- | --- | --- |
+| **B1** | 「FIFO 淘汰留墓碑」+「条数上限」= **写不出来的实现**：墓碑仍占条目 → 插第 101 条就淘汰出墓碑 → 还是 101 条 → 无限回退；字节上限会掉、条数上限不会，而 A2 只查"最旧的变 unavailable"、不查条数，所以这个死锁在 A2 下是绿的 | **ACCEPT** | 自核 §3.6：确实如此（`unavailable` 在 §3.1 里是一条完整记录，不是空位）。⇒ 条数上限**只数活记录**（patch + snapshot），墓碑另设上限（500 条、可丢最旧）：write 侧丢墓碑只是落回 `diffUnavailable:"none"`（文案照样出得来），edit 侧丢墓碑**正好是重放把 patch 登记回来的通道**（与 B2 的修法合成一条路）。A2 改成 ①：连插 N+50 条后活记录数 === N |
+| **B2** | `upsert-if-absent` 把墓碑锁死：patch 明明能从 `details.patch` 免费再生，却因 `store.has(id)` 永远跳过 → 超过 100 次 edit 的会话里，最早那批卡片重启后集体变「本次会话不可用」，而 C3 承诺的是"仍可打开"；并且 **§3.4 自己写的"被淘汰后重新登记"与 §3.2.2 直接矛盾** | **ACCEPT** | §3.2 第 2 条改成**按 kind 分开写**：patch **可覆盖**（含覆盖墓碑，值由 `details.patch` 唯一确定 → 覆盖即幂等）；snapshot **不需要"不覆盖"这条规则** —— 它只有 `ops.writeFile` 一条入口，重放从不写它。A2 ② 用**重放的真实形态**（会话里 >100 次 edit，重放时最早那批已被淘汰）钉住"patch 能把墓碑救回来" |
+| **B3** | A3 的"编码后不会被解析成 fragment/query"在**恒等桩**下恒绿（`Uri.parse` 只存 `.value`，根本不拆 `#`/`?`）；而且 §3.4 的 provider 要从 `uri.path/query` 取 id，在这个桩下也跑不起来 | **ACCEPT** | 采用它给的 (a) 方案（与 S6 的教训一致：桩不够忠实，断言就是自欺）：桩的 `Uri.parse` **升级成真拆 scheme/path/query/fragment**（+ `Uri.from`），A3 改成"① URI 文本里有 `%23`/`%3F`/`%20` ② **桩真解析出的** `fragment`/`query` 里不含路径片段" |
+| **S1** | 协议字段 `diffUnavailable?: true` 装不下 Q3 的三种文案（同一次修订里 §3.5 的表内自相矛盾）；也没写 store 怎么传进 `serialize.ts` | **ACCEPT** | 协议改成四值枚举 `"evicted" \| "too-large" \| "read-failed" \| "none"`；§3.5 写明"store 经 `SerializeContext` 传进来（现在只有 `{cwd}`）"；A5 加"四种 why 各渲染各自的文案" |
+| **S2** | A8① 要"逐 hunk 比"，但 `sidesOfPatch` 声明的是**扁平两侧**（还带分隔行）—— 那测试只能拿我们自己插的分隔行把 left 切回去，等于把 oracle 和实现耦在一起 | **ACCEPT** | `sidesOfPatch` 多返回 `hunks: {left, right}[]`（渲染不用它，断言与 oracle 用）；A8① 直接比 hunks，§2 的签名同步 |
+| **S3** | A8② 的"把 hunk 头重写成 1 基"是多余的：实测 `applyPatch(left, 原封不动的整份 patch) === right`（jsdiff 自带偏移搜索），而重写头那一步自己就可能写错、还会掩盖"少数了一行" | **ACCEPT** | A8② 改成直接用整份 patch 往返；顺带它替我们确认了"分隔行不会打断 applyPatch"（S3 的担心不成立） |
+| **S4** | A6 搬进 host-check 后是**第一次真执行 pi 工具、真写盘**（`grep` 过：host-check 里 0 处 `execute(`/`createWriteToolDefinition`），但计划没写临时目录与清理守卫 | **ACCEPT** | A6 那行补"`os.tmpdir()` 下的一次性目录 + `finally` 清理 + **清理前断言路径在该目录之下**"（AGENTS.md §4），并点名 `host-check.mjs:160-168` 的导出清单要加 `createCustomTools`/`filechanges`（否则那一步会以"模块不存在"收场 —— 而那不算红，AGENTS.md §2） |
+| **S5** | A8 的 oracle 用的是**未声明的传递依赖** `diff`：pi 换掉它就成了 import 失败，大概率表现为脚本静默崩溃 | **ACCEPT** | `diff: "8.0.4"` 进 `devDependencies`（`--no-dependencies` 保证不进 VSIX，F17 的结论不受影响）+ A8 开头断言版本、不符**显式失败**；新增 **R6** |
+| **S6** | A2 的"upsert-if-absent 不覆盖"只有**人造夹具**能观察（生产里一个 toolCallId 只有一份 patch），而且它钉死的正是 B2 的 bug —— 以后想修 B2 会先被 A2 拦住 | **ACCEPT** | 已被 B2 的处置取代：A2 拆成两条，**两条都对着真实形态**（①条数只数活记录 ②重放时 patch 覆盖墓碑） |
+| **N1** | A8 的能红列把"`\ No newline` 当正文行 → ① 红"挂错了：`parsePatch` 把它原样留在 `lines` 里，真正守尾换行的是 ② | **ACCEPT** | A8 的两半写明分工：**① 守行内容、② 守尾换行与行序** |
+| **N2** | `pathLabelOf` 没说从 `---` 还是 `+++` 取，也没说容忍 GNU diff 的时间戳尾巴 | **ACCEPT** | §2 第 1 条写明：从 `+++` 取（缺则退回 `---`）、容忍 `\t<时间戳>` |
+| **N3** | §9 步骤 3 的门禁还写着 `check:controller`，但 A6 已搬走、A7 在步骤 6 —— 步骤 3 现在没有 controller-check 断言 | **ACCEPT** | 步骤 3 的门禁改成 `self-test`（含 host-check 的 A6）+ `check:gate`（T6/A9 要真模型） |
+| **N4** | §3.2 表格第 3 行还写着"同一个函数，所以实时与重放不可能各写一套"，而它只对 edit 成立 | **ACCEPT** | 改成"**edit 的**实时与重放共用这一个函数；write 只有实时那一条入口" |
+| **N5** | F5 的证据还写着"6 条 edit 记录全部有 details"，与 F5b 的"72 正常 + 3 失败"两个数字 | **ACCEPT** | F5 改成 72 条，并注明"第一版只写了最初看到的 6 条" |
+
+**STRONGEST_OBJECTION（"堵法本身被无差别套在两种记录上：write 侧是保护、edit 侧是牢笼"）**：**照单全收**——B2 的修法（patch 可覆盖、snapshot 只有一条入口）就是按这个判断写的。它附的那句方法论更要记牢：**C3 的主语是"这个会话里所有 edit 卡片"，而 A4① 只喂一条 edit、A2 只数一次淘汰 —— 两条都不会跨过 100 这个门槛**。所以 A2 ② 特意用">100 次 edit 之后重放"的真实形态，而不是再造一个人造夹具。
+
+**本轮教训（准备写进 AGENTS.md §2 的候选，等第 3 轮核完再落）**：**自相矛盾要跨节读**。B2 的两条（§3.4 的"被淘汰后重新登记" vs §3.2.2 的"不覆盖"）单独看都对 —— 是评审把两节放在一起才暴露的；这与"判据的主语被悄悄换掉"是同一类错误的两个方向（前者是节与节，后者是判据与断言）。
 
 **STRONGEST_OBJECTION（它写的是 §3.2 把实时与重放压成同一个函数是"信息少的那条去覆盖信息多的那条"）**：
 机制部分同 B1 的驳回（重放不写 write 记录）；但它指出的**为什么这个 bug 值得防**——"覆盖的时机（容器迁移、`switchSession`）全不在 §7 的两个动作里，所以人工验收会全绿，用户第一次把面板拖到另一侧时静默退化"——**照单全收**：A4 的第 ② 条就是为它写的，M2 重载之外**不加人工动作**，改成让断言覆盖容器迁移/切会话这两条路径（这正是 AGENTS.md §2 那条"能搬到自动的就别留人工"）。
