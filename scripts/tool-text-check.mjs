@@ -283,5 +283,32 @@ console.log("[tool-text-check] formatSessionTime");
     format.formatSessionTime(at(2026, 8, 13, 12, 5), now));
 }
 
+console.log("[tool-text-check] describeProxyIdentity（S6 的 T13 报告，纯函数）");
+{
+  const full = format.describeProxyIdentity({
+    fetchNative: false,
+    proxySupport: "override",
+    proxy: "http://user:secret@proxy.corp:8080",
+    proxyEnvNames: ["HTTP_PROXY", "http_proxy"],
+    piOfflineSet: false,
+  });
+  equal(
+    "五段都在、且用的是可判定的词（native/wrapped、值、存在性）",
+    full,
+    "fetch=wrapped；http.proxySupport=override；http.proxy=http://***@proxy.corp:8080；代理环境变量存在=[HTTP_PROXY, http_proxy]；PI_OFFLINE=未设",
+  );
+  check("代理 URL 里的口令被掩掉（Output 会被用户贴出来）", !full.includes("secret"), full);
+  equal(
+    "fetch 读不到 → 报「读不到」而不是瞎猜",
+    format.describeProxyIdentity({ fetchNative: undefined, proxySupport: undefined, proxy: undefined, proxyEnvNames: [], piOfflineSet: true }),
+    "fetch=(读不到)；http.proxySupport=(未设)；http.proxy=(未设)；代理环境变量存在=[]；PI_OFFLINE=已设",
+  );
+  check(
+    "原生 fetch 报 native（VS Code 不换它时就是这个）",
+    format.describeProxyIdentity({ fetchNative: true, proxySupport: "off", proxy: "", proxyEnvNames: [], piOfflineSet: false }).startsWith("fetch=native；http.proxySupport=off；http.proxy=(未设)"),
+    format.describeProxyIdentity({ fetchNative: true, proxySupport: "off", proxy: "", proxyEnvNames: [], piOfflineSet: false }),
+  );
+}
+
 console.log(`TOOL-TEXT-CHECK ${failures === 0 ? "OK" : "FAILED"} (${checks} checks)`);
 process.exit(failures === 0 ? 0 : 1);

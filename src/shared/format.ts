@@ -125,3 +125,32 @@ export function describeAuthSource(source: string | undefined): string {
       return "未配置";
   }
 }
+
+/** T13（advisory）报告的输入：全部由调用方读好，这里只负责拼一行。 */
+export interface ProxyIdentityInput {
+  /** `globalThis.fetch` 是否原生：true=toString 含 `[native code]`；false=被换过；undefined=读不到。 */
+  fetchNative: boolean | undefined;
+  proxySupport: string | undefined;
+  proxy: string | undefined;
+  /** **存在**的代理环境变量名（只传名字，值不该进这里 —— 报告里不出现任何值）。 */
+  proxyEnvNames: readonly string[];
+  piOfflineSet: boolean;
+}
+
+/**
+ * T13 的一行报告（S6-plan §3.4 / A11，评审 N4 从“比 toString”改成可判定三元组）。
+ *
+ * **只报告，不判定**：这些值只能说明“这一层有没有生效”，说明不了“网络能不能通”
+ * （T4 已在真宿主里直连成功）。但代理 URL 可能带 `user:pass` —— Output 会被用户贴出来，
+ * 所以 `http.proxy` 的值要**把 userinfo 掩掉**再报。
+ */
+export function describeProxyIdentity(input: ProxyIdentityInput): string {
+  const native = input.fetchNative === undefined ? "(读不到)" : input.fetchNative ? "native" : "wrapped";
+  const proxySupport = input.proxySupport === undefined || input.proxySupport.length === 0 ? "(未设)" : input.proxySupport;
+  const proxy =
+    input.proxy === undefined || input.proxy.length === 0 ? "(未设)" : input.proxy.replace(/\/\/[^/@]*@/, "//***@");
+  return (
+    `fetch=${native}；http.proxySupport=${proxySupport}；http.proxy=${proxy}；` +
+    `代理环境变量存在=[${input.proxyEnvNames.join(", ")}]；PI_OFFLINE=${input.piOfflineSet ? "已设" : "未设"}`
+  );
+}

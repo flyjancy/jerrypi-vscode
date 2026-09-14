@@ -484,6 +484,18 @@ API Error: Request rejected (429) · api key 日限额已用完
 
 **第 6 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（host-check **80/80**，A8 +5）｜`check:controller` **98/98**（A12 正向/反向 +2）。
 
+### 第 7 步（代理：T13 与诚实标注，2026-09-14）
+
+| # | 发现 | 处置 |
+| --- | --- | --- |
+| 7-1 | T13 只在**真宿主**里跑一次，进不了自动闸门；“报告段必须有一行”这条要能力便地“先红” | 拆成**纯函数 + 接线**：`describeProxyIdentity(input)` 落在 `src/shared/format.ts`，T13 只负责读值（`fetch.toString()` / 两个设置 / 四个环境变量的存在性）。纯函数在 `tool-text-check` 里可红、零夹具 |
+| 7-2 | `http.proxy` 的值可能带 `user:pass@`，而 Output 会被用户贴出来 | 报值前把 userinfo 掩成 `//***@`（N4 只说了“只报告不判定”，没说“不要泄密”）；断言直接查“口令不在输出里” |
+| 7-3 | **能红验证**：临时去掉掩码 → `tool-text-check` 2 条红（一条拿 expected/got 对照，一条专查口令） | 记录在案；恢复后 **91/91** |
+| 7-4 | T13 的“必须有 T13 行”怎么保证 | 走 `item()` 包装：即使报告段抛异常，也会写一行 `T13 FAIL E_UNEXPECTED`（而不是默默少一行 —— 评审第 4 轮 N3）。T13 不进 `REQUIRED_ITEMS`，不影响 GATE |
+| 7-5 | Q2（不自己做第二层代理）要落到的文档口径 | `jerrypi.proxy` 的描述已经是“**未实现** + 启动 VS Code 前设 `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY` 的零成本方案”（第 1 步就写了），README 双语与 A10 的集合比对照第 8 步统一 |
+
+**第 7 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（tool-text-check **91**，+4；host-check 80）｜`check:controller` 本步未重跑（未改 pi 交互语义；上次 **98/98**）。
+
 ## 12. 实施与验收结果
 
 _（自动检查 / 提交切分 / 人工验收 / 已知未覆盖。）_

@@ -48,6 +48,11 @@ export function registerCommands(
           // T10/T11/T12 必需：它们对比的是"真实 cwd 的会话目录"，见 SelfTestOptions.cwd 的注释
           cwd: workspaceCwd().cwd,
           keys,
+          // T13（advisory）：只在宿主侧取 http.* 的值（selftest 不 import vscode）
+          httpProxyConfig: (() => {
+            const http = vscode.workspace.getConfiguration("http");
+            return { proxySupport: String(http.get("proxySupport") ?? "(未设)"), proxy: http.get<string>("proxy") };
+          })(),
           sink: output,
         });
         if (gate === "GATE PASS") {

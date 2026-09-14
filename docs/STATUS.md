@@ -11,11 +11,11 @@
 
 ## 1. 现在
 
-**进行中**：**S6 第 1–6 步已完成**（三项设置声明 + agentDir 贯通；密钥清理 + `Pi: Set API Key` 补完；空凭据目录 + 只靠 SecretStorage 的一轮真对话（A4）；`Pi: Refresh Model Catalog` + fetch 层漂移守卫（A8/A12，含“没凭据就不联网”这一实测事实））。**还剩第 7–8 步（代理 T13 / 文档 + A9、A6 后半）才到打包与 Mac 验收**（2026-09-14）
+**进行中**：**S6 第 1–7 步已完成**（设置与 agentDir 贯通；密钥清理 + Set API Key；空凭据目录真对话（A4）；Refresh Catalog + 漂移守卫（A8/A12）；代理 T13/advisory + 纯函数报告（A11））。**只剩第 8 步文档（含 A9/A10、A6 后半、A7 三态文案）就能到打包与 Mac 验收**（2026-09-14）
 
 | | |
 | --- | --- |
-| 阶段 | **S5 已关闭**；**S6 实施中**（第 1–6 步完成，见 `docs/S6-plan.md` §9/§11） |
+| 阶段 | **S5 已关闭**；**S6 实施中**（第 1–7 步完成，见 `docs/S6-plan.md` §9/§11） |
 | 最新发布 | **0.1.7**（2026-09-13，预发布；S5 的全部内容） |
 | 发布核验 | `node scripts/compare-vsix.mjs 0.1.7` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,025,710 字节 / `04c60b7b…`）；tag `v0.1.7`；留档 `~/jerrypi-releases/jerrypi-0.1.7.vsix` |
 | 真机验收 | S4：Mac ✅ ／ Windows ✅（S4-plan §12.3）｜ **S5：Mac ✅ ／ Windows ✅**（`GATE PASS` 13 PASS / 1 SKIP = T12；W0/W1 明细见 S5-plan §12.3） |
@@ -29,11 +29,11 @@
 | `npm run self-test` | **9/9**（其中 `SETTINGS-CHECK OK (16/16)`） |
 | `npm run check:protocol` | 112 |
 | `npm run check:render` | **114** |
-| `node scripts/tool-text-check.mjs` | **87** |
+| `node scripts/tool-text-check.mjs` | **91** |
 | `node scripts/webview-dom-check.mjs` | **75** |
 | `node scripts/host-check.mjs` | **80** |
 | `npm run check:controller`（真模型，**不进 CI**） | **98/98**（含一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
-| `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | **14 项（12 gating + T5c/T12 advisory）GATE PASS** |
+| `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | S5 跑的是 **14 项（12 gating + T5c/T12 advisory）GATE PASS**；S6 多了 **T13（advisory）** → **待打包时连同 Mac 验收重跑** |
 | `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **338 文件 / 5.75 MB**（门禁 30 MB）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |
 
 ## 2. 欠着的事（已知、刻意未做或暂时做不到）
@@ -70,7 +70,7 @@ S6 的范围（`docs/PLAN.md` §6）：三项 VS Code 设置（含 `jerrypi.agen
 | `list()` 的 `filterCwd` 在自定义 agentDir 下会变成 `true` → **严格字符串比较**会咬人 | R10（Windows 盘符大小写，W0 已在真机上确认两种写法都存在）；S6 要么归一化比较、要么别依赖它 |
 | `Pi: Refresh Model Catalog`（显式联网刷新） | STATUS §2 记的候选：store 路径跟着 agentDir 走，适合与 S6 一起做 |
 
-下一步：**第 7 步 —— 代理（T13/A11）**；第 8 步文档（A9/A10 + A6 的 QuickPick 那一半），
+下一步：**第 8 步 —— 文档与收尾断言（A9/A10 + A6 的 QuickPick 那一半 + A7 三态文案）**，
 然后才是打包 + Mac 验收（M1/M2）。
 
 ## 4. 发布流程（每次都一样）

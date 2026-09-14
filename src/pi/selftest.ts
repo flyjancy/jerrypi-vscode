@@ -1,4 +1,4 @@
-// S1 可行性闸门：T1–T12 + GATE 判定（T5c 与 T12 是 advisory，不参与判定）。
+// S1 可行性闸门：T1–T13 + GATE 判定（T5c、T12 与 T13 是 advisory，不参与判定）。
 //
 // 输出契约（PLAN.md 第 6 节 S1）：
 //   flyjancy.jerrypi <扩展版本> selftest-v1 <平台> node=<版本>
@@ -7,8 +7,8 @@
 //   ...
 //   GATE PASS | GATE BLOCKED <失败项列表>
 //
-// 判定规则：**除 T5c / T12 外，任一 required 项非 PASS 即 GATE BLOCKED；SKIP 不算通过。**
-// T5c（模型驱动的 bash 中止）与 T12（终端那份 pi 的会话目录比对）是 **advisory**。
+// 判定规则：**除 T5c / T12 / T13 外，任一 required 项非 PASS 即 GATE BLOCKED；SKIP 不算通过。**
+// T5c（模型驱动的 bash 中止）、T12（终端那份 pi 的会话目录比对）与 T13（代理身份，S6）是 **advisory**。
 //
 // 设计约束：
 //   - 不污染用户环境：全部临时目录在 os.tmpdir() 下，最后统一清理；
@@ -32,6 +32,7 @@ import {
 } from "./model-choice";
 import type { ApiKeyStore } from "./runtime";
 import { getModelRuntime } from "./runtime";
+import { describeProxyIdentity } from "../shared/format";
 import { createSessionHost, type SessionHost } from "./session";
 import { resolveSessionDir, sessionsRootOf } from "./sessions";
 import { createSelfTestUIContext } from "./selftest-ui";
@@ -55,6 +56,11 @@ export interface SelfTestOptions {
   cwd: string;
   keys: ApiKeyStore;
   sink: EventSink;
+  /**
+   * T13（advisory）要报告的 VS Code `http.*` 设置（取值在宿主侧做 —— selftest 不 import vscode）。
+   * 缺省时报告 "(未提供)"，不影响 GATE。
+   */
+  httpProxyConfig?: { proxySupport?: string; proxy?: string };
 }
 
 type Status = "PASS" | "FAIL" | "SKIP";
@@ -74,6 +80,8 @@ const MIN_NODE = [24, 15, 0] as const;
 /** 各项超时（毫秒）。 */
 const TIMEOUTS: Record<string, number> = {
   T1: 5_000,
+  // T13 只是读几个值、拼一行字符串（不联网、不碰磁盘）
+  T13: 5_000,
   T2: 30_000,
   T3: 60_000,
   T4: 60_000,
@@ -487,6 +495,9 @@ class SelfTestRun {
       await this.item("T11", () => this.testCliListingInterop());
       // T12 是 advisory（不参与 GATE）：它要去问**用户终端里那份 pi**，找不到就 SKIP
       await this.item("T12", () => this.testUserPiDrift());
+      // T13 也是 advisory（S6 §3.4 / A11）：代理身份**只报告不判定** ——
+      // 但这些值只能说明"这一层有没有生效"，说明不了"用户的网络能不能通"（T4 已经在真宿主里直连成功）。
+      await this.item("T13", () => Promise.resolve(this.reportProxyIdentity()));
     } finally {
       await hostR2?.dispose().catch(() => undefined);
       await hostR?.dispose().catch(() => undefined);
@@ -646,6 +657,38 @@ class SelfTestRun {
       );
     }
     return `与终端那份 pi（${real}）一致：${theirs}`;
+  }
+
+  /**
+   * T13（advisory，S6 §3.4 / A11）：代理身份的**报告**，不做 PASS/FAIL 判定。
+   *
+   * 三件事：① `globalThis.fetch` 是不是原生实现（VS Code 的 `http.proxySupport: override`
+   * 会把它换成普通函数）；② `http.proxySupport` / `http.proxy` 的值；③ 四个代理环境变量的
+   * **存在性**（不打印值）。加 PI_OFFLINE 是为了给"目录刷新为何不联网"留下可对照的痕迹
+   * （它是推导值 —— `modelNetworkEnabled = PI_OFFLINE === undefined`）。
+   *
+   * 为什么只报告不判定：这些值只能说明"这一层有没有生效"，说明不了"网络能不能通"
+   * （T4 已在真宿主里直连成功）。把读不懂的身份变成 FAIL 是假失败。
+   * 但"必须产生一行 T13"是真要求（评审第 4 轮 N3）：`item()` 即使抛异常也会写一行 T13 FAIL。
+   */
+  private reportProxyIdentity(): string {
+    let fetchNative: boolean | undefined = undefined;
+    try {
+      fetchNative = String(globalThis.fetch).includes("[native code]");
+    } catch {
+      // 极少数宿主的 toString 可能被代理掉；保持 undefined（“读不到”）而不是把 T13 变红
+    }
+    const http = this.options.httpProxyConfig;
+    const present = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"].filter(
+      (name) => (process.env[name] ?? "").length > 0,
+    );
+    return describeProxyIdentity({
+      fetchNative,
+      proxySupport: http?.proxySupport,
+      proxy: http?.proxy,
+      proxyEnvNames: present,
+      piOfflineSet: process.env.PI_OFFLINE !== undefined,
+    });
   }
 
   private computeGate(): string {
