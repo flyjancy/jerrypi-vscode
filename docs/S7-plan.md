@@ -325,11 +325,66 @@ type FileChange =
 
 ## 11. 实施期发现
 
-_（实施时逐条记；红过的东西、真机才暴露的东西、改过的计划都写这里。）_
+| # | 发现 | 处置 |
+| --- | --- | --- |
+| 1-1 | **计划里 A1 的"能红验证"是错的**：写着"把 hunk 头正则改成贪婪匹配 → 多 hunk 红"，实测 `/^@@/` 对那批夹具**等价**，14 条断言一条都不红 | 换成三种实测过的破法（`,count` 必需 + `$` 锚定 → 两条红；删 `\ No newline` 分支 → 两条红；不插分隔行 → 一条红），并把计划那一列改写成实测结果 |
+| 2-1 | A2① 的夹具与语义打架：测试里设了 `maxTombstones: 5`，而"淘汰 7 条"会让最早的墓碑按设计被丢掉 → "最早的记录变成墓碑"那条永远红 | 拆成 **A2①**（活记录上限，墓碑上限放宽）与 **A2①b**（墓碑上限单独测：最旧的被丢掉、最新的还在） |
+| 3-1 | ⚠️ **改名没能强迫编译器抓误用**：`writeProbe → writeRecorder` 之后 typecheck 照样过 —— 因为 selftest 里那个选项是放在 `const hostOptions = {...}` 里、再靠 `{...hostOptions}` 展开传进去的，**spread 会绕过 excess property check** | 手工把 selftest 一并改掉（否则 T6 会以 `E_TOOL_OVERRIDE` 收场）。**教训**：AGENTS.md §5 的"改名强迫编译器抓误用"在对象 spread 面前失效，改名前先 `grep` 一遍所有出现处 |
+| 4-1 | 桩的 `Uri.toString` 少写了真 vscode-uri 的一条规则（`scheme === "file"` 要写 `//`）→ S6 时代的"白名单里的路径用 Uri.file 打开"断言**当场变红** | 补上规则（`file` 或有 authority → `//`）。这是桩忠实度的又一次体现：升级桩会把旧断言的真实含义暴露出来 |
+| 6-1 | A7 的第一版断言写错了：我写成"p1 不含 `STAGE-3`"，但**每个 patch 本来就会同时含自己那次的旧文本与新文本**（`-旧`/`+新`） | 判据改成"不含**对方**的文本"（p1 不含 `STAGE-4`、p2 不含 `STAGE-2`），这才是"只显示该次"的真正含义 |
+| 6-2 | 协议从 4 升到 5；`host-check` 里那条断言写死了 `protocol === 4` → 一升版就红 | 断言改成读 `PROTOCOL_VERSION` 常量（不再写数字） |
+| M1-1 | 用户看第一张 diff 时问"这样对吗"：新建文件的左侧出现**红色条**（空文档的那 1 个空行被替换） | 核过是 VS Code 对"空 → 有内容"的标准画法，非 bug；已解释 |
+| M1-2 | 用户指出第三张 diff 里**还能看到 `tail`** | 核过是**上下文行**（pi 的 patch 固定 4 行上下文，F3；这个文件只有 2 行所以整份都进来）。`tail` 两侧都无增删底色 = 没动过；判据要的是"不含**别次**调用的改动"，满足。**决定不改**（去掉上下文就看不出改动在文件哪儿，也与 patch 语义不一致）—— 用户 2026-09-14 未反对 |
+| M1-3 | 用户问 `Took 0.0s` 是不是坏了 | 核过是真实值（write/edit 毫秒级），且 pi 自己的格式就是 `(ms/1000).toFixed(1)`（`dist/core/tools/renderers/bash.js:23`）→ 与 pi 一致，不改 |
+| M1-4 | 用户问"第二张应该是上下？"：窄列里 VS Code 把 diff 渲染成 inline（上下）而不是左右 | 核过是 VS Code 自己的启发式（`diffEditor.useInlineViewWhenSpaceIsLimited`），`vscode.diff` 的 options 里没有 `renderSideBySide`（只有 viewColumn/preview/selection/preserveFocus），我们控制不了。README 的"改动历史"条目补一句说明 |
 
 ## 12. 实施与验收结果
 
-_（自动检查 / 提交切分 / 人工验收 / 已知未覆盖。）_
+### 12.1 自动检查（**全绿**，2026-09-14）
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run typecheck` | ✅ |
+| `npm run self-test` | **9/9**（protocol 112 / render **121** / tool-text 91 / settings 16/16 / webview-dom **81** / host-check **173/173**） |
+| `npm run check:controller`（真模型，不进 CI） | **104/104**（含 A7：同一条消息两次 write + 两次 edit） |
+| `npm run check:gate`（无头跑 `Pi: Run Self-Test`，不进 CI） | **15/15 GATE PASS**（T6 现在会核对 `before=null/newFile`） |
+| `npm run package` + `check-vsix` | **0.1.9：338 文件 / 5.76 MB**（与 0.1.8 的文件数相同） |
+
+### 12.2 提交切分（实际）
+
+| 提交 | 内容 |
+| --- | --- |
+| `249a9d0` | 第 1 步：patch 解析（A1） |
+| `91c49d9` | 第 2 步：store + 重放登记（A2/A4/A10） |
+| `3d69dc8` | 第 3 步：写包装记 before/after（A6/A9） |
+| `47a246e` | 第 4 步：虚拟文档 + `vscode.diff`（A3） |
+| `9e438e0` | 第 5 步：协议 + 卡片链接 + 点击链（A5） |
+| `c4ec695` | 第 6 步：漂移守卫 A8 + 端到端 A7 + README/pi-traps |
+| `cac4551` | 发布物：0.1.9 + 协议 v5 |
+
+（计划与三轮评审的文档改动见 `git log --oneline -- docs/S7-plan.md`。）
+
+### 12.3 人工验收
+
+**Mac（M1/M2）—— ✅ PASS（2026-09-14）**
+
+| 项 | 结果 |
+| --- | --- |
+| M1 活的 diff | ✅ 一句话让模型跑五步（两次 write 同一文件、两次 edit 同一文件、一次新建 write）：五张卡片都有入口；新建的标题写「新建」、左侧空；write#2 左 `STAGE-1` / 右 `STAGE-2`；edit#1 只有 `-STAGE-2/+STAGE-3`、edit#2 只有 `-STAGE-3/+STAGE-4`（**没有**互相带出） |
+| M2 重载后的口径 | ✅ `Developer: Reload Window` 后同一会话恢复（Output 里的会话文件路径不变）；两张 **edit** 卡片的「查看 diff」**仍可打开**且内容正确（从会话文件里的 `details.patch` 重建）；三张 **write** 卡片显示「本次会话不可用」且**不可点** |
+| 用户在验收中提的 4 个问题 | 全部核过并记进 §11（M1-1…M1-4）：红条 / `tail` / `Took 0.0s` / 窄列的上下视图**都是预期行为**；只有第 4 条顺带补了 README 一句话 |
+
+**Windows（W0/W1）—— 待做（0.1.9 上传后）**
+
+### 12.4 已知未覆盖
+
+| 项 | 为什么 | 记在哪 |
+| --- | --- | --- |
+| `write` 的前后快照**只活在进程内** | 重放拿不到它的 details（F5）；存进 VS Code 的 `globalStorage` 等于"持久化用户的文件内容"，是另一个决定 | Q2 · README 已知限制 |
+| 超过上限（edit 100 / write 20）之后 | 最早那批卡片显示「较早的改动记录已清理」—— 上限的直接结果，不是坏链 | §3.6 · README 已知限制 |
+| 窄列里的 diff 布局（上下 / 左右） | 由 VS Code 的 `diffEditor.useInlineViewWhenSpaceIsLimited` 决定，`vscode.diff` 的参数控制不了 | §11 M1-4 · README 已知限制 |
+| 大 patch 的**真实**体验（>2 MiB） | 只断言了"不读不存"，没有真造一份大 patch 点开看 | §3.6 |
+| compaction 之后的旧 edit 卡片 | 那些卡片本来就不在重放里（pi 的上下文只保留压缩点之后的消息） | §3.2（不适用，非缺陷） |
 
 ## 13. 待用户拍板
 
