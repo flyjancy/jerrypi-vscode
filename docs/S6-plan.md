@@ -502,7 +502,7 @@ API Error: Request rejected (429) · api key 日限额已用完
 | --- | --- | --- |
 | 8-1 | **A9/A6b/A7 的宿主夹具**（第 4 步欠的）现在才补上：真命令（`registerCommands` + `executeCommand`）+ 真 pi（`loadPi`）+ 统一按 agentDir 缓存的同一实例 | A9（两个分支：目录在/不在）、A6b（候选==`getProviders()`、deepseek 置顶、描述来自 `describeAuthSource`）、A7（三态文案）全部落在 `host-check`；R-S6-2 的“无可用模型时点出目录”在 `setApiKey` 里补上（先红后绿） |
 | 8-2 | **vscode 桩的红得有价值**：`openTextDocument` 第一版返回 `{}` → `showTextDocument(文档)` 记成 `"[object Object]"`，A9 拿不到路径 | 桩改成 `openTextDocument: (uri) => ({ uri })`，`showTextDocument` 记录时兼容“Uri / 文档对象”两种形状（真 vscode 两种都收）；产品代码没改 |
-| 8-3 | ⚠️ **文档指针不一致**：S1/S2/S5-plan、STATUS、README 都写“信任 UI 在 **S6**”，而 `PLAN.md` §6 的 S6 范围里**从来没有它**（四次评审计也没审过它） | 按 AGENTS.md“以 `docs/` 为准”——权威是总计划：README（中英）改成**未排期**并写明原委；`STATUS §2` 记一条（这不是欠账、也不是静默扩大范围；真要做得另开阶段设计） |
+| 8-3 | ⚠️ **文档指针不一致**：S1/S2/S5-plan、STATUS、README 都写“信任 UI 在 **S6**”，而 `PLAN.md` §6 的 S6 范围里**从来没有它**（四次评审也没审过它） | 按 AGENTS.md“以 `docs/` 为准”——权威是总计划：README（中英）先改成**未排期**并写明原委；`STATUS §2` 记一条（这不是欠账、也不是静默扩大范围）。**2026-09-14 用户拍板：改排 S8**（见 `PLAN.md` §6 的 S8 注） |
 | 8-4 | README 的“常用脚本”表数字停在很早的阶段（`self-test 6 个 / protocol 63 / render 42 / controller 27`） | 更新到当前门禁数，并补上 `host-check` / `settings-check` 两行 |
 | 8-5 | **能红验证**（三处）：A6b 换回硬编码清单 → 红成 `items=2｜getProviders=40`；A9 去掉目录守卫 → 缺目录时不再警告（红）；T13 去掉口令掩码 → 红 2 条 | 全部恢复后：host-check **91/91**、tool-text **91**、settings-check **16/16** |
 | 8-6 | `Pi: Set API Key` 成功文案里的“不写入 auth.json”与 §11 的 5-1 不完全一致 | 改成“你的 key 不会写进 auth.json”（空壳 `{}` 是 pi 自己建的，我们只保证不写凭据） |

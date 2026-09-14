@@ -239,6 +239,7 @@ jerrypi-vscode/
 - **S6 设置与密钥**：三项 VS Code 设置、`Pi: Clear Stored API Keys`，并把 S1 的最小版 `Pi: Set API Key` / `Pi: Open Settings File` 补完整（provider 选择、校验）。（清空 `models.json` 里的 key 只靠 SecretStorage 也能完成对话。）**状态：已实现（0.1.8，待验收）** —— `jerrypi.agentDir` 已生效（进程环境变量 + 重载窗口）；`approvalMode` 只登记（S8）；`proxy` 未实现（Q2 不做第二层，T13 只报告）；另有 `Pi: Refresh Model Catalog`（点了才联网）。断言与发现见 `docs/S6-plan.md` §6/§11。
 - **S7 diff 审阅**：`filechanges.ts` + `diff.ts`。（验收：让 agent 在**同一条消息里**对同一文件发出两次 edit，两张卡片各自只显示该次 patch；同一条消息里两次 write 同一文件，两张卡片前后内容各自正确；重启 VS Code 恢复会话后，edit 卡片的 diff 仍可打开，write 卡片显示"本次会话不可用"。）
 - **S8 工具审批开关**：`approval.ts`，三档。（开 `all` 后每次工具调用停在面板等确认；拒绝后 agent 收到 block 原因；待审批时点中止，待审批项被清除且 agent 结束。）
+  > **2026-09-14 用户拍板追加**：项目级设置的**信任流程**（今天固定 `projectTrusted: false`，面板里没有“信任这个项目”的选择）也排进本阶段 —— 与工具审批同属“信任”主题。本条**未经评审、未设计**：具体形态（提示时机、写不写 `trust.json`、与 pi CLI 的 `ProjectTrustStore` 怎么对齐）留到 S8 计划期按流程走。
 - **S9 pi 包管理**：`Pi: Install Package` / `Pi: List Packages` / `Pi: Remove Package`。（Mac 上：安装 `../pi-config`（裸路径）后 `~/.pi/agent/settings.json` 出现该包，重启后其主题/扩展被加载。受限机上：用随扩展发布的 `test-fixtures/ext-smoke` 目录作为本地包源验证同一流程，因为该机无法拷入 pi-config；验收只要求"本次安装后重启可用"，扩展升级后失效属已知限制。输入 `npm:xxx` 得到明确的"需要 npm"错误。）
 - **S10 Windows 全量验收与正式发布**：发预发布版，用户在受限机上跑 G1–G6 并回报；通过后以偶数次版本按 5.4 规则打正式包并 `vsce publish --packagePath` 发布；写 README（安装、密钥、Git Bash 要求、全权限警告、npm 源限制、SigV4a 限制）。
 
