@@ -169,6 +169,7 @@ async function buildModules(tempDir) {
       `export { sidesOfPatch, pathLabelOf, HUNK_GAP } from ${JSON.stringify(path.join(REPO_ROOT, "src/shared/patch"))};`,
       `export { createFileChanges, recordEditsFromMessages, diffFieldsOf } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/filechanges"))};`,
       `export { createCustomTools } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/custom-tools"))};`,
+      `export { createDiffPresenter, DIFF_SCHEME } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/diff"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -186,9 +187,10 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
+const vscodeStub = await import(pathToFileURL(STUB_PATH).href);
 
 // ----------------------------------------------------------------- 视图装配
 resetStub();
@@ -1304,6 +1306,123 @@ check(
       JSON.stringify(diffFieldsOf(store, { toolCallId: "x", toolName: "write", isError: false, pending: true })) === "{}",
       JSON.stringify(diffFieldsOf(store, { toolCallId: "x", toolName: "write", isError: false, pending: true })),
     );
+  }
+}
+
+// ------------------------------------- S7 第 4 步：打开 diff（A3）
+//
+// 桩这一轮补了三件事（评审第 2 轮 B3：桩不够忠实，断言就是自欺）：
+//   `Uri.parse` 真拆 scheme/path/query/fragment、`Uri.from` 按组件收、
+//   `workspace.registerTextDocumentContentProvider` 与 `executeCommand("vscode.diff")`。
+{
+  const PATCH = [
+    "--- rel/a.ts",
+    "+++ rel/a.ts",
+    "@@ -1,3 +1,3 @@",
+    " L0",
+    "-L1",
+    "+X1",
+    " L2",
+    "@@ -20,3 +20,3 @@",
+    " L19",
+    "-L20",
+    "+X20",
+    " L21",
+    "",
+  ].join("\n");
+  const makeLog = () => ({ lines: [], appendLine(line) { this.lines.push(line); } });
+  const context = { subscriptions: [] };
+
+  resetStub();
+  const store = createFileChanges();
+  store.recordEdit({ toolCallId: "call_1", path: "rel/a.ts", patch: PATCH });
+  const log = makeLog();
+  const presenter = createDiffPresenter(context, { store, log });
+
+  const diffCalls = () => vscodeStub.callsOf("executeCommand").filter((call) => call.id === "vscode.diff");
+  const opened = presenter.open("call_1");
+  check("A3：已登记 → 真的打开了", opened === true, String(opened));
+  check("A3：恰好一次 vscode.diff", diffCalls().length === 1, String(diffCalls().length));
+  const [left, right, title, options] = diffCalls()[0]?.args ?? [];
+  check(
+    "A3：两个 URI 都是 jerrypi-diff:（不是 file:）",
+    left?.scheme === DIFF_SCHEME && right?.scheme === DIFF_SCHEME,
+    JSON.stringify([left?.scheme, right?.scheme]),
+  );
+  check("A3：标题含文件名与形态", typeof title === "string" && title.includes("a.ts") && title.includes("edit"), String(title));
+  check("A3：preview 打开（不占死一个标签）", options?.preview === true, JSON.stringify(options));
+
+  const provider = vscodeStub.contentProviderOf(DIFF_SCHEME);
+  check("A3：注册了 jerrypi-diff 的虚拟文档 provider", provider !== undefined, String(provider));
+  const sides = sidesOfPatch(PATCH);
+  check(
+    "A3：provider 给的左右与 sidesOfPatch 一致",
+    provider?.provideTextDocumentContent(left) === sides.left &&
+      provider?.provideTextDocumentContent(right) === sides.right,
+    JSON.stringify([provider?.provideTextDocumentContent(left)?.slice(0, 40), provider?.provideTextDocumentContent(right)?.slice(0, 40)]),
+  );
+
+  // 未登记：不打开，且 Output 里要说得出为什么
+  const beforeCount = diffCalls().length;
+  const openedNope = presenter.open("call_nope");
+  check("A3：未登记 → 不调用 vscode.diff", diffCalls().length === beforeCount && openedNope === false, String(diffCalls().length));
+  check("A3：未登记 → Output 有一行说明", log.lines.some((line) => line.includes("call_nope")), log.lines.join(" | ").slice(0, 160));
+
+  // write 的快照：左右是整文件前后；新文件时左侧空
+  {
+    store.recordWrite({ toolCallId: "call_w", path: "/tmp/dir/b.ts", before: "旧\n", after: "新\n", newFile: false });
+    presenter.open("call_w");
+    const last = diffCalls().at(-1);
+    const [wl, wr, wt] = last?.args ?? [];
+    check("A3：write 的左右是整文件前后", provider?.provideTextDocumentContent(wl) === "旧\n" && provider?.provideTextDocumentContent(wr) === "新\n", JSON.stringify(wt));
+    check("A3：write 的标题写的是 write 形态", typeof wt === "string" && wt.includes("b.ts") && wt.includes("write"), String(wt));
+    store.recordWrite({ toolCallId: "call_new", path: "/tmp/dir/new.ts", before: null, after: "内容\n", newFile: true });
+    presenter.open("call_new");
+    const [nl, , nt] = diffCalls().at(-1)?.args ?? [];
+    check("A3：新文件 → 左侧空 + 标题写「新建」", provider?.provideTextDocumentContent(nl) === "" && String(nt).includes("新建"), String(nt));
+  }
+
+  // 不可用：记过墓碑的也不打开
+  {
+    const s2 = createFileChanges({ maxPatches: 1 });
+    s2.recordEdit({ toolCallId: "a", path: "a.ts", patch: PATCH });
+    s2.recordEdit({ toolCallId: "b", path: "b.ts", patch: PATCH });
+    const log2 = makeLog();
+    const p2 = createDiffPresenter({ subscriptions: [] }, { store: s2, log: log2 });
+    const openedGone = p2.open("a");
+    check("A3：墓碑（已淘汰）→ 不打开", openedGone === false, String(openedGone));
+    check("A3：墓碑 → Output 写出原因", log2.lines.some((line) => line.includes("evicted")), log2.lines.join(" | ").slice(0, 160));
+  }
+
+  // Windows 形态的 patch 头 + 名字里带 #/?/空格：Uri.from 按组件收，编码发生在 toString
+  {
+    const s3 = createFileChanges();
+    s3.recordEdit({ toolCallId: "win", path: "C:\\dir\\b.ts", patch: "--- C:\\dir\\b.ts\n+++ C:\\dir\\b.ts\n@@ -1,1 +1,1 @@\n-a\n+b\n" });
+    s3.recordEdit({
+      toolCallId: "hash",
+      path: "a#b c?.ts",
+      patch: "--- a#b c?.ts\n+++ a#b c?.ts\n@@ -1,1 +1,1 @@\n-a\n+b\n",
+    });
+    const p3 = createDiffPresenter({ subscriptions: [] }, { store: s3, log: makeLog() });
+    const beforeWin = diffCalls().length;
+    p3.open("win");
+    check("A3：Windows 形态的头也取得到 b.ts 作标题", String(diffCalls().at(-1)?.args?.[2] ?? "").includes("b.ts"), String(diffCalls().at(-1)?.args?.[2] ?? ""));
+    p3.open("hash");
+    check("A3：带 #/?/空格的路径也打开了（没被 parse 吃掉）", diffCalls().length === beforeWin + 2, String(diffCalls().length));
+    const hashLeft = diffCalls().at(-1)?.args?.[0];
+    const asText = String(hashLeft);
+    check(
+      "A3：URI 文本里 %23/%3F/%20 都在（编码发生在 toString）",
+      asText.includes("%23") && asText.includes("%3F") && asText.includes("%20"),
+      asText,
+    );
+    const reparsed = vscodeStub.Uri.parse(asText);
+    check(
+      "A3：再解析回来：fragment 为空、路径没被截断",
+      (reparsed.fragment === undefined || reparsed.fragment === "") && reparsed.path.includes("a#b c?.ts"),
+      JSON.stringify([reparsed.fragment, reparsed.path]),
+    );
+    check("A3：provider 仍然认得出它（内容对）", vscodeStub.contentProviderOf(DIFF_SCHEME)?.provideTextDocumentContent(hashLeft) === "a\n", String(vscodeStub.contentProviderOf(DIFF_SCHEME)?.provideTextDocumentContent(hashLeft)));
   }
 }
 

@@ -28,8 +28,14 @@ function state() {
     configuration: new Map(),
     configurationListeners: [],
     outputChannels: new Map(),
+    contentProviders: new Map(),
   };
   return globalThis[KEY];
+}
+
+/** 取某个 scheme 注册过的虚拟文档 provider（断言用）。 */
+export function contentProviderOf(scheme) {
+  return state().contentProviders.get(scheme);
 }
 
 /** 清空全部记录（每个断言块之前调用）。 */
@@ -103,21 +109,60 @@ export class Disposable {
   }
 }
 
+/**
+ * 真 vscode 的 `Uri` 语义（S7 A3 要断言的正是这几条）：
+ *   - `parse("s:/a%20b?q#f")` → scheme=s、path **解码**成 `/a b`、query/q、fragment/f；
+ *     解析顺序是**先 `#` 后 `?`**（`?` 在 fragment 里不再是分隔符）；
+ *   - `from({scheme, path, query})` 按组件收，`toString()` 时才编码 —— 所以 path 里的
+ *     `#`/`?`/空格**不会**被当成 fragment/query（`chatView.ts:230` 那个坑的根源就是
+ *     "拿整串去 parse"）。
+ */
 export class Uri {
-  constructor(value) {
-    this.value = value;
+  constructor(schemeOrWhole, path, query, fragment) {
+    if (path === undefined && query === undefined && fragment === undefined && typeof schemeOrWhole === "string" && schemeOrWhole.includes(":")) {
+      const parsed = Uri.parse(schemeOrWhole);
+      this.scheme = parsed.scheme;
+      this.path = parsed.path;
+      this.query = parsed.query;
+      this.fragment = parsed.fragment;
+      return;
+    }
+    this.scheme = schemeOrWhole ?? "";
+    this.path = path ?? "";
+    this.query = query;
+    this.fragment = fragment;
   }
   static file(p) {
-    return new Uri(`file://${p}`);
+    return new Uri("file", p);
   }
   static parse(s) {
-    return new Uri(s);
+    const m = /^([a-zA-Z][a-zA-Z0-9+.-]*):([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/.exec(s);
+    if (m === null) return new Uri("", s);
+    return new Uri(
+      m[1],
+      decodeURIComponent(m[2] ?? ""),
+      m[3] === undefined ? undefined : decodeURIComponent(m[3]),
+      m[4] === undefined ? undefined : decodeURIComponent(m[4]),
+    );
+  }
+  static from(components) {
+    return new Uri(components.scheme, components.path ?? "", components.query, components.fragment);
   }
   static joinPath(base, ...parts) {
-    return new Uri([base.value.replace(/\/$/, ""), ...parts].join("/"));
+    return new Uri(base.scheme, [base.path.replace(/\/$/, ""), ...parts].join("/"), base.query, base.fragment);
   }
   toString() {
-    return this.value;
+    const encodedPath = String(this.path)
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/");
+    // 真 vscode-uri 的规则：`file:` scheme（或有 authority）时写 `//` → `file:///w/x`。
+    const useSlashes = this.scheme === "file" || (this.authority ?? "") !== "";
+    let out = `${this.scheme}:${useSlashes ? "//" : ""}${encodedPath}`;
+    // query 只挡 `#` 与空格（真 vscode 也保留 `=`/`&`）
+    if (this.query !== undefined) out += `?${String(this.query).replace(/#/g, "%23").replace(/ /g, "%20")}`;
+    if (this.fragment !== undefined) out += `#${encodeURIComponent(this.fragment)}`;
+    return out;
   }
 }
 
@@ -283,6 +328,11 @@ export const workspace = {
       },
       update: () => Promise.resolve(),
     };
+  },
+  registerTextDocumentContentProvider(scheme, provider) {
+    record("registerTextDocumentContentProvider", { scheme });
+    state().contentProviders.set(scheme, provider);
+    return new Disposable(() => state().contentProviders.delete(scheme));
   },
   onDidChangeConfiguration(listener) {
     record("onDidChangeConfiguration", {});
