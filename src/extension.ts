@@ -13,6 +13,7 @@ import { loadPi, readRuntimeVersion } from "./pi/loader";
 import { SessionHostController } from "./pi/controller";
 import { createApiKeyStore } from "./pi/runtime";
 import { workspaceCwd } from "./host/workspace";
+import { applyAgentDirSetting, describeAgentDir, readAgentDirSetting, registerAgentDirWatcher } from "./host/config";
 
 const OUTPUT_CHANNEL_NAME = "jerrypi";
 
@@ -25,6 +26,12 @@ function getOutputChannel(): vscode.OutputChannel {
 
 export function activate(context: vscode.ExtensionContext): void {
   const channel = getOutputChannel();
+
+  // S6 第 1 步：**必须在任何 loadPi() 之前** —— pi 的 `getAgentDir()` 每次调用都读
+  // `PI_CODING_AGENT_DIR`（无缓存），会话/凭据/模型目录全从它派生（S6-plan §3.1）。
+  // 环境变量已由用户设过时不动它；改动设置需要重载窗口，所以这里只记一行带来源的日志。
+  channel.appendLine(describeAgentDir(applyAgentDirSetting(readAgentDirSetting())));
+  registerAgentDirWatcher(context);
   context.subscriptions.push(channel);
   const extensionPath = context.extensionUri.fsPath;
   const keys = createApiKeyStore(context);

@@ -24,6 +24,9 @@ function state() {
     quickPickQueue: [],
     inputBoxAnswers: [],
     warningQueue: [],
+    informationQueue: [],
+    configuration: new Map(),
+    configurationListeners: [],
     outputChannels: new Map(),
   };
   return globalThis[KEY];
@@ -60,6 +63,23 @@ export function queueInputBoxAnswer(answer) {
  */
 export function queueWarningResponse(response) {
   state().warningQueue.push(response);
+}
+
+/** 预置下一次 `showInformationMessage` 的返回值（S6：改设置后提示"要重载窗口"）。 */
+export function queueInformationResponse(response) {
+  state().informationQueue.push(response);
+}
+
+/** 预置某个配置段的取值（S6 的三项设置）：`queueConfiguration("jerrypi", { agentDir: "/x" })`。 */
+export function queueConfiguration(section, values) {
+  state().configuration.set(section, values);
+}
+
+/** 触发一次配置变更事件（模拟用户改了设置）。 */
+export async function fireConfigurationChange(...affected) {
+  for (const listener of state().configurationListeners) {
+    await listener({ affectsConfiguration: (key) => affected.includes(key) });
+  }
 }
 
 function record(kind, payload = {}) {
@@ -199,9 +219,11 @@ export const window = {
     record("showErrorMessage", { message });
     return Promise.resolve(undefined);
   },
-  showInformationMessage(message) {
-    record("showInformationMessage", { message });
-    return Promise.resolve(undefined);
+  showInformationMessage(message, ...items) {
+    // 真 vscode 的形状：`showInformationMessage(message, ...items)`（S6 的"要重载窗口"提示靠它）。
+    record("showInformationMessage", { message, items });
+    const queued = state().informationQueue.shift();
+    return Promise.resolve(typeof queued === "function" ? queued(items) : queued);
   },
   showInputBox(options) {
     record("showInputBox", { options });
@@ -244,8 +266,21 @@ export const version = "0.0.0-stub";
 
 export const workspace = {
   workspaceFolders: [],
-  getConfiguration() {
-    return { get: (_key, fallback) => fallback, update: () => Promise.resolve() };
+  getConfiguration(section) {
+    record("getConfiguration", { section });
+    const values = state().configuration.get(section) ?? {};
+    return {
+      get: (key, fallback) => values[key] ?? fallback,
+      update: () => Promise.resolve(),
+    };
+  },
+  onDidChangeConfiguration(listener) {
+    record("onDidChangeConfiguration", {});
+    state().configurationListeners.push(listener);
+    return new Disposable(() => {
+      const at = state().configurationListeners.indexOf(listener);
+      if (at >= 0) state().configurationListeners.splice(at, 1);
+    });
   },
   fs: {
     readFile: () => Promise.resolve(new Uint8Array()),

@@ -11,11 +11,11 @@
 
 ## 1. 现在
 
-**进行中**：**S6 计划已写完并过两轮评审**（第 1 轮 16 条、第 2 轮 13 条；28 ACCEPT / 1 REJECT / 1 部分 REJECT。第 3 轮因评审者 API 日限额没跑成，由我自查代替并标了「未经复核」）（**4 轮评审已完成，第 4 轮 NON_BLOCKING = 收敛**；共 47 条意见，未解决分歧无。第 4 轮是用户授权超出三轮上限、专为复核第 3 轮 B1 的修法而跑的）—— **等用户拍板 `docs/S6-plan.md` §4 的 Q1–Q9 才动代码**（2026-09-13）
+**进行中**：**S6 第 1 步已完成**（三项设置声明 + `src/host/config.ts` + activate 最开头应用 + 变更提示重载；`settings-check.mjs` 新增，16/16）；计划的状态是（第 1 轮 16 条、第 2 轮 13 条；28 ACCEPT / 1 REJECT / 1 部分 REJECT。第 3 轮因评审者 API 日限额没跑成，由我自查代替并标了「未经复核」）（**4 轮评审已完成，第 4 轮 NON_BLOCKING = 收敛**；共 47 条意见）—— **Q1–Q9 用户已拍板（全按默认），正在按 §9 的 10 步实施**（2026-09-13）
 
 | | |
 | --- | --- |
-| 阶段 | **S5 已关闭**；**S6：计划已定稿、待用户拍板**（`docs/S6-plan.md`，见 §3） |
+| 阶段 | **S5 已关闭**；**S6 实施中**（第 1 步完成，见 `docs/S6-plan.md` §9/§11） |
 | 最新发布 | **0.1.7**（2026-09-13，预发布；S5 的全部内容） |
 | 发布核验 | `node scripts/compare-vsix.mjs 0.1.7` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,025,710 字节 / `04c60b7b…`）；tag `v0.1.7`；留档 `~/jerrypi-releases/jerrypi-0.1.7.vsix` |
 | 真机验收 | S4：Mac ✅ ／ Windows ✅（S4-plan §12.3）｜ **S5：Mac ✅ ／ Windows ✅**（`GATE PASS` 13 PASS / 1 SKIP = T12；W0/W1 明细见 S5-plan §12.3） |
@@ -26,12 +26,12 @@
 | 命令 | 现在 |
 | --- | --- |
 | `npm run typecheck`（2 套 tsconfig） | ✅ |
-| `npm run self-test` | **9/9** |
+| `npm run self-test` | **9/9**（其中 `SETTINGS-CHECK OK (16/16)`） |
 | `npm run check:protocol` | 112 |
 | `npm run check:render` | **114** |
 | `node scripts/tool-text-check.mjs` | **87** |
 | `node scripts/webview-dom-check.mjs` | **75** |
-| `node scripts/host-check.mjs` | **57** |
+| `node scripts/host-check.mjs` | **67** |
 | `npm run check:controller`（真模型，**不进 CI**） | **82/82**（含一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**） | **14 项（12 gating + T5c/T12 advisory）GATE PASS** |
 | `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **338 文件 / 5.75 MB**（门禁 30 MB）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |

@@ -420,7 +420,18 @@ API Error: Request rejected (429) · api key 日限额已用完
 
 ## 11. 实施期发现
 
-_（实施时遇到的、计划里没预料到的东西写在这里。）_
+### 第 1 步（设置声明 + 读取层，2026-09-13）
+
+| # | 发现 | 处置 |
+| --- | --- | --- |
+| 1-1 | **`settings-check.mjs` 的第一版红得有价值**：README 的匹配用 `includes` 会命中十几行（设置 id 在"已知限制"里也被提到），而行选错了断言就变成不确定的 | 只认**配置表**的行（`\| \`jerrypi.xxx\` \| …`），并且**按 `<a id="english">` 把中英两半切开** —— 不切的话中文那轮会把英文三行也算进来（红在"命中 6 行（期望 3）"） |
+| 1-2 | **英文状态词有子串重叠**：`effective` ⊂ `not effective yet` → "要求恰好命中一个"必然失败 | `statusOf()` 改成**按优先级取第一个命中**（词表从具体到泛：否定短语在前）。中文天然无重叠，但统一用同一套逻辑 |
+| 1-3 | **`package.json` 的描述只有一份（中文），README 是双语的** → 用英文词去比中文描述永远抽不到（红成 `package.json="?"`） | A10 用**中英配对词表**：中文那半比同一个中文词，英文那半比配对的英文短语；`statusIndexOf()` 负责"描述 → 档位" |
+| 1-4 | `applyAgentDirSetting()` 只返回来源不够：M1 的判据（Output 那行）需要**路径 + 来源**，而 `default` 时路径得按 pi 的规则算 | 改成返回 `{ source, dir }`，并加 `DEFAULT_AGENT_DIR = join(homedir(), ".pi", "agent")`（注释写明权威值仍在 pi 那边）；A2 的断言跟着改 |
+| 1-5 | `host-check` 的 vscode 桩缺 5 个能力（读设置、变更事件、信息消息） | 桩扩成：`getConfiguration(section)`（按段预置值）、`onDidChangeConfiguration`、`fireConfigurationChange(...)`、`queueInformationResponse`、`showInformationMessage(message, ...items)` —— 全部只"记录 + 预置返回"，不含业务判断（桩纪律） |
+| 1-6 | **能红验证**（AGENTS.md §2 要求） | ① 把 `jerrypi.proxy` 的 scope 故意改成 `window` → `settings-check` 1 条红；② 故意让 `applyAgentDirSetting` 覆盖已设的环境变量 → `host-check` 2 条红。都恢复后全绿 |
+
+**第 1 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（其中新增 `SETTINGS-CHECK OK (16/16)`，在用例 6 里跑）｜`host-check` **67/67**（A2/A3 共 +10）｜`check:controller` **82/82**｜闸门 **14/14 GATE PASS**。
 
 ## 12. 实施与验收结果
 

@@ -30,7 +30,37 @@
   "bugs": {
     "url": "https://github.com/flyjancy/jerrypi-vscode/issues"
   },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "面板会把工作区交给 pi agent，它能执行任意 shell 命令、读写任意路径（与 pi CLI 的默认行为一致）。受限工作区里不启用。"
+    }
+  },
   "contributes": {
+    "configuration": {
+      "title": "jerrypi",
+      "properties": {
+        "jerrypi.agentDir": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "pi 的配置目录（默认留空 = `~/.pi/agent`）。**已生效**：会话、`auth.json`、`models.json`、`settings.json` 都跟着这个目录走；改动后需要**重载窗口**（pi 在模块加载时就读定了它）。环境变量 `PI_CODING_AGENT_DIR` 已设时，以环境变量为准（本项不覆盖）。"
+        },
+        "jerrypi.proxy": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "显式代理 URL（可选）。**未实现**：现在设置它没有任何效果 —— 代理与证书交给 VS Code 自己的 `http.proxy` / `http.systemCertificates`；若企业网必须走代理，可以在**启动 VS Code 之前**设 `NODE_USE_ENV_PROXY=1` 与 `HTTP(S)_PROXY`（实测有效，整进程的 `fetch` 都会走代理）。"
+        },
+        "jerrypi.approvalMode": {
+          "type": "string",
+          "default": "off",
+          "enum": ["off", "mutating", "all"],
+          "scope": "machine",
+          "markdownDescription": "工具调用是否需要确认。**尚未生效（S8）**：现在设置它没有任何效果，`bash` / `write` / `edit` 一律直接执行 —— 请在受信任的目录里使用。"
+        }
+      }
+    },
     "commands": [
       {
         "command": "jerrypi.focusChat",
@@ -98,6 +128,7 @@
     "check:protocol": "node scripts/protocol-check.mjs",
     "check:controller": "node scripts/controller-check.mjs",
     "check:render": "node scripts/render-xss-check.mjs",
+    "check:settings": "node scripts/settings-check.mjs",
     "build": "node esbuild.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.webview.json",
     "compile": "npm run sync && npm run build",

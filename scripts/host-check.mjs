@@ -27,7 +27,7 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const STUB_PATH = path.join(SCRIPT_DIR, "fixtures", "vscode-stub.mjs");
 
 const stub = await import(pathToFileURL(STUB_PATH).href);
-const { resetStub, callsOf, queueQuickPickResponse, queueWarningResponse } = stub;
+const { resetStub, callsOf, stubCalls, queueQuickPickResponse, queueWarningResponse, queueInformationResponse, fireConfigurationChange } = stub;
 
 const results = [];
 const check = (name, ok, detail = "") => results.push([name, ok, detail]);
@@ -161,6 +161,7 @@ async function buildModules(tempDir) {
       `export { buildWebviewHtml } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/webviewHtml"))};`,
       `export { replaceSessionWithConfirm } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/sessionActions"))};`,
       `export { sessionToItem } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/sessionPicker"))};`,
+      `export { applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/config"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -178,7 +179,8 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem } = await buildModules(tempDir);
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR } =
+  await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 
 // ----------------------------------------------------------------- 视图装配
@@ -697,6 +699,69 @@ check(
   const other = sessionToItem({ path: "/s/c.jsonl", name: "显式名字", firstMessage: "不理它", modified: new Date(2026, 8, 12, 9, 0, 0), messageCount: 3 }, current, now);
   check("有显式名字时优先用它，且非当前项没有 check 前缀", String(other.label) === "显式名字", String(other.label));
   check("跨天用「昨天 HH:MM」", String(other.description).startsWith("昨天 "), String(other.description));
+}
+
+// ------------------------------------- S6 第 1 步：agentDir 的生效语义（A2）与变更提示（A3）
+//
+// A2 走的是**注入的 env 对象**，故意不碰真的 `process.env`：`host-check` 是单进程跑
+// 几十条断言，污染环境会让后面的断言（尤其 A9/A13/A14 那条链路）变味（S6-plan §6 的 N5）。
+{
+  const env = {};
+  const empty = applyAgentDirSetting("", env);
+  check("A2：设置为空 + 环境变量没设 → 不写环境变量（交给 pi 的默认 ~/.pi/agent）",
+    empty.source === "default" && env[ENV_AGENT_DIR] === undefined && empty.dir.endsWith("/.pi/agent"),
+    JSON.stringify({ ...empty, env }));
+
+  const bySetting = applyAgentDirSetting("  /tmp/agent-x  ", env);
+  check("A2：设置非空 + 环境变量没设 → 写进环境变量，来源=setting",
+    bySetting.source === "setting" && env[ENV_AGENT_DIR] === "/tmp/agent-x" && bySetting.dir === "/tmp/agent-x",
+    JSON.stringify({ ...bySetting, env }));
+
+  // 已设过环境变量时**不覆盖**：那是用户在 shell 里对"整台机器的 pi"的选择
+  const env2 = { [ENV_AGENT_DIR]: "/from-shell" };
+  const byEnv = applyAgentDirSetting("/tmp/agent-y", env2);
+  check("A2：环境变量已设 → 不覆盖，来源=env",
+    byEnv.source === "env" && env2[ENV_AGENT_DIR] === "/from-shell" && byEnv.dir === "/from-shell",
+    JSON.stringify({ ...byEnv, env2 }));
+
+  const env3 = { [ENV_AGENT_DIR]: "   " };
+  const blank = applyAgentDirSetting("/tmp/agent-z", env3);
+  check("A2：环境变量只有空白 → 当作没设",
+    blank.source === "setting" && env3[ENV_AGENT_DIR] === "/tmp/agent-z", JSON.stringify({ ...blank, env3 }));
+
+  check("A2：日志那行带来源（M1 的判据）",
+    describeAgentDir({ source: "setting", dir: "/tmp/agent-x" }) === "[jerrypi] agentDir=/tmp/agent-x（来源：设置）",
+    describeAgentDir({ source: "setting", dir: "/tmp/agent-x" }));
+}
+
+// A3：真注册一个监听器，再**真的**触发一次配置变更事件
+{
+  resetStub();
+  registerAgentDirWatcher({ subscriptions: [] });
+  check("A3：注册了配置变更监听", callsOf("onDidChangeConfiguration").length === 1, JSON.stringify(stubCalls().map((c) => c.kind)));
+
+  await fireConfigurationChange("editor.fontSize");
+  check("A3：与本设置无关的变更 → 不弹任何东西",
+    callsOf("showInformationMessage").length === 0, JSON.stringify(callsOf("showInformationMessage")));
+
+  await fireConfigurationChange("jerrypi.agentDir");
+  const messages = callsOf("showInformationMessage");
+  check("A3：改了 agentDir → 恰好弹一次信息消息，且带「重载窗口」按钮",
+    messages.length === 1 && messages[0].items.includes("重载窗口") && String(messages[0].message).includes("重载"),
+    JSON.stringify(messages[0]));
+
+  check("A3：没点按钮 → 不重载（不能替用户重载）",
+    callsOf("executeCommand").filter((c) => c.id === "workbench.action.reloadWindow").length === 0,
+    JSON.stringify(callsOf("executeCommand")));
+
+  // 用户点了「重载窗口」→ 才执行重载
+  resetStub();
+  registerAgentDirWatcher({ subscriptions: [] });
+  queueInformationResponse("重载窗口");
+  await fireConfigurationChange("jerrypi.agentDir");
+  check("A3：点了「重载窗口」→ 执行 workbench.action.reloadWindow",
+    callsOf("executeCommand").some((c) => c.id === "workbench.action.reloadWindow"),
+    JSON.stringify(callsOf("executeCommand")));
 }
 
 // ----------------------------------------------------------------- 汇总
