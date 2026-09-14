@@ -238,7 +238,7 @@ activate() 第一件事
 
 | # | 动作 | 属于哪一类 | 为什么自动化不了 |
 | --- | --- | --- | --- |
-| M1 | F5 起调试宿主 → 改 `jerrypi.agentDir`（指到一个临时空目录）→ 按提示**重载窗口** → 确认那行 `agentDir=<path>（来源：设置）` 变了、面板能发一条消息 → 再改回默认 → 重载 → 会话还在。**收尾**：改回时要把那条设置**删掉**（不是留成空串）—— `machine` scope 写的是**本人用户设置**，会影响到主窗口里已安装的那份 jerrypi（评审第 2 轮 N4） | **③真进程** | ①"重载窗口"是 VS Code 的生命周期，无头环境没有；②进程环境变量只在真实宿主里才有意义；③"设置改了之后 pi 到底用哪个目录"这件事，只有在真宿主里才成立。**判据是那行日志（评审 S3 加的"来源"字段）** |
+| M1 | F5 起调试宿主 → 改 `jerrypi.agentDir`（指到一个临时空目录）→ 按提示**重载窗口** → 确认那行 `agentDir=<path>（来源：设置）` 变了 → **若面板报没有凭据，先 `Pi: Set API Key` 设一把 deepseek key**（空目录里没有 `auth.json` —— 这一步本身就顺带验了 C1：只靠 SecretStorage 也能对话）→ 面板能发一条消息 → 再改回默认 → 重载 → 会话还在。**收尾**：改回时要把那条设置**删掉**（不是留成空串）—— `machine` scope 写的是**本人用户设置**，会影响到主窗口里已安装的那份 jerrypi（评审第 2 轮 N4） | **③真进程** | ①"重载窗口"是 VS Code 的生命周期，无头环境没有；②进程环境变量只在真实宿主里才有意义；③"设置改了之后 pi 到底用哪个目录"这件事，只有在真宿主里才成立。**判据是那行日志（评审 S3 加的"来源"字段）** |
 | M2 | **只验真实渲染**：`Pi: Set API Key` 的 provider 列表与 `Pi: Clear Stored API Keys` 的多选/模态框在窄侧边栏下的**换行与按钮文字**（中英混排是否别扭） | **①排版/外观** | 原生 QuickPick / 模态框的渲染是 VS Code 的画，我们的桩只能验参数（items 内容、modal=true），渲染与换行验不了。**评审 S5 的收缩**：items 内容归 A6、设置描述文字归 A10，M2 不再"顺便都看一眼" |
 
 - 两条都在**同一次 F5** 里做完，加起来约 3 分钟。
@@ -516,6 +516,7 @@ API Error: Request rejected (429) · api key 日限额已用完
 | 9-1 | 闸门（T1–T13）以前只有“在 VS Code 里点命令”一条路 —— S5 是拿临时脚本跑的（结果记在 S5-plan §12.1），**不可复现** | 新增 `scripts/selftest-check.mjs` + `npm run check:gate`：与 `Pi: Run Self-Test` 调**同一个** `runSelfTest()`，差异只有报告字段（`vscodeVersion=headless`、`httpProxyConfig=(无头)`、`keys`=空内存 store，凭据走真实 `auth.json`）。这也是 S6-plan §9 第 9 步“自测”的可执行形式 |
 | 9-2 | 无头闸门实测 | **15/15 PASS / GATE PASS**（T5c/T12/T13 都 PASS）。T13 报告：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[HTTP_PROXY, HTTPS_PROXY, http_proxy, https_proxy]；PI_OFFLINE=未设`。注：`wrapped` 不等于“被 VS Code 换过” —— Node 自己的全局 `fetch` 本来就不是 `[native code]` 实现；T13 报的是**身份**，不是好坏 |
 | 9-3 | 打包 0.1.8 | **338 文件 / 5.75 MB**，`check-vsix` OK；`unzip -Z1` 与 0.1.7 的**文件清单逐个相同**（S6 没把开发文件带进包） |
+| 9-4 | **M1 按原写法会卡在“没有凭据”上**（2026-09-14，·**未经复核**）：指向空目录后 `auth.json` 不在，而面板发消息需要一把 key | M1 里补一句“若面板报没有凭据，先 `Pi: Set API Key` 设一把 deepseek key”—— 这一步本身就是 C1 的真机形态（空目录 + 只靠 SecretStorage 对话），不额外增加人工项 |
 
 **第 9 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（14 个检查脚本可解析）｜`check:controller` **98/98**｜`npm run check:gate` **15/15 GATE PASS**｜`check-vsix` OK（338 文件 / 5.75 MB）。
 
