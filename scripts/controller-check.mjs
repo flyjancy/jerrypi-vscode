@@ -33,6 +33,30 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const results = [];
 const check = (name, ok, detail = "") => results.push([name, ok, detail]);
 
+/** 会被 pi 当成凭据的环境变量（`provider-composer.js` 的那几档环境凭据都从 `process.env` 读）。 */
+const CREDENTIAL_ENV_PATTERN = /^ANTHROPIC_|_API_KEY$|_API_TOKEN$|_AUTH_TOKEN$|_TOKEN$|_SECRET_ACCESS_KEY$/i;
+
+/**
+ * 在"凭据环境变量已清掉"的环境里跑一段断言 —— S6 的 **A4/A5 共用前置条件**（S6-plan §6）。
+ * 不干净的环境会让 A4 假绿（别人的 key 顶着）、A5 假红（环境凭据让 configured 永远为真）。
+ *
+ * 计划原文是"**子进程里** `env -u`"；这里同进程删/恢复 —— pi 读的就是 `process.env`，等价，
+ * 且不用为几条断言搭一个子进程入口（S6-plan §11 的 5-2）。
+ */
+async function withoutCredentialEnv(fn) {
+  const saved = new Map();
+  for (const name of Object.keys(process.env)) {
+    if (!CREDENTIAL_ENV_PATTERN.test(name)) continue;
+    saved.set(name, process.env[name]);
+    delete process.env[name];
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [name, value] of saved) process.env[name] = value;
+  }
+}
+
 function agentDirOf(pi) {
   return process.env.PI_CODING_AGENT_DIR ?? pi.getAgentDir();
 }
@@ -924,26 +948,113 @@ async function main() {
         removeApiKey: async (id) => { providers = providers.filter((p) => p !== id); },
       };
       try {
-        const runtime = await getModelRuntime(pi, a5Agent, a5Keys);
-        const before = runtime.getProviderAuthStatus(probe);
-        check("A5 的前提：注入之后来源是 runtime（面板存的）",
-          before.source === "runtime", JSON.stringify(before));
+        await withoutCredentialEnv(async () => {
+          const runtime = await getModelRuntime(pi, a5Agent, a5Keys);
+          const before = runtime.getProviderAuthStatus(probe);
+          check("A5 的前提：注入之后来源是 runtime（面板存的）",
+            before.source === "runtime", JSON.stringify(before));
 
-        const result = await clearStoredApiKeys([probe], { keys: a5Keys, runtime });
-        check("A5：清掉这一个", result.ok.length === 1 && result.failed.length === 0, JSON.stringify(result));
-        check("A5①：我们的 provider 列表空了", a5Keys.listProviders().length === 0, JSON.stringify(a5Keys.listProviders()));
+          const result = await clearStoredApiKeys([probe], { keys: a5Keys, runtime });
+          check("A5：清掉这一个", result.ok.length === 1 && result.failed.length === 0, JSON.stringify(result));
+          check("A5①：我们的 provider 列表空了", a5Keys.listProviders().length === 0, JSON.stringify(a5Keys.listProviders()));
 
-        const after = runtime.getProviderAuthStatus(probe);
-        check("A5②：不再有 runtime 来源（回落到 stored 是**正确**的 —— 凭据还在 auth.json 里）",
-          after.source !== "runtime", JSON.stringify(after));
+          const after = runtime.getProviderAuthStatus(probe);
+          check("A5②：不再有 runtime 来源（回落到 stored 是**正确**的 —— 凭据还在 auth.json 里）",
+            after.source !== "runtime", JSON.stringify(after));
 
-        check("A5③：auth.json 一个字节没变（sha256 + mtime）",
-          sha(authFile) === authBefore && fs.statSync(authFile).mtimeMs === mtimeBefore,
-          `${authBefore} → ${sha(authFile)}`);
+          check("A5③：auth.json 一个字节没变（sha256 + mtime）",
+            sha(authFile) === authBefore && fs.statSync(authFile).mtimeMs === mtimeBefore,
+            `${authBefore} → ${sha(authFile)}`);
+        });
       } catch (error) {
         check("A5②③：清 key 的真 runtime 断言", false, error instanceof Error ? error.message : String(error));
       } finally {
         fs.rmSync(a5Root, { recursive: true, force: true });
+      }
+    }
+
+    // ------------------------------- 4. 空凭据目录也能对话（C1，S6 第 5 步）
+    //
+    // 判据原文（PLAN §6 的 S6）：**清空 models.json 里的 key、只靠 SecretStorage 也能完成对话**。
+    // 夹具要把「没有别的凭据来源」造齐：临时 agentDir 里没有 auth.json、models.json 里
+    // 有 provider 但**没有 apiKey**，再把环境里的凭据变量清掉 —— 唯一一把 key 放在 SecretStorage 桩里。
+    //
+    // 为什么必须同时断言来源（评审 B2/B4）：只说「能对话」证明不了 key 来自 SecretStorage ——
+    // `getProviderAuthStatus` 还有 `environment` / `models_json_key` 那些档，任一档顶上都会让
+    // 这条假绿。所以「对话成功」与「source === runtime」要一起成立才有意义。
+    {
+      const a4Root = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-a4-"));
+      const a4Agent = path.join(a4Root, "agent");
+      const a4Cwd = path.join(a4Root, "cwd");
+      const a4SessionsRoot = path.join(a4Root, "sessions");
+      try {
+        for (const dir of [a4Agent, a4Cwd, a4SessionsRoot]) fs.mkdirSync(dir, { recursive: true });
+
+        // 用**面板实际选中的那个 provider**：它保证这轮真对话用的确实是本地有凭据的那家
+        // （与夹具的 auth.json 同源，也走同一条选模型规则）。
+        const provider = controller.snapshot().meta.provider;
+        const realAuth = JSON.parse(fs.readFileSync(path.join(sourceAgentDir, "auth.json"), "utf8"));
+        const entry = realAuth[provider];
+        if (entry?.type !== "api_key" || typeof entry.key !== "string" || entry.key.length === 0) {
+          console.log(
+            `  skip A4：${sourceAgentDir}/auth.json 里的 ${provider} 不是 api_key 凭据（这条要把 key 放进 SecretStorage 桩，oauth 做不到）`,
+          );
+        } else {
+          // 「有 provider 无 apiKey」的 models.json：贴着真实布局，挡住 models_json_key 那一档。
+          // 没有这份文件时这条断言仍然成立（§6 A4 的 N4 注），所以存在才复制。
+          const sourceModels = path.join(sourceAgentDir, "models.json");
+          if (fs.existsSync(sourceModels)) fs.copyFileSync(sourceModels, path.join(a4Agent, "models.json"));
+
+          await withoutCredentialEnv(async () => {
+            const a4Keys = {
+              listProviders: () => [provider],
+              getApiKey: async (id) => (id === provider ? entry.key : undefined),
+              saveApiKey: async () => {},
+              removeApiKey: async () => {},
+            };
+            const a4Messages = [];
+            const a4 = new SessionHostController({
+              pi, cwd: a4Cwd, agentDir: a4Agent, sessionsRoot: a4SessionsRoot,
+              keys: a4Keys, uiContext: createSelfTestUIContext(log), log,
+              onMessage: (message) => a4Messages.push(message),
+            });
+            try {
+              check("A4 的前提：夹具起点没有 auth.json（否则证明不了 key 来自 SecretStorage）",
+                !fs.existsSync(path.join(a4Agent, "auth.json")), a4Agent);
+              await a4.ensure();
+              const runtime = await getModelRuntime(pi, a4Agent, a4Keys);
+              const before = runtime.getProviderAuthStatus(provider);
+              check("A4①：夹具起点没有 auth.json / models.json 里没有 key 时，来源被判定为 runtime（SecretStorage 那一档）",
+                before.source === "runtime", JSON.stringify(before));
+
+              await a4.prompt("Reply with the single word OK", "auto");
+              const view = new View();
+              for (const message of a4Messages) view.apply(message);
+              const replies = view.byKind("assistant").map(textOf);
+              const snapshot = a4.snapshot();
+              // 不拿模型措辞当判据（同 §5 那两条）：要证的是「这一轮真跑完了」。
+              check("A4②：只靠 SecretStorage 里那把 key 跑完了一轮真实对话",
+                replies.length > 0 && replies.some((text) => text.length > 0) && snapshot.errorMessage === undefined,
+                JSON.stringify({ replies: replies.map((text) => text.slice(0, 40)), errorMessage: snapshot.errorMessage }));
+              // 断言的是「key 没落盘」，**不是**「auth.json 不存在」：pi 自己会在任何一次带锁的
+              // 凭据读里惰性建一个空的 `{}`（`FileAuthStorageBackend.withLock` → `ensureFileExists`），
+              // 这是 pi 的行为，不是我们写了凭据。真正要守的是那把 key 不进文件。
+              const a4AuthFile = path.join(a4Agent, "auth.json");
+              const authBytes = fs.existsSync(a4AuthFile) ? fs.readFileSync(a4AuthFile, "utf8") : "";
+              const containsKey = authBytes.includes(entry.key);
+              check("A4③：这一轮之后来源仍是 runtime，且那把 key 没有被写进 auth.json",
+                runtime.getProviderAuthStatus(provider).source === "runtime" && !containsKey &&
+                  (authBytes === "" || JSON.parse(authBytes)[provider] === undefined),
+                JSON.stringify({ status: runtime.getProviderAuthStatus(provider), authFile: authBytes === "" ? "(不存在)" : `${authBytes.length}B`, containsKey }));
+            } finally {
+              await a4.dispose().catch(() => undefined);
+            }
+          });
+        }
+      } catch (error) {
+        check("A4：空凭据目录 + SecretStorage 的一轮真对话", false, error instanceof Error ? error.message : String(error));
+      } finally {
+        fs.rmSync(a4Root, { recursive: true, force: true });
       }
     }
 

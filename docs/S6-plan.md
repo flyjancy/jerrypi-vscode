@@ -215,7 +215,7 @@ activate() 第一件事
 | A1 | `package.json` 声明了三项设置，默认值/描述/**`scope` 与 Q9 的裁决一致**（避免"断言写死 machine、用户却选了默认 scope"的自相矛盾 —— 评审第 2 轮 N2） | 新 `scripts/settings-check.mjs`（静态读 package.json + 与 `src/host/config.ts` 的常量对照） | — |
 | A2 | `applyAgentDirSetting()`：没设过环境变量 → 写入；已设过 → **不覆盖**；设置为空 → 不写。**断言前后必须存/删/恢复 `process.env.PI_CODING_AGENT_DIR`**（评审 N5：`host-check` 是单进程跑多条断言，泄露会污染 A9 等） | `host-check`（vscode 桩提供 `getConfiguration`） | C3 |
 | A3 | 变更 `jerrypi.agentDir` → 恰好弹一次"需要重载"的信息消息，且带「重载窗口」按钮 | `host-check`（桩记录 `showInformationMessage` 的 items） | — |
-| A4 | **空凭据目录也能对话且来源正确**（C1）：临时 agentDir（`models.json` 有 provider 无 `apiKey`、无 `auth.json`）+ SecretStorage 里有 key → 一轮真实对话成功，**且 `getProviderAuthStatus(id).source === "runtime"`**。*（那份"有 provider 无 key"的 models.json 只是为了贴近真实布局，**不是断言的必要条件** —— 没写 key 与根本没有 models.json 在 source 判定上等价，`provider-composer.js:388-391` 返回 `undefined`；评审第 4 轮 N4）* | `controller-check`（真模型） | **C1** |
+| A4 | **空凭据目录也能对话且来源正确**（C1）：临时 agentDir（`models.json` 有 provider 无 `apiKey`、无 `auth.json`）+ SecretStorage 里有 key → 一轮真实对话成功，**且 `getProviderAuthStatus(id).source === "runtime"`**；再加一条"那把 key 的字节没落进 `auth.json`"（pi 自己会惰性建一个空的 `{}`，所以**不能**断言文件不存在 —— 见 §11 的 5-1）。*（那份"有 provider 无 key"的 models.json 只是为了贴近真实布局，**不是断言的必要条件** —— 没写 key 与根本没有 models.json 在 source 判定上等价，`provider-composer.js:388-391` 返回 `undefined`；评审第 4 轮 N4）* | `controller-check`（真模型） | **C1** |
 | A5 | **C2**：`clearStoredApiKeys`（**核心函数**，见 §3.2 步骤 4）之后 ① `listProviders()` 为空 ② 该 provider `getProviderAuthStatus().source !== "runtime"`（**不是** `configured === false` —— 见 §1 C2 的说明）③ **夹具里预置的 auth.json（含同一个 provider）的 sha256 与 mtime 未变**。**可红验证**：把实现里的 `removeRuntimeApiKey` 故意换成 `logout()` → 这条必须变红（证明它真的能抓 F6 那个陷阱）。**脚本归属**（评审第 4 轮 S3）：① 在 `host-check`（要 vscode 的 `secrets`/`globalState` 桩）；**②③ 与可红验证在 `controller-check`，直接调那个核心函数**（它不依赖 vscode，拿得到真 `ModelRuntime` 与真临时 auth.json） | `controller-check` + `host-check` | **C2** |
 | A6 | **拆成两半**（评审第 4 轮 S4：6 档在集成层造不出来，最省事的写法会退化成"对着实现照镜子"）：<br>**(a) 纯函数** `describeAuthSource(status)` → 文案：在 `tool-text-check` 里对 6 个输入断言 6 个输出（**能红、零夹具**）；<br>**(b)** `host-check` 断言 QuickPick 的 items 来自 `getProviders()`（不是硬编码）且每项描述是 `describeAuthSource` 的返回（来源用 `getProviderAuthStatus().source`，**不是 `listCredentials()`** —— F16/评审第 1 轮 S2） | `tool-text-check` + `host-check` | — |
 | A7 | 校验三态：`checkAuth` 有结果 / 无结果 / `getAvailable` 为空 → 三种提示文案 | `host-check` | — |
@@ -460,6 +460,17 @@ API Error: Request rejected (429) · api key 日限额已用完
 **第 2 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**｜`check:controller` **87/87**（A13/A14 共 +5，含那条反向的鉴别力断言）｜闸门 **14/14 GATE PASS**（改前跑过一次）。
 
 **第 1 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（其中新增 `SETTINGS-CHECK OK (16/16)`，在用例 6 里跑）｜`host-check` **67/67**（A2/A3 共 +10）｜`check:controller` **82/82**｜闸门 **14/14 GATE PASS**。
+
+### 第 5 步（空凭据目录也能对话，2026-09-14）
+
+| # | 发现 | 处置 |
+| --- | --- | --- |
+| 5-1 | **A4③ 的第一版红得有价值**：我写的是"auth.json 不存在"（想证"key 没落盘"），真跑却红 —— 因为 **pi 自己会惰性建一个空的 `auth.json`（内容恰好 `{}`）**：`FileAuthStorageBackend.withLock` / `withLockAsync` 第一件事就是 `ensureFileExists()`（`auth-storage.js:47-50`），而 `ModelRuntime.create()` 的首个 refresh 会走凭据读 | 断言改成**语义正确的**那一句：那把 key 的**字节不在文件里** + `auth.json[provider]` 为空（文件可以不存在，也可以是 pi 建的空壳）。**文档口径也要跟着精确**（第 8 步）："不写 auth.json" → **"不写凭据进 auth.json"**（空壳是 pi 建的，不是我们写的） |
+| 5-2 | 计划写的是"**子进程里** `env -u` 清凭据变量"，而 A4 就跑在 `controller-check` 自己的进程里 | 就地改成"先删 `process.env` 里匹配 `*_API_KEY`/`*_API_TOKEN`/`*_AUTH_TOKEN`/`*_TOKEN`/`ANTHROPIC_*`/`*_SECRET_ACCESS_KEY` 的项、finally 恢复"，并抽成 `withoutCredentialEnv(fn)`；**按 §6 的"A4/A5 共用前置条件"把 A5 也一起包上**（只包一半就不是共用）。对 pi 等价（它读的就是 `process.env`），且不用为几条断言搭一个子进程入口 |
+| 5-3 | **能红验证**（AGENTS.md §2）：临时把 `injectStoredApiKeys()` 短路 → A4① 红成 `{"configured":false}`、A4② 红在 `No API key found for the selected model.`（**报的就是这件事本身**），A5 的前提也一起红成 `stored`；恢复后 **96/96** | 记录在案；短路代码已删（`git diff src/pi/runtime.ts` 为空） |
+| 5-4 | A4 要真对话，就得选一个本地**真能用的** provider；而 provider 在 `auth.json` 里可能是 `oauth`（塞不进 `setRuntimeApiKey`） | 用**面板实际选中的 provider**（`controller.snapshot().meta.provider`，与夹具同源）；它的凭据不是 `api_key` 时**明写一行 SKIP 并说明原因**（不是静默跳过 —— AGENTS.md §2 的 SKIP 纪律） |
+
+**第 5 步的门禁**：typecheck ✅｜`npm run self-test` **9/9**（protocol 112 / render 114 / tool-text 87 / settings-check 16/16 / webview-dom 75 / host-check 75）｜`check:controller` **96/96**（A4 共 +4）。
 
 ## 12. 实施与验收结果
 
