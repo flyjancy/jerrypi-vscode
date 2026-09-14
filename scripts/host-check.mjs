@@ -753,6 +753,10 @@ check(
   check("A3：改了 agentDir → 恰好弹一次信息消息，且带「重载窗口」按钮",
     messages.length === 1 && messages[0].items.includes("重载窗口") && String(messages[0].message).includes("重载"),
     JSON.stringify(messages[0]));
+  // 真机发现（M1 验收期，2026-09-14）：第一版把 `**重载窗口**` 写进了通知，而 VS Code 的通知
+  // **不渲染 markdown** —— 用户看到的是字面量星号。这里钉住“通知里不出现 markdown 记号”。
+  check("A3：通知文字里不能出现 markdown 记号（通知不渲染 markdown）",
+    !String(messages[0]?.message).includes("**"), String(messages[0]?.message));
 
   check("A3：没点按钮 → 不重载（不能替用户重载）",
     callsOf("executeCommand").filter((c) => c.id === "workbench.action.reloadWindow").length === 0,

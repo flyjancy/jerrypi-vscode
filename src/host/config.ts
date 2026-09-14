@@ -91,7 +91,7 @@ export const RELOAD_ITEM = "重载窗口";
  */
 export async function notifyAgentDirChanged(): Promise<boolean> {
   const picked = await vscode.window.showInformationMessage(
-    `jerrypi: 已改 ${AGENT_DIR_SETTING}。pi 的会话、模型与设置都跟着这个目录走，需要**重载窗口**才生效。`,
+    `jerrypi: 已改 ${AGENT_DIR_SETTING}。pi 的会话、模型与设置都跟着这个目录走，需要「重载窗口」才生效。`,
     RELOAD_ITEM,
   );
   if (picked !== RELOAD_ITEM) return false;
