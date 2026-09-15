@@ -506,6 +506,7 @@ S1 挪到纯函数层、N5 并进 A6/A6b、B3 用新增的 Q10 落裁决）。�
 | **M2-1** | M2 第一次写给用户时**太长**（四步 + 手工建夹具 + 反复切窗口/重载），用户反馈"看不懂、好复杂"。而其中真正只有真机能验的只有两件事："模态真的弹出来且文案对""点下去真的生效" | ①夹具改由我 `bash` 建好（`/tmp/s8-trust-demo`）；②"不信任/仅本次/重载不再问"本来就由 A11②⑤/A12 钉着 ⇒ 从人工清单里删掉；③新增 **A10⑩**（真 controller + `askProjectTrust` → 项目设置真的改变工具集），把"接线"也搬进自动断言。M2 从"4 步 + 4 个子场景"缩到 **3 下**（开文件夹 → 点「信任并记住」→ 发一句话）+ 1 次命令 |
 | **M2-2** | 真机看到的模态与桩里"一样但多一个按钮"：macOS 的**原生模态会自动加一个 `Cancel`**（我们传给 API 的只有三个：信任并记住 / 仅本次信任 / 不信任），所以用户看到四个。`Cancel` 与 `Esc` 一样返回 `undefined` ⇒ 落到"**不信任且不写文件**"（安全方向）。**但文案上"Cancel"与"不信任"并存会让人犹豫**，而这是 macOS 的原生行为、API 控制不了 | 记成**已知行为**（不改代码）：不动它；A13 的"三个按钮"断言仍然成立（断言的是我们**传进去**的 items，桩记录的就是那三个）。若将来要消掉它，只能去掉 `{modal:true}`（那会变成没有焦点的通知，更差） |
 | **M2-3** | 真机同时看到**两层信任**：dev host 窗口里有 VS Code 自己的 `Restricted Mode` 横幅（未信任这个文件夹），而我们的模态照样弹出 —— 因为 **F5 的 dev host 会无条件加载开发中的扩展**，`capabilities.untrustedWorkspaces.supported=false` 在那里不生效。Marketplace 装的正规用户处在这个状态时，扩展**整个不会被激活**（我们声明过），也就看不到这个模态 | 不是缺陷，但值得写清：README 的"两层信任"那段已经写了"后者决定要不要在窗口里启用扩展"，这里补一句 dev host 的例外给将来的验收者看 | 
+| **P-1** | `node scripts/compare-vsix.mjs` 在本机**必须带 `NODE_USE_ENV_PROXY=1`**：它用 Node 的 `fetch` 去 Marketplace 取包，而本机的代理只写在环境变量里（`http_proxy=http://127.0.0.1:7897`），Node 的 fetch **默认不看**环境变量 ⇒ 第一次跑是 `UND_ERR_CONNECT_TIMEOUT`（10s 超时）。这正是 S6 的 L1 那条教训的同一机制（`NODE_USE_ENV_PROXY` 只在**进程启动前**设才有效） | 记进 §12.3 的命令示例；将来给 `compare-vsix.mjs` 的用法注释补一行（不是缺陷，是环境约定） |
 | 6-4 | 顺手确认了一件好事：**待审批时 `dispose()`** 会让 pi 把手里的 `ctx` 判成 stale（`This extension ctx is stale after session replacement or reload`）—— 我们的处理器把它 catch 住并 **fail-closed 拦下**，所以"边挂边卸载"不会变成"静默放行" | 这正是文件头第 2 条想要的行为；A5（host-check）断言了待审批在替换/卸载后清零 |
 
 **实施期的"能红验证"记录（每步都做了，破法 → 红在哪）**：
@@ -577,7 +578,19 @@ S1 挪到纯函数层、N5 并进 A6/A6b、B3 用新增的 Q10 落裁决）。�
 > 验收期间我**没有**动用户的任何数据：临时夹具（桌面那份 + `/tmp` 里的几个文件）都是我建的、测完由我 `rm` 掉；
 > `~/.pi/agent/trust.json` 只有"用户点「信任并记住」"那一次写入，随后被用户用命令清掉。
 
-**Windows（W0/W1）—— ⏳ 待 0.1.11 上传后验**
+**发布核验（2026-09-15）**：用户上传 0.1.11（Pre-Release）后，运行
+
+```bash
+NODE_USE_ENV_PROXY=1 node scripts/compare-vsix.mjs 0.1.11   # 本机代理只写在环境变量里，Node 的 fetch 默认不看（§11 的 P-1）
+```
+
+⇒ **`VSIX-COMPARE OK 0.1.11`：338 个文件逐个字节相同，整体 `.vsix` 字节也相同**
+（6,050,303 字节 / `bd3cdcde541698cc1e861e9adfb9abcdd5d208d3b1b1dfa024b2e76d86bccd47`）；
+留档 `~/jerrypi-releases/jerrypi-0.1.11.vsix`；tag **`v0.1.11`** 已打并推送（注解里带字节数与 SHA-256）。
+
+**Windows（W0/W1）—— ⏳ 待验**（用户在 Windows 上装 0.1.11 预发布后跑：
+W0 `Pi: Run Self-Test` 期望 **15 PASS / 0 FAIL / 1 SKIP = T12**（那台机器没有 `pi`；这次多一项 T14）、
+W1 重启 VS Code 后面板正常接过上一会话）
 
 ### 12.4 已知未覆盖
 
