@@ -38,8 +38,9 @@
 | 密钥管理 | **已实现** | API key 存入 VS Code SecretStorage，优先于 `models.json` 中的 key；可在面板里设置 |
 | 模型与思考等级 | **已实现** | 输入框**上方**是工作状态行（空闲时不占内容但那行仍在，避免输入框跳动），**下方**是 `模型 · 思考等级 · 42.3%/1.0M`（**点模型/等级即可切换**，也可用命令面板 `Pi: Select Model` / `Pi: Select Thinking Level`）；VS Code 状态栏同时显示模型与用量，点击开选择器。**不覆盖**你在 pi 里选定的模型；面板里选过的模型在本窗口内一直生效（含新建会话），但**不写回 pi 的设置** |
 | 会话管理 | **已实现** | 窗口启动**自动接过上一会话**（与 `pi -c` 同行为）；`Pi: Resume Session` 或点输入框下方的**会话名**打开列表（首项永远是“新建会话”，当前项带 `✓`，另一项 `Pi: New Session`）；忙时切换会**先问一句**。会话写在 `<agentDir>/sessions/--<编码 cwd>--/`，**与 pi CLI 互通**（`pi -c` / `pi --resume` 能打开它，反之亦然） |
-| Diff 审阅 | 计划中（S7） | `edit` 展示 unified patch；`write` 展示本次调用的前后对比 |
-| 工具审批 | 计划中（S8） | 开关式确认，默认 `off`（与 pi CLI 一致），可选 `mutating` / `all` |
+| Diff 审阅 | **已实现** | `edit` 展示该次调用的 unified patch 视图；`write` 展示本次调用的前后对比（重启后只剩 `edit` 那份，见已知限制） |
+| 工具审批 | **已实现** | 三档确认（`off` / `mutating` / `all`）：开启后工具调用**停在卡片上**等「允许 / 拒绝」；拒绝后 agent 收到原因；待确认时面板状态行会喊、面板不可见时弹通知。默认 `off`（与 pi CLI 一致） |
+| 项目信任 | **已实现** | 工作区里有 `.pi/` 或 `.agents/skills` 时问一次"要不要信任这个文件夹"；选择可记进 `<agentDir>/trust.json`（与 pi CLI 共用），改判用 `Pi: Project Trust…` |
 | 扩展与包 | 计划中（S9） | 加载用户的 pi TypeScript 扩展；支持本地路径 / git / `npm:` 包源 |
 
 ### 环境要求
@@ -66,13 +67,14 @@
 
 | 设置 | 取值 | 说明 |
 | --- | --- | --- |
-| `jerrypi.approvalMode` | `off`（默认）/ `mutating` / `all` | 工具调用是否需要确认。**尚未生效（S8）**：现在设置它没有任何效果，工具调用一律直接执行 |
+| `jerrypi.approvalMode` | `off`（默认）/ `mutating` / `all` | 工具调用是否需要确认。**已生效**：`mutating` = `read`/`grep`/`find`/`ls` 之外的工具（含扩展注册的工具）都要确认；`all` = 全部确认；`off` = 与 pi CLI 一样直接执行。**改动立即生效**（不需要重载窗口） |
 | `jerrypi.proxy` | 代理 URL（可选） | 显式代理。**未实现**：现在设置它没有任何效果 —— 代理与证书交给 VS Code 的 `http.proxy` / `http.systemCertificates`；企业网必须走代理时，可以在**启动 VS Code 之前**设 `NODE_USE_ENV_PROXY=1` 与 `HTTP(S)_PROXY`（整进程的 `fetch` 都会走代理） |
 | `jerrypi.agentDir` | 路径（默认留空 = `~/.pi/agent`） | pi 配置目录。**已生效**：会话、`auth.json`、`models.json`、`settings.json` 都跟着它走；**改动后需要重载窗口**（pi 在模块加载时读定）。环境变量 `PI_CODING_AGENT_DIR` 已设时以它为准 |
 
 - 默认模型、`shellPath`、工具白名单等请在 pi 的 `settings.json` 中修改，扩展提供 **`Pi: Open Settings File`** 直接打开它。
 - API key 存在 **VS Code SecretStorage**（`Pi: Set API Key`，候选来自 pi 自己认识的 provider、并标注每个 provider 当前的凭据来源），**不会写进 pi 的 `auth.json`**；删除用 **`Pi: Clear Stored API Keys`**（它只删本扩展存的那份，**不碰** `auth.json` / `models.json` —— 那两份是 pi 自己的文件）。
 - 模型目录默认**不联网刷新**；**`Pi: Refresh Model Catalog`** 是唯一的联网入口（点了才发请求，刷新 `<agentDir>/models-store.json`）。
+- 项目级配置的信任：打开面板时如果工作区里有 `.pi/` 或 `.agents/skills`，会弹一次原生对话框问"信任这个文件夹吗"。改判用 **`Pi: Project Trust…`**（信任并记住 / 信任父文件夹 / 仅本次 / 不信任 / 清除记录）。
 - 代理与证书默认交给 VS Code 自身的 `http.proxy` / `http.systemCertificates` 处理，无需额外配置。
 
 ### 使用
@@ -153,14 +155,25 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 
 ### 已知限制
 
-- **工具调用没有任何确认环节**：`bash` / `write` / `edit` 一律**直接执行**，面板不会弹确认，`jerrypi.approvalMode` 开关在 S8 之前**写了也没用**。因此 agent 能执行任意命令、读写任意路径，与 pi CLI 的默认行为一致 —— 请在受信任的目录里使用。
+- **`jerrypi.approvalMode` 默认是 `off`，也就是"不问就执行"**：`bash` / `write` / `edit` 一律直接跑，与 pi CLI 的默认行为一致 —— 请在受信任的目录里使用。开启它（`mutating` / `all`）之后：
+  - 确认**停在卡片上**（转写里那张工具卡片上出现「允许 / 拒绝」），状态行会写「有 N 个工具调用等待确认」；如果**面板当前不可见**，会弹一条通知（点「打开面板」回到面板）；
+  - 点「拒绝」→ 工具**不执行**，agent 收到一句 `Rejected by user: <这次调用要做什么>`（它能看到被拒的是什么，可以换个做法）；
+  - 待确认时点「中止」→ 这一轮结束、待确认项被清掉；
+  - **它拦的是"工具调用"，不是"权限"**：允许一次 `bash` 就是允许那条命令能做的一切（写文件、删东西、联网都一样）；批准 `write`/`edit` 就是批准那次写。想要更细的边界请用 pi 自己的工具白名单/`shellPath` 和操作系统权限。
+  - 面板**重开后**那张卡片还在（按钮还在，可以继续答）；只有重启 VS Code 才会丢掉"待确认"这件事（那时这一轮本来也已经中止了）。
 - **没打开工作区时，会话的 cwd 是用户主目录**：`bash` 与文件工具会以 `~`（Windows 上是 `C:\Users\<你>`）为工作目录运行，Output 里会写一行提示。**请先打开一个工作区**再用面板，否则模型的操作范围不受任何目录约束。
 - **无 Node 的机器上不支持 `npm:` 包源**，也不支持带 `package.json` 的 git 包源（二者都需要 `npm`）；本地路径包源可用。
 - **Bedrock SigV4a** 需要额外的 `@aws-sdk/signature-v4-crt` 包，本扩展不带，相关场景会明确报错。
 - **`jerrypi.proxy` 还没实现**（写了不生效）：将来若实现，它会包装**进程级**的 `globalThis.fetch`，从而影响同进程内的其他扩展。现在请用 VS Code 的 `http.proxy`，或在启动 VS Code 之前设 `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY`。当真机排查时，跑一次 `Pi: Run Self-Test` 看 **T13** 那一行 —— 它会报告 `fetch` 是不是原生、`http.proxySupport` / `http.proxy` 的值（口令会掩掉）与四个代理环境变量是否存在。
 - **改动历史（卡片上的「查看 diff」）**：`edit` 显示的是**该次调用自己的补丁视图** —— 改动附近 4 行上下文，多个改动段之间用「⋯（中间省略）」隔开，**不是整文件**；它由 pi 写进会话文件，所以重启 VS Code 后仍可打开。`write` 显示的是**整文件前后**，前后内容只活在**本次 VS Code 进程**的内存里 —— 重启后同一张卡片显示「本次会话不可用」。内存上限：`edit` 保留最近 100 条、`write` 最近 20 条（单条超过 2 MiB 不保留），超出上限后**最早**的卡片显示「较早的改动记录已清理」。失败的工具调用（例如 `edit` 没匹配上）不会给 diff 入口。另外：diff 编辑器在**列太窄**时会被 VS Code 自动切成「上下」（inline）视图 —— 那是它的默认启发式（`diffEditor.useInlineViewWhenSpaceIsLimited`），不是我们的选择；想要一律左右并排，就把 diff 拖到更宽的列，或关掉那个设置。
 - **会话落盘条件**（pi 行为）：只有完成过至少一轮 assistant 回复的会话才会写入磁盘。
-- **项目级设置默认不被信任**：pi CLI 会解析信任并询问用户，而 jerrypi 固定以 `projectTrusted: false` 初始化会话，因此工作区里的 `.pi/settings.json`、`SYSTEM.md` 等项目级资源不会被加载，也**不会有任何提示**。这是刻意的安全默认值（项目级设置能改 `shellPath` 与默认工具），信任流程**已排到 S8**（与工具审批同一阶段；早期计划误写成“S6”，实际不在 S6 范围内 —— 用户 2026-09-14 拍板）。在此之前如需使用项目级配置，请改用全局 `settings.json`。
+- **项目级设置要你明确同意才会生效**：工作区里存在 `.pi/settings.json`、`.pi/extensions`、`.pi/skills`、`.pi/prompts`、`.pi/themes`、`SYSTEM.md`、`APPEND_SYSTEM.md`，或**工作区或它的某个上级目录**里有 `.agents/skills` 时，**首次打开面板**会问一次"信任这个文件夹吗"（原生对话框，三个按钮：信任并记住 / 仅本次信任 / 不信任；Esc = 不信任）。要点：
+  - 选"信任并记住"会写进 **`<agentDir>/trust.json`** —— 这是 **pi CLI 自己的那个文件**（终端里 `pi` 的信任提示读写同一份，互相认得）；选"仅本次"或"不信任"**不写文件**；
+  - 我们**从不把"不信任"写进文件**（那会变成"永不再问"），要改判用命令 **`Pi: Project Trust…`**（内含"清除记录"）；
+  - 目录没有这些资源时**根本不问**（此时信任与否不影响任何事）；`settings.json` 里的 `defaultProjectTrust` 是 `always`/`never` 时也不问；
+  - 信任之后加载的是**这个仓库自带**的配置：项目 `.pi/settings.json` 能改 `shellPath`、默认工具等。**它改不了 `jerrypi.approvalMode`**（那是 VS Code 的机器级设置，只有你能改）；
+  - **这与 VS Code 的「工作区信任」是两回事**：后者决定要不要在这个窗口里启用扩展（我们已声明不受信任的工作区不启用），前者决定要不要加载这个仓库自带的 pi 配置；
+  - 改判之后要**新建会话或重载窗口**才生效（信任是在建会话时裁决的，`Pi: Project Trust…` 会提示这一句）。
 - **生成中切换模型不影响本轮**：pi 只改 `state.model`，正在跑的那轮仍用旧模型（下一轮生效）。切模型本身是**异步**的（要校验凭据），面板在切换完成前仍显示旧值。
 - **面板里选的模型只在本窗口有效**：面板内的选择不写入 pi 的 `settings.json`（等价于 pi TUI 里"选了但没按 Ctrl+S 保存"），重开窗口会回到 pi 的默认/你自己的设置。写入设置属于 S6。
 - **模型列表是"这台机器上 pi 的目录"，而且不会自己联网更新**：面板直接用 pi 的 `getAvailable()`（不硬编码、不过滤），而 pi 会把**内置目录**与 `<agentDir>/models-store.json`（缓存）合并。我们的运行时**显式关掉了自动联网刷新**（`allowModelNetwork: false`），所以面板不会替用户往外发请求 —— 代价是新模型名（例如 `deepseek-flash`）**不会自动出现**。需要跟上时跑 **`Pi: Refresh Model Catalog`**（点了才联网，刷新的是 `<agentDir>/models-store.json`）；也可以把别的 pi 环境刷出来的同格式文件直接复制到这台机器的 `<agentDir>` 下，重启面板即生效。
@@ -215,8 +228,9 @@ To make that possible, the extension **ships pi's official pre-bundled SDK** ins
 | API keys | **Implemented** | Stored in VS Code SecretStorage, taking precedence over keys in `models.json` |
 | Model & thinking level | **Implemented** | The working-status line sits **above** the composer (it keeps its height when idle so the composer never jumps), and `model · thinking level · 42.3%/1.0M` sits **below** it — **click the model or the level to switch**, or use `Pi: Select Model` / `Pi: Select Thinking Level`. The VS Code status bar mirrors the model and usage and opens the picker on click. The panel **never overrides** the model you picked in pi; a model you pick *in the panel* stays in effect for this window (including new sessions) but is **not written back** to pi's settings |
 | Sessions | **Implemented** | The window **resumes the previous session on startup** (same behaviour as `pi -c`); `Pi: Resume Session` — or clicking the **session name** under the composer — opens the list (the first item is always "New session", the current one is marked `✓`, and `Pi: New Session` still works); switching while the agent is busy **asks first**. Sessions live in `<agentDir>/sessions/--<encoded cwd>--/` and are **interoperable with the pi CLI** (`pi -c` / `pi --resume` can open ours, and vice versa) |
-| Diff review | Planned (S7) | `edit` shows the unified patch; `write` shows per-call before/after snapshots |
-| Tool approval | Planned (S8) | Optional confirmation gate (default `off`, matching the pi CLI), plus `mutating` / `all` |
+| Diff review | **Implemented** | `edit` shows that call's own unified patch; `write` shows per-call before/after snapshots (only the `edit` one survives a restart — see known limitations) |
+| Tool approval | **Implemented** | Three modes (`off` / `mutating` / `all`): when on, a tool call **waits on its own card** for "Allow / Deny"; denying hands the agent a reason; a pending approval is announced on the status line and, if the panel is hidden, via a notification. Default `off` (matching the pi CLI) |
+| Project trust | **Implemented** | When the workspace has `.pi/` or `.agents/skills`, asks once whether to trust that folder; the answer can be remembered in `<agentDir>/trust.json` (shared with the pi CLI) and changed via `Pi: Project Trust…` |
 | Extensions & packages | Planned (S9) | Loads user pi TypeScript extensions; installs local / git / `npm:` package sources |
 
 ### Requirements
@@ -240,7 +254,7 @@ The extension layers three VS Code settings on top of pi's own config; everythin
 
 | Setting | Values | Description |
 | --- | --- | --- |
-| `jerrypi.approvalMode` | `off` (default) / `mutating` / `all` | Whether tool calls require confirmation. **Not effective yet (S8)**: setting it does nothing today, tool calls always run immediately |
+| `jerrypi.approvalMode` | `off` (default) / `mutating` / `all` | Whether tool calls require confirmation. **Effective**: `mutating` = everything except `read`/`grep`/`find`/`ls` (including tools registered by extensions) needs confirmation; `all` = everything; `off` = run immediately, matching the pi CLI. **Takes effect immediately** (no window reload) |
 | `jerrypi.proxy` | proxy URL (optional) | Explicit proxy. **Not implemented**: setting it does nothing today — proxy and certificates are up to VS Code's `http.proxy` / `http.systemCertificates`; behind a corporate proxy you can set `NODE_USE_ENV_PROXY=1` and `HTTP(S)_PROXY` **before starting VS Code** (then the whole process' `fetch` uses them) |
 | `jerrypi.agentDir` | path (empty = `~/.pi/agent`) | The pi config directory. **Effective**: sessions, `auth.json`, `models.json` and `settings.json` all follow it; **changing it requires a window reload** (pi reads it when its modules load). An existing `PI_CODING_AGENT_DIR` wins |
 
@@ -248,6 +262,7 @@ Use **`Pi: Open Settings File`** to edit pi's `settings.json` for default model,
 
 - API keys live in **VS Code SecretStorage** (`Pi: Set API Key` — the candidate list comes from pi itself, with each provider's current credential source shown) and are **never written into pi's `auth.json`**. Remove them with **`Pi: Clear Stored API Keys`**, which only deletes our copy and **does not touch** `auth.json` / `models.json` (those belong to pi).
 - The model catalog is **not refreshed over the network by itself**; **`Pi: Refresh Model Catalog`** is the only network entry point (it requests only when you click it, refreshing `<agentDir>/models-store.json`).
+- Project-level trust: when the workspace contains `.pi/` or `.agents/skills`, opening the panel asks once via a native dialog. Change the answer with **`Pi: Project Trust…`** (remember / trust the parent folder / this session only / do not trust / clear).
 
 ### Usage
 
@@ -319,7 +334,12 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full notices and lice
 
 ### Known limitations
 
-- **Tool calls have no confirmation step**: `bash` / `write` / `edit` run **immediately** and the panel never asks. `jerrypi.approvalMode` does nothing before S8. The agent can therefore run arbitrary commands and read/write arbitrary paths, matching the pi CLI default — use it in a directory you trust.
+- **`jerrypi.approvalMode` defaults to `off`, i.e. tools run without asking**: `bash` / `write` / `edit` run **immediately**, matching the pi CLI default — use it in a directory you trust. When you turn it on (`mutating` / `all`):
+  - the confirmation **waits on the tool's card** (an "Allow / Deny" row appears on that card in the transcript) and the status line says "N tool calls are waiting for confirmation"; if the panel is **not visible**, a notification appears (its button focuses the panel);
+  - "Deny" → the tool **does not run**, and the agent receives `Rejected by user: <what this call wanted to do>` so it can try something else;
+  - "Abort" while an approval is pending ends that turn and clears the pending item;
+  - **It gates tool calls, not permissions**: allowing one `bash` call allows everything that command can do (writing files, deleting things, network); allowing `write`/`edit` allows that write. For finer boundaries use pi's own tool allow-lists/`shellPath` and OS permissions.
+  - The card **survives a panel reload** (the buttons come back); only restarting VS Code drops a pending approval (by which point the turn has ended anyway).
 - **With no workspace open, the session cwd is your home directory**: `bash` and the file tools then use `~` (on Windows `C:\Users\<you>`) as the working directory, and the output channel says so. **Open a workspace first**, otherwise nothing constrains where the agent operates.
 - **`npm:` and git package sources are unavailable on machines without Node/npm**; local-path sources work.
 - **Bedrock SigV4a** requires an extra `@aws-sdk/signature-v4-crt` package that is not bundled; affected setups fail with an explicit error.
@@ -328,7 +348,13 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full notices and lice
 - **Session persistence** (pi behavior): a session is written to disk only after at least one assistant reply.
 - **The model list is "pi's catalog on this machine", and it does not refresh itself over the network**: the panel uses pi's `getAvailable()` directly (no hardcoding, no filtering), and pi merges the **built-in catalog** with `<agentDir>/models-store.json` (a cache). Our runtime **explicitly disables automatic network refresh** (`allowModelNetwork: false`), so the panel never sends requests on its own — the price is that new model names (e.g. `deepseek-flash`) **do not appear by themselves**. Run **`Pi: Refresh Model Catalog`** when you want to catch up (network requests only after you click it; it refreshes `<agentDir>/models-store.json`), or copy a same-format file produced by another pi environment into `<agentDir>` on this machine and restart the panel.
 - **Changing `jerrypi.agentDir` does not bring the old directory along**: sessions, `auth.json` and `models.json` are all looked up under the new directory — nothing is lost, but the panel and `pi --resume` will not see the old sessions (run `pi` in the old directory and it will). Change it back (or delete the setting) and reload the window to recover.
-- **Project-level settings are not trusted by default**: the pi CLI resolves trust and asks the user, whereas jerrypi always initialises sessions with `projectTrusted: false`. Project-scoped resources such as `.pi/settings.json` and `SYSTEM.md` are therefore not loaded, and **nothing tells you so**. This is a deliberate safe default (project settings can override `shellPath` and the default tool set); the trust flow is **scheduled for S8** (alongside tool approval; early plans said "S6", but S6's scope never included it — the user decided on 2026-09-14). Until then, put such configuration in the global `settings.json`.
+- **Project-level config needs your explicit consent**: when the workspace has `.pi/settings.json`, `.pi/extensions`, `.pi/skills`, `.pi/prompts`, `.pi/themes`, `SYSTEM.md`, `APPEND_SYSTEM.md`, or a `.agents/skills` in the workspace **or any of its ancestors**, the **first time you open the panel** a native dialog asks whether to trust that folder ("Trust and remember" / "This session only" / "Do not trust"; Esc = do not trust). Details:
+  - "Trust and remember" writes into **`<agentDir>/trust.json`** — the **pi CLI's own file** (the terminal `pi` reads and writes the same file, so the two recognise each other); "this session only" and "do not trust" **write nothing**;
+  - we **never persist "do not trust"** (that would mean "never ask again"); to change your mind use **`Pi: Project Trust…`** (which includes "clear the record");
+  - a folder with none of those resources is **never asked about** (trust would change nothing there), and `defaultProjectTrust` set to `always`/`never` in `settings.json` skips the dialog too;
+  - trusting loads **the repo's own** config: its `.pi/settings.json` can change `shellPath`, the default tool set, etc. It **cannot** change `jerrypi.approvalMode` (that is a machine-scoped VS Code setting only you control);
+  - **This is not VS Code's workspace trust**: that one decides whether extensions run in this window at all (we declare that we do not activate in untrusted workspaces); this one decides whether the repo's pi config gets loaded;
+  - after changing your answer, **start a new session or reload the window** (trust is resolved when a session is created; the command says so).
 - **Remote images are not loaded**: a markdown `![](https://…)` is downgraded to its alt text. Allowing remote images would turn a model-controlled URL into an outbound channel (a 1×1 pixel can encode content in its query string), so inside messages **only `data:image/...` is allowed** (the CSP reads `img-src <extension's own resources> data:` and also allows the extension's own icons); no remote URL is ever fetched.
 - **Images are not displayed**: reading an image shows a single `[Image: image/png]` line. Rendering it would mean pushing base64 through the protocol (a single image can be several MB) and blowing the replay budget; this is also exactly how pi degrades on a terminal without image support.
 - **pi extensions that rely on `ctx.ui.custom()` do not work in the panel**: that API renders a full-screen TUI component and needs a real TUI instance, which an extension host cannot provide. Such commands show an **explicit error** (rather than failing silently); everything else about the extension keeps working.

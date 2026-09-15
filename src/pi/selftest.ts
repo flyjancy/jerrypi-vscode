@@ -34,6 +34,7 @@ import type { ApiKeyStore } from "./runtime";
 import { getModelRuntime } from "./runtime";
 import { describeProxyIdentity } from "../shared/format";
 import type { WriteRecord } from "./custom-tools";
+import { createApprovals } from "./approval";
 import { createSessionHost, type SessionHost } from "./session";
 import { resolveSessionDir, sessionsRootOf } from "./sessions";
 import { createSelfTestUIContext } from "./selftest-ui";
@@ -74,7 +75,7 @@ interface ItemResult {
 }
 
 /** 参与 GATE 判定的项（T5c 是 advisory）。 */
-const REQUIRED_ITEMS = ["T1", "T2", "T3", "T4", "T5a", "T5b", "T6", "T7", "T8", "T9", "T10", "T11"] as const;
+const REQUIRED_ITEMS = ["T1", "T2", "T3", "T4", "T5a", "T5b", "T6", "T7", "T8", "T9", "T10", "T11", "T14"] as const;
 
 const MIN_NODE = [24, 15, 0] as const;
 
@@ -97,6 +98,8 @@ const TIMEOUTS: Record<string, number> = {
   T7: 60_000,
   T8: 30_000,
   T9: 120_000,
+  // T14（S8）：不用模型、不用网络，只是几次本地工具调用 —— 但要建会话，给足 30s
+  T14: 30_000,
 };
 
 class SelfTestFailure extends Error {
@@ -498,6 +501,10 @@ class SelfTestRun {
       await this.item("T11", () => this.testCliListingInterop());
       // T12 是 advisory（不参与 GATE）：它要去问**用户终端里那份 pi**，找不到就 SKIP
       await this.item("T12", () => this.testUserPiDrift());
+      // T14（S8，**gating**）：工具审批。**不用模型**（脚本化 `streamFunction` + 内存 key，
+      // 见 S8-plan F8），所以它在受限机/无凭据机器上也真的会跑 —— 这正是把它放进自测的理由。
+      await this.item("T14", () => this.testApprovalGate());
+
       // T13 也是 advisory（S6 §3.4 / A11）：代理身份**只报告不判定** ——
       // 但这些值只能说明"这一层有没有生效"，说明不了"用户的网络能不能通"（T4 已经在真宿主里直连成功）。
       await this.item("T13", () => Promise.resolve(this.reportProxyIdentity()));
@@ -823,6 +830,172 @@ class SelfTestRun {
   // -------------------------------------------------------------------------
   // T5a：bash 基本可用性（失败必须分层）
   // -------------------------------------------------------------------------
+  /**
+   * T14（S8）：工具审批的**不用模型**版本。
+   *
+   * 为什么能不用模型（S8-plan §0.1 F8）：把 `session.agent.streamFunction` 换成脚本化的假流，
+   * 再给那个 provider 一把**内存** key（走生产路径的 `ApiKeyStore` 注入）骗过 `prompt()` 的
+   * 前置检查 —— 之后 pi 的 `tool_call` 钩子、真的 bash 工具、中止流程全都是真的。
+   *
+   * 三条纪律（S8-plan R2，探针挂过两次）：① 假流必须尊重 signal；② 工具调用之后必须收尾；
+   * ③ 每条 `prompt()` 都套超时。
+   *
+   * ⚠️ **独立的临时 agentDir**（F8）：那把假 key 会留在这个 `ModelRuntime` 里，而
+   * `getModelRuntime` 按 agentDir 缓存 —— 共用 agentDir 会污染后面几条模型项的 provider 判断。
+   */
+  private async testApprovalGate(): Promise<string> {
+    const { pi } = this.options;
+    const root = join(this.tempRoot, "approval");
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "cwd");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    const marker = join(cwd, "t14-marker.txt");
+
+    const bootstrap = await pi.ModelRuntime.create({
+      authPath: join(agentDir, "auth.json"),
+      modelsPath: join(agentDir, "models.json"),
+      modelsStorePath: join(agentDir, "models-store.json"),
+      allowModelNetwork: false,
+    });
+    const model = bootstrap.getModels()[0];
+    const keys: ApiKeyStore = {
+      listProviders: () => [model.provider],
+      getApiKey: async (providerId) => (providerId === model.provider ? "selftest-probe-key" : undefined),
+      saveApiKey: async () => {},
+      removeApiKey: async () => {},
+    };
+
+    const asked: string[] = [];
+    let mode: "off" | "mutating" | "all" = "all";
+    let answer: "allow" | "deny" | "hang" = "deny";
+    const approvals = createApprovals({
+      log: this.sink,
+      onPending: (request) => {
+        asked.push(request.toolName);
+        if (answer !== "hang") approvals.decide(request.toolCallId, answer);
+      },
+    });
+    const host = await createSessionHost({
+      pi,
+      cwd,
+      agentDir,
+      sessionManager: pi.SessionManager.create(cwd, resolveSessionDir(cwd, join(root, "sessions"))),
+      keys,
+      uiContext: createSelfTestUIContext(this.sink),
+      mode: "rpc",
+      sink: this.sink,
+      model,
+      approval: { mode: () => mode, approvals },
+    });
+
+    let steps: { id: string; name: string; arguments: unknown }[] = [];
+    let turn = 0;
+    const script = (next: typeof steps): void => {
+      steps = next;
+      turn = 0;
+    };
+    const fakeStream = async (
+      m: { api: string; provider: string; id: string },
+      _ctx: unknown,
+      opts?: { signal?: AbortSignal },
+    ) => {
+      const aborted = opts?.signal?.aborted === true;
+      const step = aborted ? undefined : steps[turn];
+      turn += 1;
+      const base = {
+        role: "assistant" as const,
+        api: m.api,
+        provider: m.provider,
+        model: m.id,
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0 } },
+        timestamp: Date.now(),
+      };
+      const message = aborted
+        ? { ...base, content: [{ type: "text" as const, text: "(aborted)" }], stopReason: "aborted" as const }
+        : step !== undefined
+          ? {
+              ...base,
+              content: [{ type: "toolCall" as const, id: step.id, name: step.name, arguments: step.arguments }],
+              stopReason: "stop" as const,
+            }
+          : { ...base, content: [{ type: "text" as const, text: "(done)" }], stopReason: "stop" as const };
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "start", partial: message };
+          yield { type: "done" };
+        },
+        async result() {
+          return message;
+        },
+      };
+    };
+    // 鸭子类型说明：pi 的循环只用 `for await (const event of stream)` + `await stream.result()`
+    // （S8-plan F8 的实测），所以这里给的对象就够了；而 `StreamFn` 的声明类型还要求
+    // `AssistantMessageEventStream` 的队列细节（queue/waiting/…），我们不实现它们。
+    // 用一次**显式**断言，而不是 `any` —— 断言的理由就在这两行注释里。
+    host.session.agent.streamFunction =
+      fakeStream as unknown as typeof host.session.agent.streamFunction;
+
+    const withTimeout = async (promise: Promise<unknown>, ms: number, label: string): Promise<unknown> =>
+      Promise.race([
+        promise,
+        new Promise((_resolve, reject) => setTimeout(() => reject(new SelfTestFailure("E_TIMEOUT", `${label} 超时 ${ms}ms`)), ms)),
+      ]);
+    const toolResultTexts = (): { isError: boolean; text: string }[] =>
+      host.session.messages
+        .filter((message) => (message as { role?: string }).role === "toolResult")
+        .map((message) => {
+          const raw = message as { isError?: boolean; content?: { text?: string }[] };
+          return { isError: raw.isError === true, text: raw.content?.[0]?.text ?? "" };
+        });
+
+    try {
+      // ① 拒绝 → 工具没执行，且 agent 收到我们给的原因
+      script([{ id: "t14-1", name: "bash", arguments: { command: `touch ${marker}` } }]);
+      await withTimeout(host.session.prompt("go"), 15_000, "T14 拒绝轮的 prompt()");
+      if (existsSync(marker)) fail("E_APPROVAL_NOT_BLOCKING", "拒绝之后 bash 仍然执行了（文件被创建）");
+      const denied = toolResultTexts();
+      if (!denied.some((r) => r.isError && r.text.startsWith("Rejected by user: "))) {
+        fail("E_APPROVAL_REASON", `拒绝之后的 toolResult 不是我们给的 reason：${JSON.stringify(denied)}`);
+      }
+
+      // ② 允许 → 真的执行
+      answer = "allow";
+      script([{ id: "t14-2", name: "bash", arguments: { command: `touch ${marker}` } }]);
+      await withTimeout(host.session.prompt("again"), 15_000, "T14 允许轮的 prompt()");
+      if (!existsSync(marker)) fail("E_APPROVAL_NOT_EXECUTING", "允许之后 bash 没有执行（文件不存在）");
+
+      // ③ mutating 档放行只读工具（不问）
+      mode = "mutating";
+      const beforeRead = asked.length;
+      script([{ id: "t14-3", name: "read", arguments: { path: marker } }]);
+      await withTimeout(host.session.prompt("read"), 15_000, "T14 只读轮的 prompt()");
+      if (asked.length !== beforeRead) fail("E_APPROVAL_OVERREACH", `mutating 档问了只读工具：${JSON.stringify(asked)}`);
+
+      // ④ 待审批时中止 → 收口、文件不存在
+      mode = "all";
+      answer = "hang";
+      rmSync(marker, { force: true });
+      script([{ id: "t14-4", name: "bash", arguments: { command: `touch ${marker}` } }]);
+      const running = host.session.prompt("hang").then(() => "resolved", () => "threw");
+      // 等的是"**这一轮**又问了一次"（`asked` 里前面几轮也有 bash，用个数比对，
+      // 否则循环立刻退出、下面那条断言会看到 0 而误报）
+      const beforeHang = asked.length;
+      for (let i = 0; i < 200 && asked.length === beforeHang; i += 1) await new Promise((r) => setTimeout(r, 25));
+      if (approvals.size().pending !== 1) fail("E_APPROVAL_NOT_PENDING", `中止前待审批数=${approvals.size().pending}`);
+      await host.session.abort();
+      await withTimeout(running, 5_000, "T14 中止后的 prompt()");
+      if (approvals.size().pending !== 0) fail("E_APPROVAL_NOT_CLEARED", `中止后仍有待审批：${approvals.size().pending}`);
+      if (!host.session.isIdle) fail("E_APPROVAL_NOT_IDLE", "中止之后会话没有回到空闲");
+      if (existsSync(marker)) fail("E_APPROVAL_ABORT_SIDE_EFFECT", "中止之后 bash 仍然执行了");
+
+      return `三档 + 拒绝/允许/中止都符合；问过 ${asked.length} 次（${[...new Set(asked)].join("/")}）`;
+    } finally {
+      await host.dispose().catch(() => undefined);
+    }
+  }
+
   private async testBashBasic(host: SessionHost | undefined): Promise<string> {
     const session = this.requireHost(host).session;
 

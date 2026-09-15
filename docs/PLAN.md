@@ -181,7 +181,8 @@ jerrypi-vscode/
 - **工具审批**（`approval.ts`）：pi 默认全权限执行。v1 提供开关，默认 `off`。开启时用 `InlineExtension` 监听 `tool_call`：
   - `mutating` 档：`edit`、`write`、`bash`、`powershell` 以及**所有未知/自定义工具**都需确认；`read`、`grep`、`find`、`ls` 直接放行。`all` 档：全部确认。
   - 批准 → 返回 undefined 放行；拒绝 → `{ block: true, reason: "Rejected by user" }`。
-  - 生命周期：`ctx.signal` 触发（用户点中止）、`AgentSession.dispose()`、Webview 被销毁、会话切换，四种情况都把待审批 promise 以"cancelled"解决并返回 `block`。待审批项以 toolCallId 为键，面板重开时重放。
+  - 生命周期：`ctx.signal` 触发（用户点中止）、`AgentSession.dispose()`、会话切换，三种情况都把待审批 promise 以"cancelled"解决并返回 `block`。待审批项以 toolCallId 为键，面板重开时重放。
+    > **2026-09-15（S8 计划期）修正**：本行原先写的是**四条**路径，其中"Webview 被销毁"与"面板重开时重放"互相矛盾（销毁即取消 ⇒ 永远不会发生重放）。S8 的 Q10 裁决为：**销毁不取消**，改为在销毁/重建时**再弹一次通知**（因为「中止」按钮在面板里，用户看不到卡片时没有别的出口）。实现的依据（实跑）与断言见 `docs/S8-plan.md` §0.1 F6/F7、§4 Q10、§6 A4/A5/A7。
 - **diff 审阅**（`filechanges.ts` + `diff.ts`）：不在事件回调里读磁盘做快照（并行执行下会串）。
   - **edit**：直接展示工具结果 `details.patch`（工具执行边界内生成的 unified patch），按 toolCallId 存内存。**只展示 patch，不反向应用去"还原"完整文件**：后续调用可能改了同一文件的其他位置，反向应用成功不代表还原出的是当时的真实内容。
   - **write**：用 `createWriteToolDefinition()` 包一层自定义工具，同名覆盖内置 write（已确认覆盖机制）。外层 `execute(toolCallId, ...)` 拿到 toolCallId 后，为该次调用构造捕获此 ID 的 `operations`；旧内容读取、实际写入、快照保存都发生在内置文件队列保护的 `writeFile` 内。前后快照按 toolCallId 存内存，双栏展示。

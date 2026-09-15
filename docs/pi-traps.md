@@ -34,6 +34,9 @@
 
 | 23 | `EditToolDetails`（`{diff, patch, firstChangedLine}`）只对**成功**的 edit 存在；**失败的 edit 是 `details = {}`（真值空对象）**，所以 `if (details)` 这种判断会给失败卡片挂上一个点开是空的死链。patch 的语义是"**该次调用**的前后"，不是"当前磁盘 vs 首次原文" | S7-plan §0.1 F1/F5b · §6 A10（能红：判断写成 `if (details)` → A10 红） |
 | 24 | `write` 工具**没有** details（`details: undefined`），而它的 `ops.mkdir`/`ops.writeFile` 是**在 `withFileMutationQueue` 之内**被调用的 —— 想拿"该次调用前后"，必须在 `ops.writeFile` 里先读旧内容；放到外层 `execute` 里读就跑到队列之外，同一条消息里两次写同一文件会读到同一个"旧"内容 | S7-plan §0.1 F8/F9 · §6 A6（能红：读盘挪到写完之后 → A6 两条红） |
+| 25 | `tool_call`（扩展审批钩子）在 **`tool_execution_start` 之后**触发 ⇒ 审批时工具卡片已经存在（可以就地加按钮），`pendingToolCalls` 里也已经有它（面板重开能重放）。**但 `tool_call` 处理器抛错不是"放行"**：`emitToolCall` 不 catch，错误会变成一条 `Extension failed, blocking execution: …` 的 error toolResult ⇒ 处理器必须自己包 try/catch（我们选 fail-closed） | S8-plan §0.1 F2/F4 · §6 A2（能红：把 block 改成 false / 去掉 try-catch） |
+| 26 | **待审批时 `session.abort()` 会让 pi 再调一次模型**，那一次必须由模型流尊重 `signal` 才能收口（返回 `stopReason:"aborted"`）；假模型无视 signal 的话 agent 循环会**无限转**。同理：**被拒绝的工具调用不会终止循环** —— pi 把结果喂回模型再问一次 | S8-plan §0.1 F6/F7/F7b · §11 的 1-1（能红：探针挂死两次） |
+| 27 | **`resolveProjectTrusted()` / `getProjectTrustOptions()` / `emitProjectTrustEvent()` 没有从 bundle 导出**（只在 CLI 那个 chunk 里）；能用的只有 `hasTrustRequiringProjectResources` 与 `ProjectTrustStore`。而且 `resolveProjectTrust` 钩子一旦传了就**无条件被调用**（哪怕 cwd 里一个 `.pi/` 都没有）——「没资源就别问」得自己短路；`<agentDir>/trust.json` 的键是 **canonical 路径**（父目录的裁决会被子目录继承） | S8-plan §0.2 F11/F12/F14/F15 · §6 A10/A11（能红：删掉那个短路 → A11③ 红） |
 
 **怎么区分"我踩到新坑了"和"我读错了"**：先写一个**最小探针**（临时目录 + 我们发布的那份 bundle），
 把"我以为的行为"和"实际行为"并排打出来 —— S5 的 §3.1、§3.5、§3.8 都是这么定案的。

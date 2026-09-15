@@ -183,6 +183,7 @@ async function buildModules(tempDir) {
       `export { createDiffPresenter, DIFF_SCHEME } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/diff"))};`,
       `export { parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/approval"))};`,
       `export { createSessionHost } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/session"))};`,
+      `export { SessionHostController } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/controller"))};`,
       `export { createSelfTestUIContext } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/selftest-ui"))};`,
       `export { createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/trust"))};`,
       `export { createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/trustPrompt"))};`,
@@ -203,7 +204,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES, createSessionHost, createSelfTestUIContext, createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS, createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES, createSessionHost, SessionHostController, createSelfTestUIContext, createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS, createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 const vscodeStub = await import(pathToFileURL(STUB_PATH).href);
@@ -2453,6 +2454,179 @@ check(
         fs.rmSync(root, { recursive: true, force: true });
       }
     }
+  }
+}
+
+
+// ------------------------------------- S8 第 6 步：真 controller 的 snapshot（A6b，C6 的主守卫）
+//
+// 为什么值得这么麻烦（第 1 轮评审 B2 把它从 controller-check 搬过来）：C6（"待审批项在面板
+// 重开后还在"）**不需要模型**，而 controller-check 没凭据时整体 SKIP —— 那等于换个开发机就不查了。
+//
+// 驱动方式**不动生产代码**：`SessionHostControllerOptions.pi` 本来就允许传句柄
+// （`PiModule | (() => Promise<PiModule>)`），测试传一个只换"模型流"的包装句柄。
+{
+  const piModule = await loadPi(REPO_ROOT);
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "s8-controller-"));
+  const agentDir = path.join(root, "agent");
+  const cwd = path.join(root, "ws");
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(cwd, { recursive: true });
+  const marker = path.join(cwd, "marker.txt");
+
+  // 包一层 pi 句柄：只在创建会话之后把模型流换成脚本化的那个
+  const bootstrap = await piModule.ModelRuntime.create({
+    authPath: path.join(agentDir, "auth.json"),
+    modelsPath: path.join(agentDir, "models.json"),
+    modelsStorePath: path.join(agentDir, "models-store.json"),
+    allowModelNetwork: false,
+  });
+  const probeModel = bootstrap.getModels()[0];
+  let scriptSteps = [];
+  /** 换剧本（并把回合计数归零 —— 假模型的回合是"用一格少一格"，不归零第二轮的 turn 已经越过了新剧本）。 */
+  let setScript = () => {};
+  const wrappedPi = {
+    ...piModule,
+    async createAgentSessionFromServices(options) {
+      const created = await piModule.createAgentSessionFromServices(options);
+      let turn = 0;
+      setScript = (steps) => {
+        scriptSteps = steps;
+        turn = 0;
+      };
+      created.session.agent.streamFunction = async (m, _ctx, opts) => {
+        const aborted = opts?.signal?.aborted === true;
+        const step = aborted ? undefined : scriptSteps[turn];
+        turn += 1;
+        const base = {
+          role: "assistant",
+          api: m.api,
+          provider: m.provider,
+          model: m.id,
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0 } },
+          timestamp: Date.now(),
+        };
+        const message = aborted
+          ? { ...base, content: [{ type: "text", text: "(aborted)" }], stopReason: "aborted" }
+          : step !== undefined
+            ? { ...base, content: [{ type: "toolCall", id: step.id, name: step.name, arguments: step.arguments }], stopReason: "stop" }
+            : { ...base, content: [{ type: "text", text: "(done)" }], stopReason: "stop" };
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "start", partial: message };
+            yield { type: "done" };
+          },
+          async result() {
+            return message;
+          },
+        };
+      };
+      return created;
+    },
+  };
+
+  const emitted = [];
+  const log = { lines: [], appendLine(line) { this.lines.push(line); } };
+  let mode = "all";
+  const snapshotsDuringPending = [];
+  const pendingSeen = [];
+  const controller = new SessionHostController({
+    pi: wrappedPi,
+    cwd,
+    agentDir,
+    sessionsRoot: path.join(root, "sessions"),
+    keys: {
+      listProviders: () => [probeModel.provider],
+      getApiKey: async (id) => (id === probeModel.provider ? "probe-key" : undefined),
+      saveApiKey: async () => {},
+      removeApiKey: async () => {},
+    },
+    uiContext: createSelfTestUIContext(log),
+    log,
+    onMessage: (message) => emitted.push(message),
+    approvalMode: () => mode,
+    onApprovalPending: (request) => {
+      pendingSeen.push(request);
+      // ① 待审批时**先** snapshot：卡片必须带着按钮回来（C6）
+      snapshotsDuringPending.push(controller.snapshot());
+      // ② 再答（时序写死：见 S8-plan 的 N3）
+      controller.decideApproval(request.toolCallId, answerFor(request));
+    },
+  });
+  let answer = "deny";
+  const answerFor = () => answer;
+
+  const toolItemOf = (snapshot, toolCallId) =>
+    snapshot === undefined ? undefined : snapshot.items.find((item) => item.kind === "tool" && item.toolCallId === toolCallId);
+
+  try {
+    await controller.ensure();
+    // 会话创建完之后再设剧本（`ensure()` 之前 pi 还没建会话）
+    setScript([{ id: "call-1", name: "bash", arguments: { command: `touch ${marker}` } }]);
+
+    // ---- ①/②：待审批时的快照 + 答完之后的就地撤回
+    // `controller.prompt()` 会 await 整轮（`sendPrompt` 等的是 `session.prompt`），
+    // 所以这一行返回时：审批问过、答过、工具也结束了。
+    await controller.prompt("go", "auto");
+    const during = snapshotsDuringPending[0];
+    const diagnostics = JSON.stringify({
+      pendingSeen: pendingSeen.length,
+      snapshots: snapshotsDuringPending.length,
+      composerErrors: emitted.filter((m) => m.type === "composerError").map((m) => m.text),
+      notices: emitted.filter((m) => m.type === "state" || m.type === "item").length,
+      log: log.lines.slice(-6),
+      scriptSteps: scriptSteps.length,
+    });
+    check("A6b①：待审批时 snapshot() 的卡片带 approval:\"pending\"", during !== undefined && toolItemOf(during, "call-1")?.approval === "pending", `${JSON.stringify(toolItemOf(during, "call-1") ?? null)}｜诊断=${diagnostics}`);
+    check("A6b：问的是这次调用、且带着工具名", pendingSeen.length === 1 && pendingSeen[0].toolCallId === "call-1" && pendingSeen[0].toolName === "bash", JSON.stringify(pendingSeen));
+    check("A6b：拒绝之后文件不存在（快照没骗人）", fs.existsSync(marker) === false, `marker=${fs.existsSync(marker)}`);
+
+    // 实时那条路：onPending 时就地重发过带按钮的卡片；答完又撤回了
+    const liveItems = emitted.filter((m) => m.type === "item" && m.item.kind === "tool" && m.item.toolCallId === "call-1");
+    check(
+      "A6b：实时路径先就地加上按钮、答完之后按钮不再在（拒绝 → 立刻显示「已拒绝」）",
+      liveItems.filter((m) => m.item.approval === "pending").length === 1 && liveItems.at(-1)?.item.approval !== "pending",
+      JSON.stringify(liveItems.map((m) => m.item.approval ?? "(无)")),
+    );
+
+    // ---- ② 工具结束之后：拒绝标记仍在
+    const after = controller.snapshot();
+    check("A6b②：工具结束后卡片仍是 approval:\"denied\"（可回溯）", toolItemOf(after, "call-1")?.approval === "denied", JSON.stringify(toolItemOf(after, "call-1") ?? null));
+
+    // ---- ③ 第二轮：允许 → 文件出现，卡片上没有审批标记
+    answer = "allow";
+    fs.rmSync(marker, { force: true });
+    setScript([{ id: "call-2", name: "bash", arguments: { command: `touch ${marker}` } }]);
+    await controller.prompt("again", "auto");
+    check("A6b：允许之后文件存在", fs.existsSync(marker) === true, `marker=${fs.existsSync(marker)}`);
+
+    // ---- ④ off 档：卡片上不带任何审批字段（C1 的"不多发"）
+    mode = "off";
+    fs.rmSync(marker, { force: true });
+    const beforeOff = emitted.length;
+    setScript([{ id: "call-3", name: "bash", arguments: { command: `touch ${marker}` } }]);
+    await controller.prompt("third", "auto");
+    const offSnapshot = controller.snapshot();
+    const offTool = offSnapshot.items.find((item) => item.kind === "tool" && item.toolCallId === "call-3");
+    // 判据取**整条流**：C1 的"一个字节都不多发"是"这一轮里一个 approval 字段都没出现过"，
+    // 而不只是终态里没有（只判终态的话，"off 也去问、但立刻被放行"会漏过去）
+    const offApprovalFields = emitted
+      .slice(beforeOff)
+      .filter((m) => m.type === "item" && m.item.kind === "tool")
+      .map((m) => m.item.approval)
+      .filter((value) => value !== undefined);
+    check(
+      "A6b④：off 档整轮都不带 approval（C1：与今天一致、不多发字段）",
+      offTool !== undefined &&
+        offApprovalFields.length === 0 &&
+        offTool.approval === undefined &&
+        !JSON.stringify(offSnapshot.items.filter((i) => i.kind === "tool" && i.toolCallId === "call-3")).includes('"approval"'),
+      JSON.stringify({ offTool: offTool?.approval ?? "(无)", offApprovalFields, items: offSnapshot.items.filter((i) => i.kind === "tool").map((i) => ({ id: i.toolCallId, approval: i.approval ?? "(无)" })) }),
+    );
+  } finally {
+    await controller.dispose();
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(marker, { force: true });
   }
 }
 

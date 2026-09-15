@@ -26,15 +26,15 @@
 | 命令 | 现在 |
 | --- | --- |
 | `npm run typecheck`（2 套 tsconfig） | ✅ |
-| `npm run self-test` | **9/9**（其中 host-check 173、webview-dom 81、render 121、settings 16/16） |
+| `npm run self-test` | **9/9**（其中 host-check **319**、webview-dom **91**、render **128**、protocol 112、settings 16/16） |
 | `npm run check:protocol` | 112 |
-| `npm run check:render` | **121** |
+| `npm run check:render` | **128** |
 | `node scripts/tool-text-check.mjs` | **91** |
-| `node scripts/webview-dom-check.mjs` | **75** |
-| `node scripts/host-check.mjs` | **173** |
-| `npm run check:controller`（真模型，**不进 CI**） | **104/104**（含 A7：一条消息两次 edit + 两次 write；以及一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
-| `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **15 项（12 gating + T5c/T12/T13 advisory）GATE PASS**（T13：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[HTTP_PROXY, HTTPS_PROXY, http_proxy, https_proxy]；PI_OFFLINE=未设`） |
-| `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **15 项（12 gating + T5c/T12/T13 advisory）GATE PASS**（0.1.8；无头跑过一次，Windows W0 真宿主又跑过一次 —— 14 PASS / 0 FAIL / 1 SKIP = T12） |
+| `node scripts/webview-dom-check.mjs` | **91** |
+| `node scripts/host-check.mjs` | **319** |
+| `npm run check:controller`（真模型，**不进 CI**） | **110/110**（S8 加了 A15：`approvalMode:all` 下拒绝→副作用没发生→允许→真的执行；另含 S7 的 A7 与一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
+| `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **16 项（13 gating + T5c/T12/T13 advisory）GATE PASS**（本机 T12 也 PASS ⇒ 16 PASS / 0 FAIL / 0 SKIP；**T14 是 S8 新增的工具审批项，不用模型**；T13：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[…]；PI_OFFLINE=未设`） |
+| `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **16 项（13 gating + T5c/T12/T13 advisory）GATE PASS**（0.1.8 时是 15 项；**S8 加了 T14 之后是 16 项**。上次 Windows W0 真宿主跑的是 15 项版：14 PASS / 0 FAIL / 1 SKIP = T12 —— 那台机器没有 `pi`） |
 | `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **0.1.9：338 文件 / 5.76 MB**（门禁 30 MB；文件数自 0.1.7 起一直是 338）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |
 
 ## 2. 欠着的事（已知、刻意未做或暂时做不到）

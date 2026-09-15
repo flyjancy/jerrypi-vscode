@@ -494,6 +494,10 @@ S1 挪到纯函数层、N5 并进 A6/A6b、B3 用新增的 Q10 落裁决）。�
 | 5-1 | ⚠️ **`vscode` 桩的 `Uri` 没有 `fsPath`**（只有 scheme/path/query/fragment）⇒ `workspaceCwd()` 静默返回 `cwd: undefined`，命令拿它去问 pi，**在 pi 内部才炸**（`normalizePath` 里 `undefined.startsWith`）。桩缺一个成员时，坏的是**被测代码看到的输入** —— 这类缺口永远不会以"桩不对"的形式报错 | 给桩的 `Uri` 补 `fsPath`（读 `path`），并在注释里写明这次是怎么发现的。顺带把 `workspace.workspaceFolders` 也挪进共享状态（它原先是个裸导出对象，esbuild 内联之后检查脚本改的是**另一份副本**）：新增 `setWorkspaceFolders()` |
 | 5-2 | 🔴 **"裁决函数对"与"我们把它接上了"是两件事**：A10 原先直接调 `createAgentSessionServices` 验 resolver 的**机制**，把 `session.ts` 里传钩子的那三行删掉，A10 照样全绿（破法 ⑧ 一条都没红）。这正是第 1 轮 S2「闸门不在场」的同构形态，只是换到了信任这一侧 | A10 补第 ⑨ 条：**经生产装配路径**（`createSessionHost({projectTrust})`）断言 `services.settingsManager.isProjectTrusted() === true` 且项目设置真的改变了可用工具集。补完之后破法 ⑧ 红 |
 | 5-3 | 生产路径的可用工具集**不是**"只剩 `read`"：我们自己的 `write` 包装作为 `customTools` 会被追加进活动集（S7 的机制）⇒ 信任打开后项目级 `defaultTools` 拿掉的是 `bash`/`edit` | 断言写成 `includes("read") && !includes("bash") && !includes("edit")`，并把这个组合写进注释（两个阶段的机制叠在一起时才看得见） |
+| 6-1 | T14 第一版"等这一轮又问了一次"的条件写成 `asked.at(-1) !== "bash"`，而前面几轮里也有 `bash` ⇒ 循环立刻退出、断言看到 `pending=0`（**假红**） | 改成比对**个数**（`asked.length === beforeHang`）。教训与 A14 最初那条同构：**用"状态"当等待条件时要想清楚它是不是唯一的** |
+| 6-2 | A6b 的假模型剧本"用一格少一格"，第二轮不重置回合计数就会拿到 `undefined` ⇒ 那一轮没有工具调用，断言失败但**不是实现的问题** | 夹具暴露 `setScript(steps)`（换剧本 + 回合计数归零），并把这句写进注释 |
+| 6-3 | T14 在 `selftest.ts` 里是 **TypeScript**：假流要满足 `StreamFn` 的声明类型（要求 `AssistantMessageEventStream` 的队列细节），而循环实际只用 `for await` + `result()` | 用一次**显式**断言 + 两行注释说明断言的理由（不用 `any`）；host-check 是 JS，同一份假流不需要这层 |
+| 6-4 | 顺手确认了一件好事：**待审批时 `dispose()`** 会让 pi 把手里的 `ctx` 判成 stale（`This extension ctx is stale after session replacement or reload`）—— 我们的处理器把它 catch 住并 **fail-closed 拦下**，所以"边挂边卸载"不会变成"静默放行" | 这正是文件头第 2 条想要的行为；A5（host-check）断言了待审批在替换/卸载后清零 |
 
 **实施期的"能红验证"记录（每步都做了，破法 → 红在哪）**：
 

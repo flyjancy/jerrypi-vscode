@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `Pi: Run Self-Test` 的**无头跑法** —— 在终端里复现扩展宿主里那条闸门（T1–T13 + GATE 判定）。
+ * `Pi: Run Self-Test` 的**无头跑法** —— 在终端里复现扩展宿主里那条闸门（T1–T14 + GATE 判定）。
  *
  * 为什么需要它：闸门与 `Pi: Run Self-Test` 命令调的是**同一个** `runSelfTest()`，但它平时只能在
  * VS Code 里点命令跑 —— S5 当时是拿临时脚本跑的（结果记在 `docs/S5-plan.md` §12.1），**不可复现**。

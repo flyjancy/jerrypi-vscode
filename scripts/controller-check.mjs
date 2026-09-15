@@ -1260,6 +1260,86 @@ async function main() {
     }
   }
 
+    // ------------------------------- S8 A15：工具审批的端到端（真模型）
+    //
+    // 为什么还要一条真模型的：上面所有审批断言都用脚本化的假模型（无凭据也能跑），
+    // 它证明的是"我们的门 + pi 的钩子"这条链；这里再补一次**真模型真的会撞上这个门**
+    // （以及被拒绝之后它会换个做法/停下，而不是死循环 —— S8-plan 的 F7b）。
+    //
+    // 判据（PLAN 验收 1 的自动版）：拒绝 → 命令没执行 + 卡片带 denied + agent 收到原因；
+    // 允许 → 命令执行。
+    {
+      const a15Root = fs.mkdtempSync(path.join(os.tmpdir(), "jerrypi-a15-"));
+      const a15Agent = path.join(a15Root, "agent");
+      const a15Cwd = path.join(a15Root, "cwd");
+      fs.mkdirSync(a15Agent, { recursive: true });
+      fs.mkdirSync(a15Cwd, { recursive: true });
+      fs.copyFileSync(path.join(sourceAgentDir, "auth.json"), path.join(a15Agent, "auth.json"));
+      const marker = path.join(a15Cwd, "a15-marker.txt");
+      let answer = "deny";
+      const askedA15 = [];
+      const a15Log = { lines: [], appendLine(line) { this.lines.push(line); } };
+      const a15Messages = [];
+      let a15Controller;
+      a15Controller = new SessionHostController({
+        pi,
+        cwd: a15Cwd,
+        agentDir: a15Agent,
+        sessionsRoot: path.join(a15Root, "sessions"),
+        keys: { listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {} },
+        uiContext: createSelfTestUIContext(a15Log),
+        log: a15Log,
+        approvalMode: () => "all",
+        onMessage: (message) => a15Messages.push(message),
+        onApprovalPending: (request) => {
+          askedA15.push(request);
+          a15Controller.decideApproval(request.toolCallId, answer);
+        },
+      });
+      try {
+        await a15Controller.ensure();
+        const toolItemsOf = () =>
+          a15Controller.snapshot().items.filter((item) => item.kind === "tool" && item.toolName === "bash");
+        const toolTextsOf = () =>
+          a15Controller
+            .session.messages.filter((message) => message.role === "toolResult")
+            .map((message) => ({ isError: message.isError === true, text: message.content?.[0]?.text ?? "" }));
+
+        const say = (extra) =>
+          [
+            "请用 bash 执行下面这一条命令，就这一条，做完就停下：",
+            `touch ${marker}`,
+            extra,
+          ].join("\n");
+
+        await a15Controller.prompt(say("（这是任务 1）"), "auto");
+        if (askedA15.length === 0) {
+          console.log("      · SKIP：模型这次没有调用 bash（审批没有被触发）—— 本节断言跳过；判定依据是工具调用条数，不是模型措辞");
+        } else {
+          check("A15：模型真的撞上了审批门（问了且只有它）", askedA15.length === 1 && askedA15[0].toolName === "bash", JSON.stringify(askedA15.map((r) => r.toolName)));
+          check("A15：拒绝之后文件不存在（副作用没有发生）", fs.existsSync(marker) === false, `marker=${fs.existsSync(marker)}`);
+          check(
+            "A15：卡片带 approval:\"denied\"（用户看得见这次被拒了）",
+            toolItemsOf().some((item) => item.approval === "denied"),
+            JSON.stringify(toolItemsOf().map((item) => item.approval ?? "(无)")),
+          );
+          check(
+            "A15：agent 收到的是我们给的 block 原因",
+            toolTextsOf().some((r) => r.isError && r.text.startsWith("Rejected by user: ")),
+            JSON.stringify(toolTextsOf()),
+          );
+
+          answer = "allow";
+          await a15Controller.prompt(say("（这是任务 2：这次我会允许）"), "auto");
+          check("A15：允许之后文件存在（第二轮真的执行了）", fs.existsSync(marker) === true, `marker=${fs.existsSync(marker)}`);
+          check("A15：允许的那次卡片上不带审批标记（放行不入档）", toolItemsOf().every((item) => item.approval !== "pending"), JSON.stringify(toolItemsOf().map((item) => item.approval ?? "(无)")));
+        }
+      } finally {
+        await a15Controller.dispose().catch(() => undefined);
+        fs.rmSync(a15Root, { recursive: true, force: true });
+      }
+    }
+
   let failed = 0;
   for (const [name, ok, detail] of results) {
     if (ok) console.log(`  ok   ${name}`);
