@@ -11,11 +11,15 @@
 
 ## 1. 现在
 
-**进行中**：**S8 已关闭**（2026-09-15）—— 0.1.12 已发布并**逐字节核验**（tag `v0.1.12`），Mac（M1/M2）与 Windows（W0 `GATE PASS` 15/0/1、W1 正常）都验过。**下一步：等你拍板是否开始 S9**（pi 包管理：安装/列出/移除）（夹具 `/tmp/s8-trust-demo` 由我建好；“不信任 / 仅本次 / 重载不再问”改为自动断言，并补了 A10⑩ 钉住 controller 的信任接线）→ 上传预发布 → `compare-vsix` 核验 → Windows W0/W1 → §12 回填（`docs/S8-plan.md`：工具审批三档 + 项目信任流程；§0 的 25 条事实全部带证据，其中两条探针**已落盘可重跑** —— `scripts/probes/s8-approval-probe.mjs`、`scripts/probes/s8-trust-probe.mjs`）。三轮评审（`w60:pC` 的 Claude）**全部 ACCEPT 并已落进计划**：第 1 轮 `BLOCKING` 3 B / 8 S / 5 N（§10.1）、第 2 轮 `BLOCKING` 1 B / 6 S / 5 N（§10.2）。第 2 轮抓到的是**我第 1 轮自己补的那条断言**（在 happy-dom 里恒绿 —— 修「恒绿断言」这件事本身复发了一次），改法已落。第 3 轮 `TRANSCRIPTION: 12/12 落实 + 3 处转写错误`（§10.3，已修且不再复核）。**用户 2026-09-15 说「开工」⇒ Q1–Q10 按默认值执行**（§4 的表就是裁决记录）。下一步照 §9 的七步走。
+**进行中**：**S9 计划期**（pi 包管理：`Pi: Install Package` / `Pi: List Packages` / `Pi: Remove Package`）。
+计划已写完：`docs/S9-plan.md`（§0 有 28 条带证据的事实 + 两个**可重跑探针** —— `scripts/probes/s9-package-probe.mjs`、`scripts/probes/s9-reload-probe.mjs`；§4 是 Q1–Q8 待你拍板）。
+当前卡在**送评审**：评审（≤3 轮）→ 把 Q1–Q8 的默认值摆给用户 → 用户说“可以”才动代码。
+
+> S8 收尾（已关闭）：Mac（M1/M2）与 Windows（W0 `GATE PASS` 15 PASS / 0 FAIL / 1 SKIP = T12，含 T14；W1 正常）都验过；发布 **0.1.12**（逐字节核验、tag `v0.1.12`）。
 
 | | |
 | --- | --- |
-| 阶段 | **S5、S6、S7、S8 均已关闭**；**下一步 S9**（pi 包管理，待拍板开始） |
+| 阶段 | **S5、S6、S7、S8 均已关闭**；**S9 计划期**（pi 包管理；计划已写、待评审） |
 | 最新发布 | **0.1.12**（2026-09-15，预发布；S8 的全部内容；上一个 0.1.11 —— 两者只差 T14 夹具的路径写法） |
 | 发布核验 | **0.1.12**：`NODE_USE_ENV_PROXY=1 node scripts/compare-vsix.mjs 0.1.12` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,050,314 字节 / `3ffd7adc…`）；tag `v0.1.12`；留档 `~/jerrypi-releases/jerrypi-0.1.12.vsix`（0.1.11：338 文件 / `bd3cdcde…`；0.1.9：338 文件 / `85db1434…`）。⚠️ 本机跑这个脚本必须带 `NODE_USE_ENV_PROXY=1`（代理只在环境变量里，Node 的 fetch 默认不看，见 S8-plan §11 的 P-1） |
 | 真机验收 | S4 ✅／✅ · S5 ✅／✅ · S6 ✅／✅ · S7 ✅／✅（各自的 §12.3）｜ **S8：Mac ✅ ／ Windows ✅**（M1 六项 + M2 三项；**W0 `GATE PASS` 15 PASS / 0 FAIL / 1 SKIP = T12，含 T14**；W1 正常 —— S8-plan §12.3） |
