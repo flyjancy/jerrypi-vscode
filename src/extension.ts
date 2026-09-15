@@ -62,6 +62,8 @@ export function activate(context: vscode.ExtensionContext): void {
     // （并且新消息的 `msg-<下标>` 会和旧内容撞号）。`provider` 在下面才赋值，
     // 但这个箭头只在替换发生时（远晚于 activate）才执行。
     onSessionReplaced: () => provider.replay(),
+    // S8：有工具调用在等确认 —— 面板可见就不打扰，不可见才弹通知（Q9/Q10 的宿主侧）
+    onApprovalPending: (request) => provider.notifyApprovalPending(request),
   });
   context.subscriptions.push({ dispose: () => void controller.dispose() });
   if (!isWorkspace) {

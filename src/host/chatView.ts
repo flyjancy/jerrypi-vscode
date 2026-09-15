@@ -21,8 +21,12 @@ import { pickSession, type SessionPickerBridge } from "./sessionPicker";
 import { replaceSessionWithConfirm, reportReplaceOutcome } from "./sessionActions";
 import { MetaStatusBar } from "./statusBar";
 import type { DiffPresenter } from "./diff";
+import type { ApprovalDecision, ApprovalRequest } from "../pi/approval";
 
 export const CHAT_VIEW_ID = "jerrypi.chat";
+
+/** 通知上那个"打开面板"按钮的文案（S8 的 Q9）。 */
+export const FOCUS_CHAT_ITEM = "打开面板";
 
 export interface ChatViewOptions {
   controller: SessionHostController;
@@ -36,6 +40,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly statusBar = new MetaStatusBar();
+  /**
+   * 还在等用户答的审批（S8）。前端那份在卡片上、controller 那份是权威；
+   * 宿主这份只服务于一件事：**面板不可见时把消息推送出去**（Q9/Q10）。
+   */
+  private readonly pendingApprovals = new Map<string, ApprovalRequest>();
 
   constructor(private readonly options: ChatViewOptions) {}
 
@@ -114,13 +123,59 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
+   * 有工具调用在等确认（S8，Q9/Q10）。
+   *
+   * 三条口径：
+   *   1. **面板可见时不打扰**（卡片上就有按钮，用户正看着它）；
+   *   2. 面板不可见 → 弹一条信息通知，按钮聚焦面板 —— 否则「中止」在面板里、用户够不着，
+   *      而 `ask` 会一直等着（那条待审批项的唯一出口就是"答"或"中止"）；
+   *   3. Q10：视图**销毁**（`onDidDispose`）与**重建后仍有待审批**时各再喊一次 —— 这是
+   *      "销毁不取消待审批"（与 C6 的重放口径一致）留下的洞的补法。
+   */
+  notifyApprovalPending(request: ApprovalRequest): void {
+    this.pendingApprovals.set(request.toolCallId, request);
+    this.announcePendingApproval();
+  }
+
+  /** 把"还在等"这件事说出去（面板可见就只说给 Output）。 */
+  private announcePendingApproval(): void {
+    if (this.pendingApprovals.size === 0) return;
+    const latest = [...this.pendingApprovals.values()].at(-1);
+    const count = this.pendingApprovals.size;
+    if (this.view?.visible === true) {
+      this.options.output.appendLine(
+        `[approval] 面板可见，不再弹通知（${count} 个待确认，最新：${latest?.toolName}）`,
+      );
+      return;
+    }
+    void vscode.window
+      .showInformationMessage(
+        `jerrypi: 有 ${count} 个工具调用等待确认（${latest?.toolName}）：${latest?.title ?? ""}`,
+        FOCUS_CHAT_ITEM,
+      )
+      .then((picked) => {
+        if (picked === FOCUS_CHAT_ITEM) void vscode.commands.executeCommand(`${CHAT_VIEW_ID}.focus`);
+      });
+  }
+
+  /**
    * 全量重放。
    *
    * **`state` 的组装只有这一处** —— 面板重建（`ready`/`requestState`）与会话替换
    * （`onSessionReplaced`，见 controller 的 D6）都走它，所以两边的形状不可能跑偏。
    */
   replay(): void {
-    this.post({ type: "state", protocol: PROTOCOL_VERSION, ...this.options.controller.snapshot() });
+    const snapshot = this.options.controller.snapshot();
+    this.post({ type: "state", protocol: PROTOCOL_VERSION, ...snapshot });
+    // Q10 的"重建后仍有待审批"：快照是权威（与前端数卡片用的是同一份字段）
+    const pendingIds = new Set<string>();
+    for (const item of snapshot.items) {
+      if (item.kind === "tool" && item.approval === "pending") pendingIds.add(item.toolCallId);
+    }
+    for (const id of [...this.pendingApprovals.keys()]) {
+      if (!pendingIds.has(id)) this.pendingApprovals.delete(id);
+    }
+    if (pendingIds.size > 0) this.announcePendingApproval();
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -151,6 +206,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       view.onDidDispose(() => {
         if (this.view === view) this.view = undefined;
         this.disposeView();
+        // Q10：销毁**不**取消待审批项（那是 C6 的反面），但得再喊一次 —— 用户可能
+        // 再也看不到那张卡片，而「中止」按钮在面板里。
+        this.announcePendingApproval();
       }),
     );
   }
@@ -239,6 +297,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             output.appendLine(`[webview] 打开文件失败：${message.path} — ${text}`);
             void vscode.window.showWarningMessage(`jerrypi: 打不开 ${message.path}（${text}）`);
           }
+          return;
+        }
+        case "approvalDecision": {
+          // 白名单在 controller 的审批表里（"这条 id 现在真的在等吗"），面板说什么不算数。
+          if (message.decision !== "allow" && message.decision !== "deny") {
+            output.appendLine(`[webview] 忽略无法识别的审批决定：${JSON.stringify(message).slice(0, 120)}`);
+            return;
+          }
+          if (!controller.decideApproval(message.toolCallId, message.decision satisfies ApprovalDecision)) {
+            output.appendLine(`[webview] 这次审批已经不在了（已中止/已答过）：${message.toolCallId}`);
+            return;
+          }
+          this.pendingApprovals.delete(message.toolCallId);
           return;
         }
         case "openDiff": {

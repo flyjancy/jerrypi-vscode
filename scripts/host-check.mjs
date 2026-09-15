@@ -35,9 +35,12 @@ const check = (name, ok, detail = "") => results.push([name, ok, detail]);
 /** 假 WebviewView：只实现 provider 真的会碰的成员。 */
 function makeView() {
   let listener;
+  let disposeListener;
   const posted = [];
   return {
     posted,
+    /** S8：`chatView` 用 `view.visible` 决定"要不要弹通知"（Q9/Q10）。 */
+    visible: false,
     webview: {
       options: undefined,
       html: "",
@@ -52,7 +55,14 @@ function makeView() {
         return Promise.resolve(true);
       },
     },
-    onDidDispose: () => ({ dispose() {} }),
+    onDidDispose(fn) {
+      disposeListener = fn;
+      return { dispose() {} };
+    },
+    /** 真输入：模拟"视图被销毁"（VS Code 会发这个事件）。 */
+    disposeView() {
+      disposeListener?.();
+    },
     /**
      * 真输入：把一条消息喂进 provider 注册的监听器。
      *
@@ -2020,6 +2030,101 @@ check(
   }
 
   for (const root of approvalFixtures) fs.rmSync(root, { recursive: true, force: true });
+}
+
+
+// ------------------------------------- S8 第 4 步：宿主接线（A7）
+//
+// 真 `ChatViewProvider` + 假 controller（与 S5/S6/S7 的宿主断言同一个套路）：
+//   · 一条 `approvalDecision` → 恰好一次 `decideApproval`，参数原样；
+//   · 未知 id / 畸形决定 → 不崩 + Output 有一行；
+//   · 面板不可见 → 弹一条通知、点按钮聚焦面板；可见 → 不弹（只记 Output）；
+//   · Q10：视图销毁时若仍有待审批 → 再喊一次；重建后快照里仍有 pending 也喊。
+{
+  resetStub();
+  const output = makeOutput();
+  const decided = [];
+  let snapshotItems = [];
+  const controller = makeController({
+    decideApproval: (toolCallId, decision) => {
+      decided.push({ toolCallId, decision });
+      return toolCallId !== "unknown";
+    },
+    snapshot: () => ({
+      items: snapshotItems,
+      truncated: false,
+      queue: { steering: [], followUp: [] },
+      busy: false,
+      cwd: "/w",
+      meta: {
+        model: "",
+        provider: "",
+        modelName: "",
+        thinkingLevel: "off",
+        supportsThinking: false,
+        contextWindow: 0,
+        contextUsage: null,
+        session: { path: "", name: "新会话", persisted: false },
+      },
+    }),
+  });
+  const provider = new ChatViewProvider({
+    controller,
+    extensionUri: vscode.Uri.file("/ext"),
+    output,
+    diff: { open: () => true },
+  });
+
+  const view = makeView();
+  view.visible = false;
+  provider.resolveWebviewView(view);
+  await view.send({ type: "ready", protocol: PROTOCOL_VERSION });
+
+  // ① 转发一条审批决定
+  await view.send({ type: "approvalDecision", toolCallId: "call-1", decision: "deny" });
+  check("A7：approvalDecision 被原样转给 controller（恰好一次）", decided.length === 1 && decided[0].toolCallId === "call-1" && decided[0].decision === "deny", JSON.stringify(decided));
+  await view.send({ type: "approvalDecision", toolCallId: "unknown", decision: "allow" });
+  check("A7：controller 说'不在了'时记一行 Output", output.lines.some((l) => l.includes("这次审批已经不在了")), JSON.stringify(output.lines.slice(-2)));
+  await view.send({ type: "approvalDecision", toolCallId: "call-2", decision: "maybe" });
+  check("A7：畸形的决定被忽略、不转给 controller", decided.length === 2 && output.lines.some((l) => l.includes("无法识别的审批决定")), JSON.stringify({ decided, lines: output.lines.slice(-2) }));
+
+  // ② 通知（面板不可见）
+  resetStub();
+  const request = { toolCallId: "call-9", toolName: "bash", title: "rm -rf /tmp/x", requestedAt: 1 };
+  provider.notifyApprovalPending(request);
+  const info = callsOf("showInformationMessage");
+  check("A7：面板不可见时弹一条通知", info.length === 1 && String(info[0].message).includes("bash") && String(info[0].message).includes("rm -rf"), JSON.stringify(info));
+  check("A7：通知上带「打开面板」按钮", JSON.stringify(info[0].items) === JSON.stringify(["打开面板"]), JSON.stringify(info[0].items));
+  queueInformationResponse("打开面板");
+  provider.notifyApprovalPending({ ...request, toolCallId: "call-10" });
+  await new Promise((r) => setTimeout(r, 0));
+  check("A7：点了「打开面板」会聚焦聊天视图", callsOf("executeCommand").some((c) => c.id === "jerrypi.chat.focus"), JSON.stringify(callsOf("executeCommand")));
+
+  // ③ 面板可见 → 不打扰（只记 Output）
+  resetStub();
+  const before = callsOf("showInformationMessage").length;
+  view.visible = true;
+  provider.notifyApprovalPending({ ...request, toolCallId: "call-11" });
+  check("A7：面板可见时不弹通知（只记一行 Output）", callsOf("showInformationMessage").length === before && output.lines.some((l) => l.includes("面板可见，不再弹通知")), JSON.stringify(output.lines.slice(-1)));
+
+  // ④ Q10：视图销毁时若仍有待审批 → 再喊一次
+  resetStub();
+  view.visible = false;
+  const beforeDispose = callsOf("showInformationMessage").length;
+  view.disposeView();
+  check("A7/Q10：视图销毁时仍有待审批 → 再喊一次", callsOf("showInformationMessage").length === beforeDispose + 1, JSON.stringify(callsOf("showInformationMessage").length));
+
+  // ⑤ Q10：重建后快照里仍有 pending → 也喊（快照是权威）
+  resetStub();
+  const view2 = makeView();
+  view2.visible = false;
+  snapshotItems = [
+    { kind: "tool", id: "tool-call-9", toolCallId: "call-9", toolName: "bash", summary: "", isError: false, pending: true, approval: "pending" },
+  ];
+  provider.resolveWebviewView(view2);
+  await view2.send({ type: "ready", protocol: PROTOCOL_VERSION });
+  check("A7/Q10：重建面板后快照里仍有 pending → 也弹一次", callsOf("showInformationMessage").length === 1, JSON.stringify(callsOf("showInformationMessage")));
+  snapshotItems = [];
 }
 
 // ----------------------------------------------------------------- 汇总
