@@ -57,10 +57,10 @@
 | F20 | `SessionHostController` 是"每个面板一个、活到卸载"的宿主；`SessionHost`（含 runtime/session）会在替换时重建。**跨会话存活的东西挂在 controller 上**（S7 的 `fileChanges` 就是这么放的），`resetLiveState()` 是替换后的统一清理点 | `src/pi/controller.ts` 的 `afterSessionChange` / `resetLiveState` / `diffStore` |
 | F21 | 工具卡片的渲染有**两条路径**且必须一致：`render.ts` 的 `renderToolCard`（断言用）与 `main.ts` 的 `renderTool`（真机用，就地更新 `view.head` + `view.body`）。S3 的"箭头只在一份里"就是被这件事咬过的 | `src/webview/render.ts:286-315` 的注释；`src/webview/main.ts:241-300` |
 | F22 | 点击**一处委托**在捕获阶段（`data-open-path` / `data-open-diff`），键盘可达性另有一条 `onTranscriptKeydown`；两者的判据是"渲染层给不给可点元素"与"host 层认不认"**两层同判** | `src/webview/main.ts:520-583`；`src/host/chatView.ts:216-236` |
-| F26 | ⚠️ **未实测**：`WebviewView.onDidDispose` 在"把侧边栏切到别的容器 / 折叠"时到底发不发 —— 本仓没测过（`retainContextWhenHidden: true`，`chatView.ts:271`）。**Q10 的裁决不依赖它**（靠的是"销毁即取消"与 C6 的重放**互斥**），这一条只是把"我们不知道"写在明面上 | `src/host/chatView.ts:271`；第 2 轮评审 S5 要求（上一版拿它当论据，已删） |
 | F23 | 配置侧：`jerrypi.approvalMode` 已声明（`enum: off/mutating/all`、`scope: machine`），描述里写着"**尚未生效（S8）**"；`readApprovalModeSetting()` 已存在。`capabilities.untrustedWorkspaces` 已声明的值是 `supported:false` | `package.json` 的 `contributes.configuration`、`capabilities`；`src/host/config.ts` |
 | F24 | `scripts/settings-check.mjs` 用一张**写死的状态词表**把 `package.json` 的描述与 README 中英双语钉在一起（`未实现/not implemented`、`尚未生效/not effective yet`、`已生效/effective`）⇒ 把审批改成"已生效"必须**同时**改 README 两处，否则门禁红 | `scripts/settings-check.mjs:33-40`（词表）、`:101-137`（README 三行与 `package.json` 的状态必须**两边都命中同一个档**） |
 | F25 | 版本规则：`0.1.x` 是预发布通道，`0.2.0`（偶数次）才是**第一个正式版**；`CHANGELOG.md` **推迟到 0.2.0 才建**、从 0.2.0 起写 ⇒ **S8 仍是 0.1.x，不建 CHANGELOG** | `docs/PLAN.md` §5.4（两处原文） |
+| F26 | ⚠️ **未实测**：`WebviewView.onDidDispose` 在"把侧边栏切到别的容器 / 折叠"时到底发不发 —— 本仓没测过（`retainContextWhenHidden: true`，`chatView.ts:271`）。**Q10 的裁决不依赖它**（靠的是"销毁即取消"与 C6 的重放**互斥**），这一条只是把"我们不知道"写在明面上 | `src/host/chatView.ts:271`；第 2 轮评审 S5 要求（上一版拿它当论据，已删） |
 
 ## 1. 目标与判据
 
@@ -165,7 +165,7 @@ export interface Approvals {
    是有歧义的）：pending 与 decided 存在同一张表里，**计数只算 decided**（200 条 FIFO）——
    pending 因为 F5 天然 ≤ 1，永远不会被淘汰；已决记录只为"回放一次拒绝"存在（`denied` 在工具结束后
    仍派生，`allow` 结束就什么都不派生）。这与 S7 §3.6 的墓碑教训是同一类错误的正面写法。
-4. **`cancel` 不是一个 UI 状态，但它的 reason 与拒绝必须分开**（第 1 轮之后补的，**未经复核**）：`cancelled` 之后 `fieldsOf` 什么都不派生
+4. **`cancel` 不是一个 UI 状态，但它的 reason 与拒绝必须分开**（第 1 轮补、第 2 轮复核并收窄为漂移守卫，见 §10.2 的 S2）：`cancelled` 之后 `fieldsOf` 什么都不派生
    （卡片回到普通"运行中/已中止"形态）；而 `block` 的 reason 用 `Cancelled: session ended`，
    **不能沿用** `Rejected by user: …` —— 用户没拒绝（第 1 轮评审 S1：`signal?.aborted` 的检查在
    `block` 之前，只有 signal 真被触发时 pi 才会把它覆盖成 `Operation aborted`）。
@@ -257,7 +257,7 @@ resolve(cwd):
   `defaultTools` 等）、`.pi/extensions/*`、`.pi/skills`、`.pi/prompts`、`SYSTEM.md`、项目级包。
   **它改不了 `jerrypi.approvalMode`** —— 那是 VS Code 的 `machine` scope 设置（S6 的 Q9 就是为此定的），
   这条要写进 README，它是"仓库带一份 `.vscode/settings.json` 就能关掉审批"这个风险的正面回答。
-- **两层信任的分工**（第 1 轮评审 S8 提出、改法未经复核；README 也要写）：VS Code 的**工作区信任**管"这个窗口里要不要激活
+- **两层信任的分工**（第 1 轮 S8 提出、第 2 轮 S6 改定措辞；README 也要写）：VS Code 的**工作区信任**管"这个窗口里要不要激活
   扩展"，而我们已经声明 `capabilities.untrustedWorkspaces.supported === false`（F23）—— 也就是说**面板只在
   VS Code 已信任的工作区里跑**。pi 的**项目信任**是另一层、粒度也不同：它管"要不要把 `<cwd>/.pi/` 里的
   设置/扩展/技能读进来并执行"。两者的时序也不同：VS Code 那一次是在**打开文件夹**时问的、且只问一次
@@ -317,7 +317,7 @@ resolve(cwd):
 | A5 | **会话替换清干净**：跑出一次待审批 → `host.runtime.newSession()`（或 `host.dispose()`）→ 审批表 `pending === 0`、旧 id `decide()` 返回 `false` | host-check | 去掉 `reset()` → 红 |
 | A5b | **`cancelled` 的理由与 `deny` 分开**（纯函数层：把同一个 handler 的 `approvals.ask` 分别喂成 `deny` 与 `cancelled`，两次 `block` 的 `reason` **必须不同**、cancelled 那次不含 `Rejected by user`）。**它的定位是漂移守卫、不是修今天的 bug**（第 2 轮评审 S2 更正）：今天 pi 的两条 reset 路径**都先 abort**（`agent-session-runtime.js:105` 的 `teardownCurrent` → `await this.session.abort()`；`agent-session.js:590` 的 `dispose()` → `this.agent.abort()`），而 `agent-loop.js:419` 的 `signal?.aborted` 检查在 `:426` 的 `block` 之前 ⇒ 今天 reason 恒被覆盖成 `Operation aborted`。这条守的是"pi 哪天不再 abort" | host-check（纯函数） | 两条路径共用一个 reason → 红。**为什么不做端到端**：今天它必然被覆盖成 `Operation aborted` ⇒ 端到端那条**恒绿**（AGENTS.md §2 的"判据主语"问题） |
 | A6 | **协议派生与上限**：`fieldsOf` 五态（pending / denied（工具结束后仍在）/ allow 结束（无字段）/ cancelled（无字段）/ **没问过（`off` 档，F5 的常态）**）+ 上限**只数 decided**：连插 300 条已决 → 最早的被丢；在**有一条 pending** 时再插 300 条已决 → pending 仍在 | host-check | 把已决也算进上限并淘汰 pending → 红；`denied` 在工具结束后丢掉 → 红；`fieldsOf` 无条件派生 `pending` → 第五态红 |
-| A6b | **真 `SessionHostController` 的 `snapshot()`（C6 的主守卫；第 1 轮评审 B2 把它从 controller-check 搬过来，**改法未经复核** —— 它不需要模型）**：用 A2 的假模型夹具、但经**真 controller**。`SessionHostControllerOptions.pi` 本来就允许传句柄（`PiModule \| (() => Promise<PiModule>)`）⇒ **不改生产代码**，但包装句柄要接**三个**接缝（第 2 轮评审 S3）：① `createAgentSessionFromServices` → 换成脚本化 `streamFunction` + 显式 `model`；② `ModelRuntime.create` → 造好之后 `setRuntimeApiKey(probeModel.provider, "k")`（内存假 key 没有别的注入点，而 controller 内部是 `getModelRuntime(pi, agentDir, keys)`）；③ `sessionsRoot` 给临时目录（controller 的选项已有）。resourceLoader 从 `host.runtime.services.resourceLoader` 取（不需要新选项）。**顺带白捡一条**：`onMessage` 的协议流能一起断言"实时 `onPending` 的就地重发"（§3.3 controller 行第 ②）→ ① `onApprovalPending` 里**先** `snapshot()`：卡片带 `approval:"pending"`；**再** `decideApproval("deny")`；② 第二轮（allow）之后再 `snapshot()`：字段消失（N3 的时序）；③ `off` 档跑一次 → 卡片**不带** `approval`（C1 的"不多发"） | host-check | `snapshot()` 那条路漏掉派生（只在实时 `onToolExecutionStart` 里加）→ ① 红；`decide` 后不移除字段 → ② 红；`off` 档也派生 → ③ 红。**退路（成本失控时怎么裁，第 2 轮评审 S3 要求先写下来）**：若这个夹具做不出来，退成"断言派生函数在实时与 `snapshot()` 两条路都被调用"（在 controller 里注入一个记数的假派生）+ 把这条放回 `controller-check` 当真模型兜底，并**在 §11 记为降级** |
+| A6b | **真 `SessionHostController` 的 `snapshot()`（C6 的主守卫；第 1 轮 B2 把它从 controller-check 搬过来、第 2 轮 S3 补齐三个接缝 —— 它不需要模型）**：用 A2 的假模型夹具、但经**真 controller**。`SessionHostControllerOptions.pi` 本来就允许传句柄（`PiModule \| (() => Promise<PiModule>)`）⇒ **不改生产代码**，但包装句柄要接**三个**接缝（第 2 轮评审 S3）：① `createAgentSessionFromServices` → 换成脚本化 `streamFunction` + 显式 `model`；② `ModelRuntime.create` → 造好之后 `setRuntimeApiKey(probeModel.provider, "k")`（内存假 key 没有别的注入点，而 controller 内部是 `getModelRuntime(pi, agentDir, keys)`）；③ `sessionsRoot` 给临时目录（controller 的选项已有）。resourceLoader 从 `host.runtime.services.resourceLoader` 取（不需要新选项）。**顺带白捡一条**：`onMessage` 的协议流能一起断言"实时 `onPending` 的就地重发"（§3.3 controller 行第 ②）→ ① `onApprovalPending` 里**先** `snapshot()`：卡片带 `approval:"pending"`；**再** `decideApproval("deny")`；② 第二轮（allow）之后再 `snapshot()`：字段消失（N3 的时序）；③ `off` 档跑一次 → 卡片**不带** `approval`（C1 的"不多发"） | host-check | `snapshot()` 那条路漏掉派生（只在实时 `onToolExecutionStart` 里加）→ ① 红；`decide` 后不移除字段 → ② 红；`off` 档也派生 → ③ 红。**退路（成本失控时怎么裁，第 2 轮评审 S3 要求先写下来）**：若这个夹具做不出来，退成"断言派生函数在实时与 `snapshot()` 两条路都被调用"（在 controller 里注入一个记数的假派生）+ 把这条放回 `controller-check` 当真模型兜底，并**在 §11 记为降级** |
 | A7 | **宿主接线**：真 `ChatViewProvider` + 假 controller → 发一条 `approvalDecision` 恰好调 `decideApproval(id,"deny")` 一次；未知 id / 畸形消息不崩且 Output 有一行；面板不可见时弹一次通知、点按钮执行聚焦命令；**有待审批项时视图销毁（`onDidDispose`）再弹一次通知**（Q10 的补洞），面板重建后仍有 pending **也**弹 | host-check | 不转发 → 红；把 `visible` 判断去掉 → 通知那条红；去掉销毁时的再通知 → 那条红 |
 | A8 | **渲染字符串**：`pending` → 两个按钮（带 `data-approve`/`data-deny` 与转义后的 toolCallId）；`denied` → 「已拒绝」且**无按钮**；`toolCallId` 里的 `<`/`"` 被转义；**`renderToolCard` 与真 `main.ts` 两条路径都产出它** | render-xss-check（字符串）+ webview-dom-check（真 DOM） | 只在 `renderToolCard` 里渲染 → 真 DOM 那条红（S3 的箭头教训） |
 | A8b | **两条结构不变量**：（a）审批行是 `.tool-head` 的**兄弟**——`document.querySelector(".tool-head .tool-approval") === null`（不是后代），且 `.tool-approval.previousElementSibling` 是 head；这条守的是"点审批按钮不会顺带展开/折叠"（`toggleTool` 只挂在 head 自己的监听器上，`main.ts:292/296/303`）。（b）两个控件是**真 `<button>` 且 `type === "button"`**（第 2 轮评审 N4）—— 这条守的是**键盘可达性**：Tab 能停、Enter/Space 能激活，都是原生 `<button>` 给的，换成 `<div data-approve>` 就全没了（而且 §3.3 决定不再手写键盘分支，所以它是键盘路径的唯一守卫） | webview-dom-check | (a) 把审批行渲染进 head 里面 → 红；(b) 控件改成 `<div>` 或去掉 `type` → 红。**注**："点了不展开"本身是 (a) 的**推论**，不单独当断言 —— 兄弟节点上根本没有通往 `toggleTool` 的路，那种断言从写下第一天起就是绿的 |
@@ -376,7 +376,7 @@ resolve(cwd):
 | --- | --- | --- |
 | 1 | `src/pi/approval.ts`（三档纯函数 + 审批表 + 扩展工厂）+ A1/A6 | typecheck / self-test（host-check） |
 | 2 | 装配接线（`session.ts` 的**具名 + hidden** `extensionFactories`、controller 的审批表与 `decideApproval`、协议 v6）+ A2/A3/A4/A5/A5b | self-test（host-check） |
-| 3 | 渲染与点击链路（`serialize.ts` 派生、`render.ts` 那一行、`main.ts` 的 `view.approval`/委托/键盘 `preventDefault`/状态行）+ A8/A8b/A9 | self-test（render + webview-dom） |
+| 3 | 渲染与点击链路（`serialize.ts` 派生、`render.ts` 那一行、`main.ts` 的 `view.approval`/点击委托/**审批控件不写键盘分支**（§3.3 的理由）/状态行）+ A8/A8b/A9 | self-test（render + webview-dom） |
 | 4 | 宿主接线（`chatView` 路由 + 通知/聚焦）+ A7 | self-test（host-check） |
 | 5 | 项目信任（`trust.ts` + `trustPrompt.ts` + 装配 + 命令 + README 里的信任一节与"两层信任"）+ A10/A11/A12/A13/A14 | self-test（host-check） |
 | 6 | 自测 **T14** + controller-check 的 A15 + 文档（README 中英配置表/已知限制、`pi-traps` 三条、**`PLAN.md` §5.3 那句按 Q10 改口**）+ A6b/A16/A17 | 全部 + `check:gate`（T14 要真宿主）|
@@ -465,6 +465,24 @@ S1 挪到纯函数层、N5 并进 A6/A6b、B3 用新增的 Q10 落裁决）。�
 5. §3.5 的两处措辞 + M2 的检查点 + M1 新增的 Tab+Enter 一步（S6）；
 6. A8b 的 (a)/(b) 拆分、A9 的键盘段、§3.3 的"不写键盘分支"（B1/N4/N5）；
 7. F11b 的行号、A2 的共用清单、A3 的访问路径（N1/N2/N3）。
+
+
+### 第 3 轮（2026-09-15，同一评审者，**只做转写核对**；结论 `TRANSCRIPTION: 12/12 落实，3 处转写错误`）
+
+**处置：3 条全部 ACCEPT 并已修**。它机械对照了 §10.2 声称的 12 条处置与 7 处"尚未复核"的改动
+（逐条给出正文行号）、编号连续性（F/C/A/Q/R 五类逐类扫）、以及"声称保留、确认没被改坏"的清单；
+另有一处它明确判定**不是错**（§2「做」第 4 条的"键盘"指交付的能力、不是要写键盘分支）。
+
+| # | 转写错误 | 处置 |
+| --- | --- | --- |
+| T1 | **硬矛盾**：§3.3 与 A9 都已改成"审批控件不写键盘分支"，但 §9 第 3 步（**实施时照着做的清单**）还写着要写 `main.ts` 的"键盘 `preventDefault`" ⇒ 照它写出来的正是 B1 刚删掉的那段代码，而 A9 已不再测它 | ✅ 改成"**审批控件不写键盘分支**（§3.3 的理由）" |
+| T2 | 三处"未经复核"标记已过期（§3.1-4、§3.5 的两层信任、A6b —— 它们在第 2 轮都被复核并改过），留着等于正文说"没人看过" | ✅ 三处都换成了带追溯的措辞（"第 1 轮补、第 2 轮复核并收窄"/"第 2 轮 S6 改定"/"第 2 轮 S3 补齐接缝"） |
+| T3 | F26 插在 F22 与 F23 之间，编号不再单调（无缺号、无重号） | ✅ 移到 F25 之后（表尾） |
+
+> **这 3 条修完没有再复核**（纪律：三轮之后的改动一律标"未经复核"）。它们全是转写级
+> （一句实施清单的措辞、三处标记、一行表格的位置），不涉及设计判断。
+> 评审者在 T3 里还顺手更正了它自己第 2 轮引的一处行号（`agent-session-runtime.js:105` 才是
+> `await this.session.abort()`，第 2 轮它写的 `:104` 是上面那行注释）—— 我正文里写的 `:105` 是对的。
 
 ## 11. 实施期发现
 
