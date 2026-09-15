@@ -11,14 +11,14 @@
 
 ## 1. 现在
 
-**进行中**：**S8 已开工（2026-09-15，用户拍板「开工」= Q1–Q10 全按默认值）** —— 第 1–6 步完成、**0.1.10 的 Mac M1 验收抓到一个真 bug（宿主侧"待确认"副本只增不减）**，已修并加了回归断言；**Mac 验收（M1/M2）PASS**（结果见 `docs/S8-plan.md` §12.3）；0.1.11 已发布并逐字节核验、tag `v0.1.11`。**Windows W0 第一次跑：`GATE BLOCKED T14`** —— 是 T14 **夹具的路径写法**（`touch C:\…` 的反斜杠被 Git Bash 吃掉，§11 的 W0-1），产品本身没问题；已修并重新打包 **0.1.12**（338 文件 / 5.77 MB），**待上传 + Windows 复跑**（夹具 `/tmp/s8-trust-demo` 由我建好；“不信任 / 仅本次 / 重载不再问”改为自动断言，并补了 A10⑩ 钉住 controller 的信任接线）→ 上传预发布 → `compare-vsix` 核验 → Windows W0/W1 → §12 回填（`docs/S8-plan.md`：工具审批三档 + 项目信任流程；§0 的 25 条事实全部带证据，其中两条探针**已落盘可重跑** —— `scripts/probes/s8-approval-probe.mjs`、`scripts/probes/s8-trust-probe.mjs`）。三轮评审（`w60:pC` 的 Claude）**全部 ACCEPT 并已落进计划**：第 1 轮 `BLOCKING` 3 B / 8 S / 5 N（§10.1）、第 2 轮 `BLOCKING` 1 B / 6 S / 5 N（§10.2）。第 2 轮抓到的是**我第 1 轮自己补的那条断言**（在 happy-dom 里恒绿 —— 修「恒绿断言」这件事本身复发了一次），改法已落。第 3 轮 `TRANSCRIPTION: 12/12 落实 + 3 处转写错误`（§10.3，已修且不再复核）。**用户 2026-09-15 说「开工」⇒ Q1–Q10 按默认值执行**（§4 的表就是裁决记录）。下一步照 §9 的七步走。
+**进行中**：**S8 已关闭**（2026-09-15）—— 0.1.12 已发布并**逐字节核验**（tag `v0.1.12`），Mac（M1/M2）与 Windows（W0 `GATE PASS` 15/0/1、W1 正常）都验过。**下一步：等你拍板是否开始 S9**（pi 包管理：安装/列出/移除）（夹具 `/tmp/s8-trust-demo` 由我建好；“不信任 / 仅本次 / 重载不再问”改为自动断言，并补了 A10⑩ 钉住 controller 的信任接线）→ 上传预发布 → `compare-vsix` 核验 → Windows W0/W1 → §12 回填（`docs/S8-plan.md`：工具审批三档 + 项目信任流程；§0 的 25 条事实全部带证据，其中两条探针**已落盘可重跑** —— `scripts/probes/s8-approval-probe.mjs`、`scripts/probes/s8-trust-probe.mjs`）。三轮评审（`w60:pC` 的 Claude）**全部 ACCEPT 并已落进计划**：第 1 轮 `BLOCKING` 3 B / 8 S / 5 N（§10.1）、第 2 轮 `BLOCKING` 1 B / 6 S / 5 N（§10.2）。第 2 轮抓到的是**我第 1 轮自己补的那条断言**（在 happy-dom 里恒绿 —— 修「恒绿断言」这件事本身复发了一次），改法已落。第 3 轮 `TRANSCRIPTION: 12/12 落实 + 3 处转写错误`（§10.3，已修且不再复核）。**用户 2026-09-15 说「开工」⇒ Q1–Q10 按默认值执行**（§4 的表就是裁决记录）。下一步照 §9 的七步走。
 
 | | |
 | --- | --- |
-| 阶段 | **S5、S6、S7 均已关闭**；**S8 计划期**（工具审批 + 项目信任；计划已写，待评审） |
-| 最新发布 | **0.1.11**（2026-09-15，预发布；S8 的全部内容；已逐字节核验 + tag `v0.1.11`）→ 0.1.12 待上传（只改了测试夹具） |
-| 发布核验 | `node scripts/compare-vsix.mjs 0.1.9` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,037,572 字节 / `85db1434…` 的 SHA-256，Marketplace 显示 **Verified**）；tag `v0.1.9`；留档 `~/jerrypi-releases/jerrypi-0.1.9.vsix`（0.1.8：338 文件 / `30505f6e…`；0.1.7：338 文件 / `04c60b7b…`） |
-| 真机验收 | S4：Mac ✅ ／ Windows ✅（S4-plan §12.3）｜ S5：Mac ✅ ／ Windows ✅（S5-plan §12.3）｜ S6：Mac ✅ ／ Windows ✅（S6-plan §12.3）｜ **S7：Mac ✅ ／ Windows ✅**（**W0 `GATE PASS` 14 PASS / 0 FAIL / 1 SKIP = T12；W1 正常**；T6 带上了 `before=null/newFile` 的核对 —— S7-plan §12.3） |
+| 阶段 | **S5、S6、S7、S8 均已关闭**；**下一步 S9**（pi 包管理，待拍板开始） |
+| 最新发布 | **0.1.12**（2026-09-15，预发布；S8 的全部内容；上一个 0.1.11 —— 两者只差 T14 夹具的路径写法） |
+| 发布核验 | **0.1.12**：`NODE_USE_ENV_PROXY=1 node scripts/compare-vsix.mjs 0.1.12` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,050,314 字节 / `3ffd7adc…`）；tag `v0.1.12`；留档 `~/jerrypi-releases/jerrypi-0.1.12.vsix`（0.1.11：338 文件 / `bd3cdcde…`；0.1.9：338 文件 / `85db1434…`）。⚠️ 本机跑这个脚本必须带 `NODE_USE_ENV_PROXY=1`（代理只在环境变量里，Node 的 fetch 默认不看，见 S8-plan §11 的 P-1） |
+| 真机验收 | S4 ✅／✅ · S5 ✅／✅ · S6 ✅／✅ · S7 ✅／✅（各自的 §12.3）｜ **S8：Mac ✅ ／ Windows ✅**（M1 六项 + M2 三项；**W0 `GATE PASS` 15 PASS / 0 FAIL / 1 SKIP = T12，含 T14**；W1 正常 —— S8-plan §12.3） |
 | 工作区 | `main` 与 origin 同步（S7 的提交与 `v0.1.9` tag 都已推）；工作区干净（logo 素材已由用户提交为 `77196c1`，并从 VSIX 里排除）。**总计划只有一份**：`docs/PLAN.md`（2026-09-13 已把根目录那份的 233 行评审记录并进去并删除，见 S5-plan §10.1 的 U6） |
 
 **会自动跑的东西（每个动作改完必须全绿）**：
@@ -48,20 +48,18 @@
 | **旧位置**的会话不会被自动搬 | ≤0.1.6 写的会话平铺在 `~/.pi/agent/sessions/` 根上，面板与 `pi --resume` 都看不到（但没丢：`cd ~ && pi --session-dir ~/.pi/agent/sessions --resume`）；符号链接写法下写过的会话同理。**刻意不替用户搬数据** | README 已知限制 · S5-plan §3.8 / §11 的 6-9 |
 | 多写者检测（同一个会话被两边同时写） | 只写进了已知限制，没做检测。候选：记下 `.jsonl` 的 `size+mtime`，下一条消息前比一次 | S5-plan 的 R8 |
 | 「真·后台并行」（切走让旧会话继续跑，像 Codex/Claude 插件那样） | 划出 S5：需要"多会话宿主"（多份 runtime + 事件分流 + 多份 UI 状态），且并行会撞 R8 的两个写者 | S5-plan §2 / §4 D7 / §12.4 |
-| 项目级设置（`.pi/settings.json` 等） | 固定 `projectTrusted: false`，信任流程没做。⚠️ **这不是 S6 的欠账**：早期计划（S1/S2/S5）的指针写着“信任 UI 在 S6”，而 `PLAN.md` §6 的 S6 范围里从来没有它（S6 的 4 轮评审也没审过）。**用户 2026-09-14 拍板：排到 S8**（与工具审批同阶段）。设计已写进 **`docs/S8-plan.md` §3.4/§4 的 Q5–Q7（待评审）** | S1-plan §4.3 · S2-plan §7 · S5-plan §4；**PLAN.md §6 的 S8 注** · S8-plan |
-| **三项 `jerrypi.*` 设置** | `agentDir` **已生效**（进程环境变量 + 重载窗口）；`proxy` 未实现（T13 只报告，Q2 不做第二层）；`approvalMode` 只登记、未生效 —— **S8 计划里就是让它生效**（`docs/S8-plan.md` §3.1/§3.3，待评审）。README 配置表中英双语逐条标明（`settings-check` 钉住） | README 配置表 + 已知限制 · S8-plan |
+| ~~项目级设置（`.pi/settings.json` 等）~~ | **S8 已做（0.1.12）**：首次开面板时原生模态问一次（信任并记住 / 仅本次 / 不信任），`trust.json` 与 pi CLI 共用，`Pi: Project Trust…` 改判。**遗留**：pi 扩展的 `project_trust` 事件不触发（全局扩展的"自动信任"在这里会变成多问一次，Q6），扩展的 `project_trust` 表态与"销毁即取消"两处按 Q6/Q10 显式不做 | S8-plan §12.4 · README 已知限制 |
+| **三项 `jerrypi.*` 设置** | `agentDir` **已生效**（进程环境变量 + 重载窗口）；`approvalMode` **已生效**（S8，改动立即生效不用重载）；`proxy` 仍未实现（T13 只报告，Q2 不做第二层）。README 配置表中英双语逐条标明（`settings-check` 钉住） | README 配置表 + 已知限制 · S8-plan |
 | `ctx.ui.custom()` 类扩展命令 | 设计上不支持（终端 TUI 专有），会给明确错误 | README 已知限制 |
 | 模型目录**不会自动联网**刷新 | 我们显式写死 `allowModelNetwork: false`（刻意：不替用户往外发请求），所以新模型名（如 `deepseek-flash`）不会自己出现。现在有显式入口 `Pi: Refresh Model Catalog`（点才联网，A12 守住“自动路径不碰 pi.dev”） | README 已知限制 · S6-plan §3.5 / §6
 
-## 3. 下一步（S8：工具审批 + 项目信任）
+## 3. 下一步（S9：pi 包管理）
 
-**S5、S6、S7 已关闭**（S7 的完整过程：`docs/S7-plan.md` §11 实施期发现 / §12 实施与验收结果；发布 0.1.9）。
+**S5、S6、S7、S8 均已关闭**（S8 的完整过程：`docs/S8-plan.md` §11 实施期发现 / §12 实施与验收结果；发布 0.1.12）。
 
-S8 的范围（`docs/PLAN.md` §6）：`approval.ts` 三档工具审批（开 `all` 后每次工具调用停在面板等确认；拒绝后 agent 收到 block 原因；待审批时点中止，待审批项被清除且 agent 结束），加上**用户 2026-09-14 拍板追加**的项目级设置信任流程。
-
-计划已经写完（`docs/S8-plan.md`），当前**卡在“送评审”**这一步：评审（≤3 轮）→ 把 §4 的 Q1–Q9 默认值摆给用户 → 用户说“可以”才动代码。
-阶段内还欠的两件事已经在计划里落地了指向：① Windows 的自动覆盖靠新增的 **T14**（工具审批，**不用模型** —— 见 §0.1 的 F8）进 `Pi: Run Self-Test`；② 版本仍是 **0.1.10**（`0.1.x` = 预发布通道，第一个正式版 0.2.0 与 `CHANGELOG.md` 是 S10 的事，`PLAN.md` §5.4）。
-（S7 的流程可照抄：`docs/S7-plan.md` 是这一整套纪律的最新样例。）
+S9 的范围（`docs/PLAN.md` §6）：`packages.ts` —— `Pi: Install Package` / `Pi: List Packages` / `Pi: Remove Package`，走 pi 自己的 `DefaultPackageManager`（`installAndPersist` / `listConfiguredPackages` / `removeAndPersist`），输入接受 pi 原生格式（裸路径 / git URL / `npm:name`）。
+下一步：写 `docs/S9-plan.md` → 送评审（≤3 轮）→ 把默认值摆给用户 → 用户说“可以”才动代码。
+（S8 的流程可照抄：`docs/S8-plan.md` 是这一整套纪律的最新样例。）
 
 ## 4. 发布流程（每次都一样）
 
