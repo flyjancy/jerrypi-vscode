@@ -171,6 +171,7 @@ async function buildModules(tempDir) {
       `export { createFileChanges, recordEditsFromMessages, diffFieldsOf } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/filechanges"))};`,
       `export { createCustomTools } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/custom-tools"))};`,
       `export { createDiffPresenter, DIFF_SCHEME } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/diff"))};`,
+      `export { parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/approval"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -188,7 +189,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 const vscodeStub = await import(pathToFileURL(STUB_PATH).href);
@@ -1484,6 +1485,155 @@ check(
       JSON.stringify([reparsed.fragment, reparsed.path]),
     );
     check("A3：provider 仍然认得出它（内容对）", vscodeStub.contentProviderOf(DIFF_SCHEME)?.provideTextDocumentContent(hashLeft) === "a\n", String(vscodeStub.contentProviderOf(DIFF_SCHEME)?.provideTextDocumentContent(hashLeft)));
+  }
+}
+
+// ------------------------------------- S8 第 1 步：三档判定、审批表、审批扩展（A1/A5b/A6）
+//
+// 这一段的**夹具全是真输入**：三档判定是纯函数、扩展那一半用 pi 的真实 handler 形态
+// （`api.on("tool_call", handler)` 捕获后手工调用），只有 `approvals` 与 `log` 是断言端的替身
+// —— 这正是 S8-plan §6 的分工（真 pi 的那一半在 A2/A3/A4/A6b）。
+{
+  const silentLog = { lines: [], appendLine(line) { this.lines.push(line); } };
+
+  // ---- A1：三档判定 + 只读集的漂移守卫（oracle = pi 自己的 createReadOnlyTools）
+  {
+    const eq = (a, b) => a === b;
+    for (const raw of [undefined, null, "", "  ", "ALL", "Mutating", "yes", 7, {}]) {
+      check(`A1：非法档位 ${JSON.stringify(raw)} → off`, eq(parseApprovalMode(raw), "off"), String(parseApprovalMode(raw)));
+    }
+    for (const mode of ["off", "mutating", "all"]) {
+      check(`A1：合法档位 ${mode} 原样返回（前后空白容忍）`, eq(parseApprovalMode(`  ${mode} `), mode), String(parseApprovalMode(`  ${mode} `)));
+    }
+    const names = ["read", "grep", "find", "ls", "bash", "edit", "write", "powershell", "smoke_tool", "MCP_note"];
+    const expected = {
+      off: names.map(() => false),
+      mutating: names.map((n) => !["read", "grep", "find", "ls"].includes(n)),
+      all: names.map(() => true),
+    };
+    for (const mode of ["off", "mutating", "all"]) {
+      const got = names.map((n) => needsApproval(mode, n));
+      check(`A1：${mode} 档的真值表（含未知/扩展工具）`, JSON.stringify(got) === JSON.stringify(expected[mode]), JSON.stringify(got));
+    }
+
+    // 漂移守卫：pi 说哪些是只读的，我们就得放行哪些 —— 手改 READ_ONLY_TOOLS 会红（第 1 轮评审 S3）
+    const piModule = await loadPi(REPO_ROOT);
+    const oracleDir = fs.mkdtempSync(path.join(os.tmpdir(), "s8-oracle-"));
+    try {
+      const oracle = piModule.createReadOnlyTools(oracleDir).map((t) => t.name);
+      check("A1：READ_ONLY_TOOLS 逐字等于 pi.createReadOnlyTools（漂移守卫）", JSON.stringify([...READ_ONLY_TOOLS]) === JSON.stringify(oracle), `ours=${JSON.stringify(READ_ONLY_TOOLS)} pi=${JSON.stringify(oracle)}`);
+      check("A1：APPROVAL_MODES 与协议/设置里的三档一致", JSON.stringify([...APPROVAL_MODES]) === JSON.stringify(["off", "mutating", "all"]), JSON.stringify(APPROVAL_MODES));
+    } finally {
+      fs.rmSync(oracleDir, { recursive: true, force: true });
+    }
+
+    // R9：非法值只记一行，且不静默降级到"更弱的档"
+    let raw = "bogus";
+    const reader = createApprovalModeReader({ read: () => raw, log: silentLog });
+    silentLog.lines.length = 0;
+    check("A1：非法档位 → off", reader() === "off" && reader() === "off", JSON.stringify(silentLog.lines));
+    check("A1：非法档位只记一行 Output（不刷屏）", silentLog.lines.length === 1, JSON.stringify(silentLog.lines));
+    raw = "all";
+    check("A1：改成合法档位后立刻生效、不再记", reader() === "all" && silentLog.lines.length === 1, JSON.stringify(silentLog.lines));
+  }
+
+  // ---- A5b：cancelled 与 deny 的理由必须分开（纯函数层；端到端会被 pi 覆盖成 Operation aborted）
+  {
+    const capture = (approvals, mode = () => "all") => {
+      const extension = createApprovalExtension({ mode, approvals, cwd: "/w", log: silentLog });
+      const handlers = [];
+      const api = { on: (event, handler) => handlers.push([event, handler]) };
+      extension.factory(api);
+      check("A5b：扩展注册的是 tool_call 处理器", handlers.length === 1 && handlers[0][0] === "tool_call", JSON.stringify(handlers.map(([e]) => e)));
+      check("A5b：具名 + hidden（F10b：具名才有 hidden）", extension.name === "jerrypi-approval" && extension.hidden === true, JSON.stringify({ name: extension.name, hidden: extension.hidden }));
+      return handlers[0][1];
+    };
+    const event = { type: "tool_call", toolName: "bash", toolCallId: "c1", input: { command: "rm -rf /tmp/x" } };
+
+    const denyHandler = capture({ ask: async () => "deny" });
+    const denyResult = await denyHandler(event, { signal: undefined });
+    const cancelHandler = capture({ ask: async () => "cancelled" });
+    const cancelResult = await cancelHandler(event, { signal: undefined });
+    check(
+      "A5b：deny 的理由是 Rejected by user: <标题>",
+      denyResult?.block === true && denyResult.reason === denyReason("rm -rf /tmp/x"),
+      JSON.stringify(denyResult),
+    );
+    check(
+      "A5b：cancelled 的理由与 deny **不同**（不许替用户拒绝）",
+      cancelResult?.block === true && cancelResult.reason === CANCEL_REASON && !String(cancelResult.reason).includes("Rejected by user"),
+      JSON.stringify(cancelResult),
+    );
+    const allowHandler = capture({ ask: async () => "allow" });
+    check("A5b：allow → 什么都不返回（放行）", (await allowHandler(event, { signal: undefined })) === undefined);
+    const offHandler = capture({ ask: async () => { throw new Error("不该被问到"); } }, () => "off");
+    check("A5b：off 档连问都不问", (await offHandler(event, { signal: undefined })) === undefined);
+    const readHandler = capture({ ask: async () => { throw new Error("不该被问到"); } }, () => "mutating");
+    check("A5b：mutating 档放行只读工具", (await readHandler({ ...event, toolName: "read" }, { signal: undefined })) === undefined);
+    const boom = capture({ ask: async () => { throw new Error("boom"); } });
+    silentLog.lines.length = 0;
+    // 抛出去这件事本身要被**断言**接住（否则脚本会以 unhandled rejection 崩掉，
+    // 而"崩掉"虽然也是红，却看不出是哪条判据 —— F4 的形态必须能被指名）
+    let boomResult;
+    let boomThrew;
+    try {
+      boomResult = await boom(event, { signal: undefined });
+    } catch (error) {
+      boomThrew = error;
+    }
+    check(
+      "A5b：审批出错时**拦下**（fail-closed）而不是抛出去（F4）",
+      boomThrew === undefined && boomResult?.block === true && String(boomResult.reason).includes("approval failed") && silentLog.lines.length === 1,
+      JSON.stringify([boomThrew?.message, boomResult, silentLog.lines]),
+    );
+    check("A5b：标题拿不到时退回参数摘要", approvalTitleOf("MCP_note", { text: "hi" }, "/w") === '{"text":"hi"}', approvalTitleOf("MCP_note", { text: "hi" }, "/w"));
+  }
+
+  // ---- A6：审批表的派生与上限（只数已决）
+  {
+    const pendingSeen = [];
+    const approvals = createApprovals({ onPending: (r) => pendingSeen.push(r), log: silentLog, maxDecided: 5 });
+    check("A6：没问过 → 不派生任何字段（off 档的常态）", JSON.stringify(approvals.fieldsOf("nope", true)) === "{}", JSON.stringify(approvals.fieldsOf("nope", true)));
+
+    const asked = approvals.ask({ toolCallId: "t1", toolName: "bash", title: "ls", requestedAt: 1 }, undefined);
+    check("A6：ask 会叫 onPending（面板据此就地更新卡片）", pendingSeen.length === 1 && pendingSeen[0].toolCallId === "t1", JSON.stringify(pendingSeen));
+    check("A6：等答时派生 pending", JSON.stringify(approvals.fieldsOf("t1", true)) === '{"approval":"pending"}', JSON.stringify(approvals.fieldsOf("t1", true)));
+    check("A6：卡片已经不是 pending 时不派生", JSON.stringify(approvals.fieldsOf("t1", false)) === "{}", JSON.stringify(approvals.fieldsOf("t1", false)));
+    check("A6：size 把待答算在 pending 里", JSON.stringify(approvals.size()) === '{"pending":1,"decided":0}', JSON.stringify(approvals.size()));
+    check("A6：答一次返回 true，再答返回 false", approvals.decide("t1", "allow") === true && approvals.decide("t1", "allow") === false);
+    check("A6：allow 的结果是放行", (await asked) === "allow", String(await asked));
+    check("A6：放行之后不派生（卡片回普通形态）", JSON.stringify(approvals.fieldsOf("t1", false)) === "{}", JSON.stringify(approvals.fieldsOf("t1", false)));
+
+    const denied = approvals.ask({ toolCallId: "t2", toolName: "write", title: "a.ts", requestedAt: 2 }, undefined);
+    approvals.decide("t2", "deny");
+    check("A6：拒绝后工具已结束时仍派生 denied", JSON.stringify(approvals.fieldsOf("t2", false)) === '{"approval":"denied"}', JSON.stringify(approvals.fieldsOf("t2", false)));
+    check("A6：拒绝的理由走 decide 的返回值口径", (await denied) === "deny");
+
+    // 中止路径：signal 触发 → cancelled（且 reason 与 deny 分开，见 A5b）
+    const controller = new AbortController();
+    const aborted = approvals.ask({ toolCallId: "t3", toolName: "bash", title: "x", requestedAt: 3 }, controller.signal);
+    controller.abort();
+    check("A6：signal 触发 → cancelled", (await aborted) === "cancelled");
+    check("A6：cancelled 不派生（不冒充拒绝）", JSON.stringify(approvals.fieldsOf("t3", false)) === "{}", JSON.stringify(approvals.fieldsOf("t3", false)));
+    const pre = new AbortController();
+    pre.abort();
+    check("A6：进来时 signal 已经 abort → 直接 cancelled（连 onPending 都不叫）", (await approvals.ask({ toolCallId: "t4", toolName: "bash", title: "x", requestedAt: 4 }, pre.signal)) === "cancelled" && !pendingSeen.some((r) => r.toolCallId === "t4"), JSON.stringify(pendingSeen.map((r) => r.toolCallId)));
+    check("A6：未知 id 的 decide 返回 false（不抛）", approvals.decide("nope", "deny") === false);
+
+    // 上限：只数已决；待答的那条永远不会被淘汰（第 1 轮 N2；S7 墓碑教训的正面写法）
+    const held = approvals.ask({ toolCallId: "keep", toolName: "bash", title: "keep", requestedAt: 5 }, undefined);
+    for (let i = 0; i < 8; i++) {
+      approvals.ask({ toolCallId: `d${i}`, toolName: "bash", title: `d${i}`, requestedAt: 10 + i }, undefined).catch(() => {});
+      approvals.decide(`d${i}`, "deny");
+    }
+    check("A6：已决记录超上限时按 FIFO 丢最旧的", approvals.size().decided === 5 && approvals.get("d0") === undefined && approvals.get("d7") !== undefined, JSON.stringify({ size: approvals.size(), d0: approvals.get("d0") === undefined }));
+    check("A6：待答的那条没有被淘汰", JSON.stringify(approvals.fieldsOf("keep", true)) === '{"approval":"pending"}', JSON.stringify(approvals.fieldsOf("keep", true)));
+
+    // reset：会话替换/卸载 → 全部收口 + 清空
+    approvals.reset();
+    check("A6：reset 之后 pending 清零、已决也清空", JSON.stringify(approvals.size()) === '{"pending":0,"decided":0}', JSON.stringify(approvals.size()));
+    check("A6：reset 把待答的收成 cancelled", (await held) === "cancelled");
+    check("A6：reset 之后旧 id 再也答不了", approvals.decide("keep", "allow") === false && approvals.get("keep") === undefined);
   }
 }
 
