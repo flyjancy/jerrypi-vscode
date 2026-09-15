@@ -13,6 +13,7 @@ import {
   renderMarkdown,
   renderNotice,
   renderToolBody,
+  renderToolApproval,
   renderToolHeadLine,
   renderToolStatusClass,
   renderMeta,
@@ -53,6 +54,8 @@ const live = new Map<string, LiveRegion>();
 /** 工具卡片的三个可独立更新的部分（**就地更新**，见下面 renderTool 的注释）。 */
 interface ToolView {
   head: HTMLButtonElement;
+  /** S8 的审批行（在 head 与 body **之间**，见 render.ts 的 renderToolApproval）。 */
+  approval: HTMLDivElement;
   body: HTMLDivElement;
 }
 const tools = new Map<string, ToolView>();
@@ -73,6 +76,11 @@ const itemById = new Map<string, ChatItem>();
 const expanded = new Set<string>();
 /** 上一次的正文串（用来判断"这一帧真的变了没有"，避免无意义重排）。 */
 const toolTextSeen = new Map<string, string>();
+/**
+ * 上一次的审批状态（S8）。只在**它变了**时才重画状态行 —— 流式卡片每 200ms 一帧，
+ * 每帧重画状态行会把用户正指着的那个链接节点换掉。
+ */
+const toolApprovalSeen = new Map<string, string>();
 const order: string[] = [];
 /** 耗时 tick（每秒一次，只改进行中卡片的那个 span）。 */
 let durationTimer: ReturnType<typeof setInterval> | undefined;
@@ -104,6 +112,7 @@ function removeNode(id: string): void {
   tools.delete(id);
   itemById.delete(id);
   toolTextSeen.delete(id);
+  toolApprovalSeen.delete(id);
   expanded.delete(id);
   const index = order.indexOf(id);
   if (index >= 0) order.splice(index, 1);
@@ -214,7 +223,18 @@ function renderQueue(queue: { steering: string[]; followUp: string[] }): void {
  * 另外：**不再出现"空闲"两个字**（与 pi 一致；忙/闲已由按钮与提示语体现）。
  */
 function renderStatus(): void {
-  statusBar.textContent = busy ? "生成中…" : "";
+  // S8（Q8）：有待审批项时状态行要说话 —— 否则卡片滚出视口后用户只看到"生成中…"，
+  // 属于静默卡住。提示可点：跳到最后一张待审批的卡片。
+  const waiting = pendingApprovalIds();
+  if (waiting.length > 0) {
+    const suffix = busy ? " · " : "";
+    setHtml(
+      statusBar,
+      `${suffix}<a class="status-approval" data-goto-approval="${escapeForStatus(waiting.at(-1) ?? "")}" role="button" tabindex="0">⚠ 有 ${waiting.length} 个工具调用等待确认（点击跳转）</a>`,
+    );
+  } else {
+    statusBar.textContent = busy ? "生成中…" : "";
+  }
   abortButton.hidden = !busy;
   queueButton.hidden = !busy;
   // 发出一份、还没确认的期间禁用发送按钮（避免连点重复发送），但**不禁用输入框**：
@@ -243,13 +263,23 @@ function renderTool(item: Extract<ChatItem, { kind: "tool" }>): void {
   let view = tools.get(item.id);
   if (view === undefined) {
     view = createToolView(item);
-    node.replaceChildren(view.head, view.body);
+    node.replaceChildren(view.head, view.approval, view.body);
     tools.set(item.id, view);
   }
 
   const isOpen = expanded.has(item.id);
   const bodyHtml = renderToolBody(item, isOpen);
   const text = item.text ?? "";
+
+  // 审批行只在内容真的变了时重写 —— 与正文同一个理由（别每帧重排）。
+  setHtml(view.approval, renderToolApproval(item));
+  view.approval.hidden = item.approval === undefined;
+  // 审批状态一变，状态行那句提示也要跟着变（Q8：卡片滚出视口时不能静默）
+  const approvalSignature = item.approval ?? "";
+  if (toolApprovalSeen.get(item.id) !== approvalSignature) {
+    toolApprovalSeen.set(item.id, approvalSignature);
+    renderStatus();
+  }
 
   // 调 render.ts 的同一个函数拼装按钮内容 —— 不许在这里自己拼（见 S3 第一次验收的教训）。
   setHtml(view.head, renderToolHeadLine(item, isOpen && bodyHtml !== ""));
@@ -286,6 +316,10 @@ function createToolView(item: Extract<ChatItem, { kind: "tool" }>): ToolView {
   const head = document.createElement("button");
   head.className = "tool-head";
   head.type = "button";
+  // 审批行：常驻一个空容器（折叠时也要能答），内容由 renderToolApproval 决定。
+  // **不挂任何键盘监听**：里面是真 <button>，原生激活会补 click，交给下面捕获阶段的委托。
+  const approval = element("div", "tool-approval-slot") as HTMLDivElement;
+  approval.hidden = true;
   const body = element("div", "tool-body") as HTMLDivElement;
   body.hidden = true;
   // 标题点击只负责展开/折叠 —— 点路径由下面的**委托**处理（见 onTranscriptClick）。
@@ -296,7 +330,7 @@ function createToolView(item: Extract<ChatItem, { kind: "tool" }>): ToolView {
       toggleTool(item.id);
     }
   });
-  return { head, body };
+  return { head, approval, body };
 }
 
 /** 展开/折叠。重渲染正文时**保留滚动位置**。 */
@@ -554,6 +588,24 @@ function onTranscriptClick(event: MouseEvent): void {
     vscode.postMessage({ type: "openDiff", toolCallId });
     return;
   }
+  // ①c 审批按钮（S8）：与路径/diff 同一条捕获阶段委托。真 <button> 的
+  //     Enter/Space 会由浏览器补一次 click，所以**不需要**键盘分支（第 2 轮评审 B1）。
+  const approveElement = target?.closest("[data-approve]") as HTMLElement | null;
+  const approveId = approveElement?.getAttribute("data-approve") ?? "";
+  if (approveId !== "") {
+    event.preventDefault();
+    event.stopPropagation();
+    vscode.postMessage({ type: "approvalDecision", toolCallId: approveId, decision: "allow" });
+    return;
+  }
+  const denyElement = target?.closest("[data-deny]") as HTMLElement | null;
+  const denyId = denyElement?.getAttribute("data-deny") ?? "";
+  if (denyId !== "") {
+    event.preventDefault();
+    event.stopPropagation();
+    vscode.postMessage({ type: "approvalDecision", toolCallId: denyId, decision: "deny" });
+    return;
+  }
   // ② markdown 里的普通链接：交给扩展用系统浏览器打开
   const anchor = target?.closest("a");
   if (anchor === null || anchor === undefined) return;
@@ -580,6 +632,39 @@ function onTranscriptKeydown(event: KeyboardEvent): void {
   event.stopPropagation();
   vscode.postMessage({ type: "openFile", path });
 }
+
+/**
+ * 还在等用户答的工具卡片（S8）。从 `itemById` 里数 —— 审批是 item 上的字段，
+ * 不需要另开一份前端状态（协议已经在推它）。
+ */
+function pendingApprovalIds(): string[] {
+  const ids: string[] = [];
+  for (const id of order) {
+    const item = itemById.get(id);
+    if (item?.kind === "tool" && item.approval === "pending") ids.push(id);
+  }
+  return ids;
+}
+
+/** 状态行里的文本要转义（id 来自协议）。 */
+function escapeForStatus(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** 跳到某张卡片（状态行那条提示的点击目标）。 */
+function scrollToItem(id: string): void {
+  const node = nodes.get(id);
+  if (node === undefined) return;
+  node.scrollIntoView({ block: "center" });
+}
+
+statusBar.addEventListener("click", (event) => {
+  const target = event.target as HTMLElement | null;
+  const id = target?.closest("[data-goto-approval]")?.getAttribute("data-goto-approval") ?? "";
+  if (id === "") return;
+  event.preventDefault();
+  scrollToItem(id);
+});
 
 transcript.addEventListener("click", onTranscriptClick, true);
 transcript.addEventListener("keydown", onTranscriptKeydown, true);

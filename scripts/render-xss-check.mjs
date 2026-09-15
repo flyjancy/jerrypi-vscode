@@ -174,6 +174,7 @@ async function main() {
         false,
       );
       check("renderToolHeadLine 里也有链接（不是只有 renderToolCard 有）", headLine.includes("data-open-diff="), headLine);
+
       const texts = { none: "本次会话不可用", evicted: "较早的改动记录已清理", "too-large": "文件过大，未保留", "read-failed": "快照读取失败" };
       for (const [why, text] of Object.entries(texts)) {
         const line = render.renderToolLine({
@@ -331,6 +332,26 @@ async function main() {
       }
 
       // 工具名与参数摘要也是模型可控的
+      // ---- S8 A8：审批行的字符串层（真 DOM 那一半在 webview-dom-check）
+      {
+        const pendingItem = toolItem({ approval: "pending", toolCallId: 'c<1">' });
+        const pendingCard = render.renderToolCard(pendingItem, false);
+        check("A8：pending 渲染出「允许」按钮", pendingCard.includes("data-approve="), pendingCard.slice(0, 200));
+        check("A8：pending 渲染出「拒绝」按钮", pendingCard.includes("data-deny="), pendingCard.slice(0, 200));
+        check(
+          "A8：toolCallId 里的 < 与引号被转义（不许漏进属性）",
+          pendingCard.includes('data-approve="c&lt;1&quot;&gt;"') && !pendingCard.includes('data-approve="c<1'),
+          pendingCard.slice(0, 220),
+        );
+        check("A8：两个控件是真 <button type=button>（键盘可达性的来源）", (pendingCard.match(/<button[^>]*type="button"[^>]*data-approve=/g) ?? []).length === 1 && (pendingCard.match(/<button[^>]*type="button"[^>]*data-deny=/g) ?? []).length === 1, pendingCard.slice(0, 260));
+        check("A8：审批行**不在标题行里**（标题行的产物不含它）", !render.renderToolHeadLine(pendingItem, false).includes("data-approve="), render.renderToolHeadLine(pendingItem, false));
+
+        const deniedCard = render.renderToolCard(toolItem({ approval: "denied" }), false);
+        check("A8：denied 渲染出「已拒绝」且没有按钮", deniedCard.includes("已拒绝") && !deniedCard.includes("data-approve="), deniedCard.slice(0, 200));
+        const plainCard = render.renderToolCard(toolItem({}), false);
+        check("A8：没有审批字段时什么都不渲染（off 档的常态）", !plainCard.includes("tool-approval"), plainCard.slice(0, 200));
+      }
+
       const evilHead = render.renderToolCard({ ...toolItem({ text: "x" }), toolName: "<script>a</script>", summary: '"><img src=x onerror=alert(1)>' }, true);
       check("工具名与参数摘要被转义", audit(evilHead) === null && !evilHead.includes("<script"), String(audit(evilHead)));
 

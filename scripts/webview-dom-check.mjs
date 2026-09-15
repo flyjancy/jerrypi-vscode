@@ -149,6 +149,8 @@ async function main() {
     const send = (message) => window.dispatchEvent(new window.MessageEvent("message", { data: message }));
     const click = (element) => element.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
     const openFileMessages = () => posted.filter((m) => m.type === "openFile");
+    /** 取 main.ts 用的那个元素（S8 的状态行断言要它；各节里原有的 `el` 都在自己的作用域）。 */
+    const elById = (id) => doc.getElementById(id);
 
     // ------------------------------------------------- 版式与元信息行（S4）
     console.log("[webview-dom-check] 版式与元信息行");
@@ -159,12 +161,12 @@ async function main() {
       const precedes = (a, b) => (a.compareDocumentPosition(b) & 4) !== 0;
       check(
         "状态行在输入框**之上**（不是面板顶部）",
-        precedes(el("status"), doc.querySelector(".composer")),
+        precedes(elById("status"), doc.querySelector(".composer")),
       );
-      check("队列仍在状态行之上", precedes(el("queue"), el("status")));
+      check("队列仍在状态行之上", precedes(el("queue"), elById("status")));
       // 这一条才真正锁住"从面板顶部挪下来了"：状态行必须在**转录之后**。
       // （只断言"在输入框之上"的话，把它放回面板最上面照样能过。）
-      check("状态行在转录**之后**（不是又回到面板顶部）", precedes(el("transcript"), el("status")));
+      check("状态行在转录**之后**（不是又回到面板顶部）", precedes(el("transcript"), elById("status")));
       check("元信息行在输入框**之后**（pi footer 的位置）", precedes(el("input"), el("meta")));
 
       send({
@@ -259,7 +261,7 @@ async function main() {
       );
 
       send({ type: "busy", busy: false });
-      check("空闲时状态行内容为空（但这一行仍占位）", el("status").textContent === "", el("status").textContent);
+      check("空闲时状态行内容为空（但这一行仍占位）", elById("status").textContent === "", elById("status").textContent);
       check("整份 DOM 里不再出现「空闲」两个字", !doc.body.textContent.includes("空闲"));
     }
 
@@ -347,6 +349,70 @@ async function main() {
         JSON.stringify(diffMessages().slice(-2)),
       );
       equal("点 diff 链接不会顺带展开卡片", diffHead.getAttribute("aria-expanded"), "false");
+
+
+      // ---- S8 A8b/A9：审批行（结构不变量 + 真点击）
+      {
+        const approvalMessages = () => posted.filter((m) => m.type === "approvalDecision");
+        const beforeApproval = approvalMessages().length;
+        send({
+          type: "item",
+          item: toolItem({
+            id: "tool-appr",
+            toolCallId: "call_appr",
+            approval: "pending",
+          }),
+        });
+        const apprCard = doc.querySelector('[data-id="tool-appr"]');
+        const apprHead = apprCard.querySelector(".tool-head");
+        const slot = apprCard.querySelector(".tool-approval-slot");
+        const allowBtn = apprCard.querySelector("[data-approve]");
+        const denyBtn = apprCard.querySelector("[data-deny]");
+
+        // A8b(a)：审批行是标题按钮的**兄弟**而不是后代 —— "点它不会展开卡片"是这个结构的推论
+        check("A8b(a)：审批行的槽位是标题按钮的兄弟", slot !== null && slot.previousElementSibling === apprHead, apprCard.innerHTML.slice(0, 200));
+        check("A8b(a)：审批控件不是标题按钮的后代（querySelector 找不到）", apprCard.querySelector(".tool-head .tool-approval") === null && apprCard.querySelector(".tool-head [data-approve]") === null);
+        // A8b(b)：真 <button type="button"> —— 键盘可达性全靠它（且正因为是真按钮，
+        // 审批控件不需要手写键盘分支：原生激活会补 click、被捕获阶段的委托接住）
+        check("A8b(b)：两个控件是真 <button type=\"button\">", allowBtn?.tagName === "BUTTON" && allowBtn?.getAttribute("type") === "button" && denyBtn?.tagName === "BUTTON" && denyBtn?.getAttribute("type") === "button", JSON.stringify([allowBtn?.tagName, allowBtn?.getAttribute("type"), denyBtn?.tagName]));
+
+        // A9：点「允许」只发一条 approvalDecision，且卡片不展开
+        click(allowBtn);
+        check(
+          "A9：点「允许」恰好一条 approvalDecision{allow}",
+          approvalMessages().length === beforeApproval + 1 && approvalMessages().at(-1).toolCallId === "call_appr" && approvalMessages().at(-1).decision === "allow",
+          JSON.stringify(approvalMessages().slice(-2)),
+        );
+        equal("A9：点审批按钮不会顺带展开卡片", apprHead.getAttribute("aria-expanded"), "false");
+
+        // A9：点「拒绝」同样只发一条，decision=deny
+        const beforeDeny = approvalMessages().length;
+        click(denyBtn);
+        check(
+          "A9：点「拒绝」恰好一条 approvalDecision{deny}",
+          approvalMessages().length === beforeDeny + 1 && approvalMessages().at(-1).decision === "deny",
+          JSON.stringify(approvalMessages().slice(-2)),
+        );
+
+        // Q8：状态行那句提示（卡片滚出视口时不至于静默）
+        check(
+          "A9/Q8：有待审批项时状态行有可点提示",
+          elById("status").textContent.includes("等待确认") && elById("status").querySelector("[data-goto-approval]") !== null,
+          elById("status").textContent,
+        );
+        const beforeGoto = posted.length;
+        click(elById("status").querySelector("[data-goto-approval]"));
+        check("A9/Q8：点那句提示不发协议消息（只是跳转）", posted.length === beforeGoto, JSON.stringify(posted.slice(beforeGoto)));
+
+        // 就地更新：同一个 id 变成 denied → 按钮消失、出现「已拒绝」
+        send({ type: "item", item: toolItem({ id: "tool-appr", toolCallId: "call_appr", approval: "denied" }) });
+        check(
+          "A9：同一张卡片改成 denied 之后按钮消失、出现「已拒绝」",
+          apprCard.querySelector("[data-approve]") === null && apprCard.textContent.includes("已拒绝"),
+          apprCard.innerHTML.slice(0, 200),
+        );
+        check("A9：没有待审批项之后状态行不再喊", !elById("status").textContent.includes("等待确认"), elById("status").textContent);
+      }
       diffLink.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       check("回车也能打开 diff", diffMessages().length === beforeDiff + 2, JSON.stringify(diffMessages().slice(-2)));
       send({

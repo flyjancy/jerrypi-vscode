@@ -383,6 +383,31 @@ body {
   background: var(--vscode-button-secondaryHoverBackground);
 }
 
+/* S8：审批行。刻意做得比正文显眼一点（它是"卡在这儿等你"的东西），
+   但只用主题变量，别自造颜色。 */
+.tool-approval-slot:not([hidden]) {
+  display: block;
+}
+
+.tool-approval {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0 6px 18px;
+  flex-wrap: wrap;
+}
+
+.tool-approval-hint {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.85em;
+}
+
+.status-approval {
+  color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 .button.tiny {
   padding: 1px 6px;
   font-size: 0.85em;

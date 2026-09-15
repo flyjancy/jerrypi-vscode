@@ -297,6 +297,35 @@ export function renderToolHeadLine(
   );
 }
 
+/**
+ * 审批行（S8）。
+ *
+ * ⚠️ 两个结构性的约定，都有断言守着（S8-plan 的 A8b）：
+ *   ① 它渲染在**标题按钮之外**（`renderToolCard` 里 head 与 body 之间）—— 展开/折叠的监听器
+ *      挂在 head 元素自身上（`main.ts`），所以"点审批按钮不会顺带展开卡片"是**这个兄弟关系**
+ *      的推论。把它挪进 head 内部就会两件事一起坏（HTML 解析器还会把嵌套的 `<button>` 拆掉）。
+ *   ② 两个控件是**真 `<button type="button">`** —— 键盘可达性（Tab 能停、Enter/Space 能激活）
+ *      全靠它；而且正因为是真按钮，**审批控件不需要手写键盘分支**（原生激活会补一次 click，
+ *      被 `main.ts` 捕获阶段的点击委托接住 ⇒ "一次按键只发一条"是构造保证）。
+ *      第 2 轮评审 B1：在 happy-dom 里手写"keydown + preventDefault"那条路是**测不出来**的。
+ */
+export function renderToolApproval(item: Extract<ChatItem, { kind: "tool" }>): string {
+  if (item.approval === "pending") {
+    const id = escapeHtml(item.toolCallId);
+    return (
+      `<div class="tool-approval">` +
+      `<span class="tool-approval-hint">这个工具调用需要你确认</span>` +
+      `<button class="button primary tool-approval-allow" type="button" data-approve="${id}">允许</button>` +
+      `<button class="button secondary tool-approval-deny" type="button" data-deny="${id}">拒绝</button>` +
+      `</div>`
+    );
+  }
+  if (item.approval === "denied") {
+    return `<div class="tool-approval"><span class="tool-note">已拒绝</span></div>`;
+  }
+  return "";
+}
+
 /** 工具卡片的 class（三态）。 */
 export function renderToolStatusClass(item: Extract<ChatItem, { kind: "tool" }>): string {
   return `tool-${item.pending === true ? "running" : item.isError ? "error" : "ok"}`;
@@ -310,6 +339,9 @@ export function renderToolCard(item: Extract<ChatItem, { kind: "tool" }>, expand
     `<button class="tool-head ${renderToolStatusClass(item)}" aria-expanded="${open ? "true" : "false"}">` +
     renderToolHeadLine(item, open) +
     `</button>` +
+    // 审批行在 head **之外**（见 renderToolApproval 的注释①）、正文之前：
+    // 折叠时也要能答，所以它不能进 body。
+    renderToolApproval(item) +
     `<div class="tool-body"${open ? "" : " hidden"}>${body}</div>`
   );
 }
