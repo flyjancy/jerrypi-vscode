@@ -19,7 +19,7 @@
 | 最新发布 | **0.1.9**（2026-09-14，预发布；S7 的全部内容；上一个 0.1.8） |
 | 发布核验 | `node scripts/compare-vsix.mjs 0.1.9` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,037,572 字节 / `85db1434…` 的 SHA-256，Marketplace 显示 **Verified**）；tag `v0.1.9`；留档 `~/jerrypi-releases/jerrypi-0.1.9.vsix`（0.1.8：338 文件 / `30505f6e…`；0.1.7：338 文件 / `04c60b7b…`） |
 | 真机验收 | S4：Mac ✅ ／ Windows ✅（S4-plan §12.3）｜ S5：Mac ✅ ／ Windows ✅（S5-plan §12.3）｜ S6：Mac ✅ ／ Windows ✅（S6-plan §12.3）｜ **S7：Mac ✅ ／ Windows ✅**（**W0 `GATE PASS` 14 PASS / 0 FAIL / 1 SKIP = T12；W1 正常**；T6 带上了 `before=null/newFile` 的核对 —— S7-plan §12.3） |
-| 工作区 | `main` 与 origin 同步（S6 的提交与 `v0.1.8` tag 都已推）；工作区干净（logo 素材已由用户提交为 `77196c1`，并从 VSIX 里排除）。**总计划只有一份**：`docs/PLAN.md`（2026-09-13 已把根目录那份的 233 行评审记录并进去并删除，见 S5-plan §10.1 的 U6） |
+| 工作区 | `main` 与 origin 同步（S7 的提交与 `v0.1.9` tag 都已推）；工作区干净（logo 素材已由用户提交为 `77196c1`，并从 VSIX 里排除）。**总计划只有一份**：`docs/PLAN.md`（2026-09-13 已把根目录那份的 233 行评审记录并进去并删除，见 S5-plan §10.1 的 U6） |
 
 **会自动跑的东西（每个动作改完必须全绿）**：
 
@@ -28,7 +28,7 @@
 | `npm run typecheck`（2 套 tsconfig） | ✅ |
 | `npm run self-test` | **9/9**（其中 host-check 173、webview-dom 81、render 121、settings 16/16） |
 | `npm run check:protocol` | 112 |
-| `npm run check:render` | **114** |
+| `npm run check:render` | **121** |
 | `node scripts/tool-text-check.mjs` | **91** |
 | `node scripts/webview-dom-check.mjs` | **75** |
 | `node scripts/host-check.mjs` | **173** |
