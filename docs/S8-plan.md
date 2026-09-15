@@ -33,12 +33,14 @@
 | F8 | 可以**不用模型、不用凭据、不联网**地跑完整的工具调用：把 `session.agent.streamFunction` 换成脚本化的假流（一个 async iterable + `result()`），再给那个 provider 塞一把**内存** key（`modelRuntime.setRuntimeApiKey`）骗过 `prompt()` 的前置检查。⚠️ **那把假 key 会留在那个 `ModelRuntime` 里**：`getModelRuntime()` 按 agentDir 缓存 ⇒ 用它做断言的会话必须配一个**临时 agentDir**，否则后面「哪些 provider 已配置」的判断会看到一把假 key（自测里会干扰 T4/T6/T7/T9 的模型选择） | 探针 §2：真 `bash` 工具真的执行了（`allow: marker=true`、`deny: marker=false`）；`pi-agent-core/dist/agent.js:39`（`streamFunction` 是 public 字段）、`agent-loop.js:176-248`（`for await (const event of response)` 在 `:199`，只要求 async iterable + `result()`）；`agent-session.d.ts:105` 的 `agent: Agent` |
 | F9 | 我们自己的 `write` 包装**不会绕过审批**：评审第 11 轮已实跑确认"审批拒绝时包装层的 `writeFile` 未被调用、文件未创建、无快照产生" | `docs/PLAN.md:514`（DeepSeek 复核第 11 轮） |
 | F10 | pi 官方文档自己给的审批写法就是"`ctx.ui.confirm` + `{block:true, reason}`"；我们的 `ExtensionUIContext.confirm` **已经落实了 `signal` 与 `timeout`**（取消时主动关掉已弹出的对话框） | `pi-runtime/docs/extensions.md:68-75`；`src/host/uiContext.ts` 的 `withDialog` |
+| F10b | `resourceLoaderOptions.extensionFactories` 有**两种形态**：裸函数 → 路径是 `<inline:${下标+1}>`、**没有** `hidden`；`{name, factory, hidden}` → 路径是 `<inline:name>`、`hidden` 生效。⚠️ **工厂抛错会被 catch 进 `errors`，扩展静默缺席** —— 那时"审批没问"与"审批没装上"在外部**观察等价** | `dist/core/resource-loader.js:743-757`；探针 P6（具名形态的实测输出：`[{"path":"<inline:jerrypi-approval>","hidden":true}]`、`errors=[]`） |
 
 ### 0.2 项目信任：pi 谁在什么时候问、答案存在哪、信任之后有什么变化
 
 | # | 事实 | 证据 |
 | --- | --- | --- |
 | F11 | SDK 路径**支持注入信任裁决**：`createAgentSessionServices({ resourceLoaderReloadOptions: { resolveProjectTrust } })` —— loader 会先跑一遍"未信任"的扩展加载（`includeInlineFactories: true`，所以我们自己的 inline 扩展在场），再把这个钩子 **await** 出结果，然后 `settingsManager.setProjectTrusted(...)` + 重新 reload 设置。⚠️ **loader 不替我们判断"要不要问"**：只要传了钩子，哪怕 cwd 里一个 `.pi/` 资源都没有，它照样调用一次 ⇒「没资源就别问」这条短路必须写在**我们的**裁决函数里 | `dist/core/agent-session-services.js:53-70`（`await resourceLoader.reload(options.resourceLoaderReloadOptions)`）；`dist/core/resource-loader.js:262-273`；探针 §2 的四行输出（`预信任阶段的扩展数=1` × 3 次、以及"没有 .pi 资源 + 照样传钩子 → 钩子次数=1"） |
+| F11b | inline 扩展在**预信任阶段**就被实例化，而最终集合**复用同一批实例**（`.filter(path.startsWith("<inline:"))`），不会重新构造 ⇒ 「审批扩展 + `resolveProjectTrust` 同时启用」**不会**双注册 `tool_call` 处理器（否则每次工具调用会问两遍） | `dist/core/resource-loader.js:262-273`（`loadProjectTrustExtensions` → `includeInlineFactories: true`）与 `:444-447`（复用）；探针 s8-trust-probe §2 的"预信任阶段的扩展数=1" |
 | F12 | ⚠️ **只有三个符号从 bundle 导出**：`hasTrustRequiringProjectResources`、`ProjectTrustStore` 是真函数；`resolveProjectTrusted` / `getProjectTrustOptions` / `emitProjectTrustEvent` **不在导出面**（只在 CLI 那个 chunk 里）。⇒"问什么、怎么问"要我们自己定（不必逐字复刻 CLI 的选项文案），但**判据来源（trust.json 格式、父子继承、canonical 路径）必须用 pi 自己的类** | `scripts/probes/s8-approval-probe.mjs` §1 打印的十个 `typeof`；`grep` bundle 导出表 |
 | F13 | 信任之后**真的会变**（可观察）：`settingsManager.isProjectTrusted() === true`，且项目级 `.pi/settings.json` 的值生效。可用的观察点有 `theme`（只证明"设置被读了"）与 **`defaultTools`**（会改 `getActiveToolNames()`）；**本计划的断言与人工验收都选后者** —— 它在 `sdk.js` 里决定 `getActiveToolNames()`（不传 `tools` 选项时），是**面板里看得见**的效果 | `scripts/probes/s8-trust-probe.mjs` §2 的原文：`[钩子→true] → 之后{trusted:true theme:proj-theme tools:[read]}`、`[钩子→false] → {trusted:false theme:global-theme tools:[read,bash,edit,write]}`、`[不传钩子（今天的现状）] → tools:[read,bash,edit,write]`；`dist/core/sdk.js:139-146`（`configuredDefaultToolNames` → `initialActiveToolNames`） |
 | F14 | `hasTrustRequiringProjectResources(cwd)`：`<cwd>/.pi/{settings.json,extensions,skills,prompts,themes,SYSTEM.md,APPEND_SYSTEM.md}` 或 `<cwd 或祖先>/.agents/skills` 存在即为 true；用户自己的 `~/.agents/skills` **不算**。没有这些资源时 CLI 根本不问（直接视为信任） | `dist/core/trust-manager.js:141-165`；`scripts/probes/s8-trust-probe.mjs` §1：`hasTrustRequiring(proj)=true / (agentDir)=false` |
@@ -65,7 +67,7 @@
 
 | # | 判据（PLAN 验收的逐条拆解） |
 | --- | --- |
-| C1 | `jerrypi.approvalMode = off` 时行为**与今天完全一致**（一次都不问、一个字节都不多发）。 |
+| C1 | `jerrypi.approvalMode = off` 时行为**与今天完全一致**：一次都不问、卡片上不多任何字段（协议里没有 `approval`）。**"没问"必须与"审批扩展根本没装上"区分开**（F10b：后者是静默的，而 R7 把它列成了最坏形态）—— 所以这条的断言是"同一个会话里三档分别表现"（A3）+ "扩展在场"的阳性证据，而不是数一次回调次数。 |
 | C2 | `mutating` 时：`edit` / `write` / `bash` / `powershell` / **所有未知（含扩展注册的）工具**在面板上停在"等待确认"；`read` / `grep` / `find` / `ls` 直接放行且不产生任何审批记录。 |
 | C3 | `all` 时：**每次**工具调用都停一下。 |
 | C4 | 点"拒绝" → 工具**没有执行**（副作用不存在），agent 收到的 toolResult 是 `isError` 且正文含我们给的**可读原因**。 |
@@ -81,8 +83,9 @@
 
 1. `src/pi/approval.ts`：三档判定（纯函数）+ 审批记录表（pending / 已决）+ `InlineExtension` 工厂
    （`tool_call` → 问面板 → `{block:true, reason}`）。
-2. 装配接线：`createSessionHost` 收下 `approval`（mode 取值回调 + 提问方），把它作为
-   `resourceLoaderOptions.extensionFactories` 注册；controller 持有审批表、发协议、暴露 `decideApproval`。
+2. 装配接线：`createSessionHost` 收下 `approval`（mode 取值回调 + 提问方），以**具名 + `hidden`** 的形态
+   （`{name:"jerrypi-approval", factory, hidden:true}`，F10b）放进 `resourceLoaderOptions.extensionFactories`；
+   controller 持有审批表、发协议、暴露 `decideApproval`。
 3. 协议 v6：工具项加 `approval?: "pending" | "denied"`；`ClientMessage` 加 `approvalDecision`。
 4. 面板：卡片上的「允许 / 拒绝」（两条渲染路径 + 真 DOM 点击 + 键盘）；状态行加一句
    "有 N 个工具调用等待确认"的可点提示（**避免卡片滚出视口后静默卡住**）。
@@ -97,6 +100,8 @@
    特性表 `:42`/`:219`）；`pi-traps` 两条新坑（见 §0.1 的 F7/F7b 与 F11）。
    **顺带补一处 S7 漏改**：README 的特性表还把 Diff 审阅写成"计划中（S7）"（中 `:41`、英 `:218`），
    而 S7 早已关闭（0.1.9）—— 在同一片文档里顺手改成"已实现"，理由与位置都写在这里，不算夹带。
+   **还要改 `PLAN.md` 的 §5.3 一句**（第 1 轮评审 B3）：那一行把取消路径写成四条、其中"Webview 被销毁"
+   与"面板重开时重放"互相打架，按 Q10 的裁决改成三条 + 重放（改 PLAN 正文 = 改项目的承诺，见 AGENTS.md §0）。
 
 **不做**（每条都有理由）：
 
@@ -155,12 +160,14 @@ export interface Approvals {
    → 解析成 `"cancelled"`。**这是 F6 的直接落地**（中止时 pi 会把这一轮 abort 掉）。
 2. **只有 `pending` 才可能被答**：`decide` 对已决/未知的 id 返回 `false`，**不抛错**（面板可能重发、
    也可能拿到一个过期 id）；host 侧对这一类记一行 Output（"看着能点却没反应"是最烦的失败形态）。
-3. **已决记录只为"回放一次拒绝"存在**：`denied` 在工具结束后仍派生出去（卡片留一个标记），
-   `allow` 结束就什么都不派生。**已决记录条数封顶（200，FIFO），待审批项永不淘汰** ——
-   否则一个长会话会把还没答的那条挤掉（与 S7 §3.6 的"墓碑不能占活记录额度"是同一类错误）。
-4. **`cancel` 不是一个 UI 状态**：`cancelled` 解析出去之后，`fieldsOf` 什么都不派生（卡片回到普通
-   "运行中/已中止"形态）——因为此时 pi 给模型看的是 `Operation aborted`（F6），我们再多标一句
-   "已取消"只会让人以为是我们干的。
+3. **一个 map，但上限只数已决**（第 1 轮评审 N2：把"pending 永不淘汰"与"上限 200"写在同一句里
+   是有歧义的）：pending 与 decided 存在同一张表里，**计数只算 decided**（200 条 FIFO）——
+   pending 因为 F5 天然 ≤ 1，永远不会被淘汰；已决记录只为"回放一次拒绝"存在（`denied` 在工具结束后
+   仍派生，`allow` 结束就什么都不派生）。这与 S7 §3.6 的墓碑教训是同一类错误的正面写法。
+4. **`cancel` 不是一个 UI 状态，但它的 reason 与拒绝必须分开**（第 1 轮之后补的，**未经复核**）：`cancelled` 之后 `fieldsOf` 什么都不派生
+   （卡片回到普通"运行中/已中止"形态）；而 `block` 的 reason 用 `Cancelled: session ended`，
+   **不能沿用** `Rejected by user: …` —— 用户没拒绝（第 1 轮评审 S1：`signal?.aborted` 的检查在
+   `block` 之前，只有 signal 真被触发时 pi 才会把它覆盖成 `Operation aborted`）。
 
 `InlineExtension` 工厂（`createApprovalExtension({ mode, approvals, log })`）就是 F10 的形状：
 
@@ -180,7 +187,9 @@ api.on("tool_call", async (event, ctx) => {
 ```
 controller.ensure()
   └─ createSessionHost({ …, approval: { mode: readApprovalModeSetting, approvals: this.approvals } })
-       └─ createAgentSessionServices({ …, resourceLoaderOptions: { extensionFactories: [approvalExtension] } })
+       └─ createAgentSessionServices({ …, resourceLoaderOptions: { extensionFactories: [
+              { name: "jerrypi-approval", factory: approvalExtension, hidden: true }   // 具名才有 hidden（F10b）
+            ] } })
             └─ pi 在**每次** prepareToolCall 时 emit("tool_call")
                  └─ approvals.ask()  → onPending → controller 就地更新那张卡片（approval:"pending"）
                                       → host 侧（面板不可见时发一条通知）
@@ -200,8 +209,10 @@ controller.ensure()
 | `protocol.ts` | 工具项加 `approval?: "pending" \| "denied"`；`ClientMessage` 加 `{type:"approvalDecision"; toolCallId: string; decision: "allow"\|"deny"}`；`PROTOCOL_VERSION` → 6 |
 | `serialize.ts` | `SerializeContext` 加 `approvals`；工具项按 `fieldsOf()` 派生（**实时与重放共用**，与 S7 的 diff 字段同一个位置） |
 | `controller.ts` | ① `onToolExecutionStart` 建卡后按审批表补一次派生；② `onPending` 时**就地重发同 id 的 item**；③ `snapshot()` 里"运行中的卡片"那条路同样补派生（面板重开靠它，C6）；④ `decideApproval()` / `approvals.reset()` |
-| `render.ts` | `renderToolCard` 里在**标题按钮之后、正文之前**插一行 `<div class="tool-approval">`：`pending` → `<button data-approve="<id>">允许</button><button data-deny="<id>">拒绝</button>` + 一句提示；`denied` → `<span class="tool-note">已拒绝</span>`。**用真 `<button>` 而不是 `<a role=button>`**：它不在标题按钮**内部**（HTML 解析器会把嵌套的 `<button>` 拆掉），所以不需要 S7 那套妥协 |
-| `main.ts` | `createToolView` 多一个 `view.approval`（在 head 与 body 之间，常驻可见——折叠时也要能答）；点击委托加 `data-approve`/`data-deny` 两条（**`stopPropagation` 掉，不能顺带展开/折叠**）；`onTranscriptKeydown` 同规格；状态行 `#status` 在有待审批时多一句可点提示（点了滚动到最后一张待审批卡片） |
+| `render.ts` | `renderToolCard` 里在**标题按钮之后、正文之前**插一行 `<div class="tool-approval">`：`pending` → `<button data-approve="<id>">允许</button><button data-deny="<id>">拒绝</button>` + 一句提示；`denied` → `<span class="tool-note">已拒绝</span>`。**用真 `<button>` 而不是 `<a role=button>`**，且必须放在标题按钮**之外**：① HTML 解析器会把嵌套的 `<button>` 拆掉（S7 用的是 `<a role=button>` 才绕过去）；② 展开/折叠的监听器挂在 head **元素自己**身上（`main.ts:292/296`），所以"点审批按钮不会顺带展开卡片"是**这个兄弟关系**的推论 —— 断言要钉的是结构本身（第 1 轮评审 B1） |
+| `main.ts` | `createToolView` 多一个 `view.approval`（在 head 与 body 之间，常驻可见——折叠时也要能答）；点击委托加 `data-approve`/`data-deny` 两条；`onTranscriptKeydown` 同规格但**必须 `preventDefault()`**（第 1 轮之后补的，**未经复核**）
+（否则 `<button>` 会在 Enter 之后补一个合成 click ⇒ **同一次按键发出两条** `approvalDecision`）；
+`stopPropagation` 一并写上（它守的是"将来有人把审批行挪进某个可点祖先"这种改法，不是现在这条）；状态行 `#status` 在有待审批时多一句可点提示（点了滚动到最后一张待审批卡片） |
 
 ### 3.4 项目信任（`src/pi/trust.ts` + `src/host/trustPrompt.ts`）
 
@@ -224,6 +235,9 @@ resolve(cwd):
 - **`Pi: Project Trust…` 命令**（QuickPick）：信任并记住 / 信任父文件夹（记住）/ 仅本次信任 / 不信任（仅本次）/
   清除这里的记录 → 具体动作落到 pi 的 `ProjectTrustStore`；命令结束后**清 memo** 并提示"新建会话生效"
   （F17：`session.reload()` 不重跑钩子）。
+  ⚠️ **"信任父文件夹"要写两条 update**（第 1 轮评审 S6）：`[{ path: parent, decision: true }, { path: cwd, decision: null }]`
+  —— `findNearestTrustEntry` 是从 cwd 逐级向上找**最近**的一条（F15），不清掉子目录那条，父目录的裁决
+  永远轮不到（CLI 自己也是这么写的：`trust-manager.js:42-54`；子目录那条很可能是 CLI 写的 `false`）。
 - **`extensionsResult` 这个入参我们不用**（不做 `project_trust` 事件，Q7）；签名照样吃下它，便于将来接上。
 
 ### 3.5 与 S7 的组合、以及"什么变了"
@@ -234,6 +248,11 @@ resolve(cwd):
   `defaultTools` 等）、`.pi/extensions/*`、`.pi/skills`、`.pi/prompts`、`SYSTEM.md`、项目级包。
   **它改不了 `jerrypi.approvalMode`** —— 那是 VS Code 的 `machine` scope 设置（S6 的 Q9 就是为此定的），
   这条要写进 README，它是"仓库带一份 `.vscode/settings.json` 就能关掉审批"这个风险的正面回答。
+- **两层信任的分工**（第 1 轮评审 S8 提出、改法未经复核；README 也要写）：VS Code 的**工作区信任**管"这个窗口里要不要激活
+  扩展"，而我们已经声明 `capabilities.untrustedWorkspaces.supported === false`（F23）—— 也就是说**面板只在
+  VS Code 已信任的工作区里跑**。pi 的**项目信任**是另一层、粒度也不同：它管"要不要把 `<cwd>/.pi/` 里的
+  设置/扩展/技能读进来并执行"。所以用户会看到**两次**信任询问，这是有意的：第二次问的是"复用这个仓库
+  自带的 pi 配置吗"。模态文案里要点一句这件事，否则用户会觉得扩展在重复问同一件事。
 
 ### 3.6 上限与内存
 
@@ -254,6 +273,7 @@ resolve(cwd):
 | Q7 | `defaultProjectTrust` 是否生效 | **生效**（`always`/`never` 直接短路，不问） | 忽略它：那是用户写在 pi `settings.json` 里的显式表态，"配置来源遵循 pi 自己的约定"（PLAN §5.3） |
 | Q8 | 状态行要不要那句"有 N 个工具调用等待确认" | **要**（可点、跳到最后一张待审批卡片） | 不要：卡片滚出视口时用户只看到"生成中…"，属于**静默**卡住 |
 | Q9 | 面板不可见时的通知 | **弹一条信息通知**（"有工具调用等待确认：<标题>"，按钮"打开面板"） | 不弹：面板没开面板就永远卡住；换成模态（=备选 Q1） |
+| Q10 | **Webview 被销毁**算不算一条取消路径（PLAN §5.3 原文列了四条，含它；第 1 轮之后新增，**未经复核**） | **不算**：销毁**不**取消待审批项 —— 记录留着，面板重开时重放（C6）；真的结束由中止 / 会话替换 / 卸载三条兜 | 照 PLAN 原文在销毁时取消：那 C6 的"重放"就永远不会发生（两句自相矛盾），而且**视图销毁比看上去频繁**（重挂面板、隐藏容器都可能走到 `onDidDispose`），按那条写法会变成"动一下侧边栏 = 静默拒绝一次工具调用"。选定后**要同步改 PLAN §5.3 那一句**（AGENTS.md §0：改它的正文 = 改项目的承诺） |
 
 ## 5. 风险
 
@@ -273,26 +293,29 @@ resolve(cwd):
 
 **每条都要先看它红**（改坏被测实现 → 断言必须失败），**且不许对着想象中的实现写**。
 **放哪一条不是随手定的**：不需要凭据的一律进**无凭据也能跑**的脚本（与 S7 §6 的分工结论一致：
-`controller-check` 没凭据时整体 SKIP，而 SKIP 不是 PASS）；只有真模型那两条进 `controller-check`。
+`controller-check` 没凭据时整体 SKIP，而 SKIP 不是 PASS）；只有真模型那条 A15 进 `controller-check`。
+**A2 那个夹具（真 pi + 假模型 + 临时 agentDir）是 A3/A4/A5/A6b 共用的**，只写一次。
 
 | # | 断言 | 放哪 | 能红验证 |
 | --- | --- | --- | --- |
-| A1 | `parseApprovalMode`（含 `undefined`/`"ALL"`/`"yes"` → `off`）与 `needsApproval` 的真值表（三档 × 八个内置名 + 两个自造名） | host-check（纯函数） | `mutating` 里把 `read` 也算进去 → 红；`all` 返回 `false` → 红 |
-| A2 | **真 pi + 假模型（不用凭据、不联网，F8）**：`createSessionHost({approval})` + `session.agent.streamFunction` → ① **拒绝**：`touch marker` 后文件**不存在**、toolResult `isError` 且正文含我们给的 reason、`pendingToolCalls` 空；② **允许**：文件存在。夹具用**临时 agentDir**（F8 的假 key 不能污染别的断言），临时 cwd 在 `os.tmpdir()` 下、`finally` 里清理且**清理前断言目标在该目录之下**（AGENTS.md §4） | host-check（`host-check.mjs:160-168` 的入口导出清单要加 `createSessionHost`/`createApprovals`/`createApprovalExtension`，否则这一步会以「模块不存在」收场 —— 而那不算红） | 把 block 改成 `false` → ① 红；`reason` 丢掉 → 正文那条红 |
-| A3 | **三档只拦该拦的**：同一驱动下 ① `off` + `bash` → 审批方**一次都没被叫**、命令真的执行（C1）；② `mutating` + 读一个真实临时文件 → 一次都没被叫、工具真的执行（正文含文件内容）；③ `all` + `read` → 被叫了一次 | host-check | 把 `read` 从只读集里去掉 → ② 红；`off` 档也去问 → ① 红 |
+| A1 | `parseApprovalMode`（含 `undefined`/`"ALL"`/`"yes"` → `off`）与 `needsApproval` 的真值表（三档 × 八个内置名 + 两个自造名）**＋漂移守卫**：`READ_ONLY_TOOLS` 逐字等于 `pi.createReadOnlyTools(临时 cwd).map(t => t.name)`（第 1 轮评审 S3 给的 oracle；已实跑确认导出面里有它，返回 `read,grep,find,ls`） | host-check（纯函数 + 真 pi） | `mutating` 里把 `read` 也算进去 → 红；`all` 返回 `false` → 红；往 `READ_ONLY_TOOLS` 手塞一个 `edit` → 守卫红 |
+| A2 | **真 pi + 假模型（不用凭据、不联网，F8）**：`createSessionHost({approval})` + `session.agent.streamFunction` → ① **拒绝**：`touch marker` 后文件**不存在**、toolResult `isError` 且正文含我们给的 reason、`pendingToolCalls` 空；② **允许**：文件存在。夹具用**临时 agentDir**（F8 的假 key 不能污染别的断言），临时 cwd 在 `os.tmpdir()` 下、`finally` 里清理且**清理前断言目标在该目录之下**（AGENTS.md §4）。**这个夹具（真 pi + 假模型 + 临时 agentDir）是 A3/A3b/A4/A5 共用的一个工厂函数**，写一次 | host-check（`host-check.mjs:160-168` 的入口导出清单要加 `createSessionHost`/`createApprovals`/`createApprovalExtension`/`SessionHostController`，否则这一步会以「模块不存在」收场 —— 而那不算红） | 把 block 改成 `false` → ① 红；`reason` 丢掉 → 正文那条红 |
+| A3 | **三档只拦该拦的，且在同一个会话里切**（第 1 轮评审 S2：换了会话就分不清"没问"与"扩展没装上"）：一个 session，`mode` 是个可变 getter（§3.2 保证每次调用现读）→ ① `off` + `bash` → 审批方**一次都没被叫**、命令真的执行（C1）；② `mutating` + 读一个真实临时文件 → 一次都没被叫、工具真的执行（正文含文件内容）；③ `all` + 同一个读操作 → **被叫了一次**（阳性证据：扩展在场）；④ `mutating` + 夹具扩展注册的自造工具 → 被叫了一次（第 1 轮评审 S4；已实跑确认扩展工具默认就在 active tool set 里，脚本化 toolCall 打得到它）。另断言 `resourceLoader.getExtensions().errors` 为空 | host-check | 把 `read` 从只读集里去掉 → ② 红；`off` 档也去问 → ① 红；**让工厂抛错**（F10b 的静默缺席）→ ③ 与 `errors` 那条红，而 ①/② 照样绿 —— 这正是 S2 要防的形态 |
 | A4 | **待审批时点中止**（F6）：审批方挂着不答 → `session.abort()` → ① 我们的 signal 监听触发；② `prompt()` 在 3s 内 resolve 且 `isIdle === true`；③ 文件不存在；④ `approvals.size().pending === 0`；⑤ 记录 `decision === "cancelled"` 且 `fieldsOf()` 什么都不派生 | host-check | 不监听 `ctx.signal` → ② 超时红（探针实测过会一直挂着） |
 | A5 | **会话替换清干净**：跑出一次待审批 → `host.runtime.newSession()`（或 `host.dispose()`）→ 审批表 `pending === 0`、旧 id `decide()` 返回 `false` | host-check | 去掉 `reset()` → 红 |
-| A6 | **协议派生与上限**：`fieldsOf` 四态（pending / denied（工具结束后仍在）/ allow 结束（无字段）/ cancelled（无字段））+ 已决记录超 200 条时最早的被丢、**待审批项不被丢** | host-check | 把已决也算进上限并淘汰 pending → 红；`denied` 在工具结束后丢掉 → 红 |
+| A5b | **`cancelled` 的理由与 `deny` 分开**（第 1 轮评审 S1；改法未经复核）：纯函数层——把同一个 handler 的 `approvals.ask` 分别喂成 `deny` 与 `cancelled`，两次 `block` 的 `reason` **必须不同**（且 cancelled 那次不含 `Rejected by user`） | host-check（纯函数） | 两条路径共用一个 reason → 红。**为什么不做端到端**：signal 真被触发时 pi 会把 reason 覆盖成 `Operation aborted`（F6），端到端那条会**恒绿**（AGENTS.md §2 的"判据主语"问题） |
+| A6 | **协议派生与上限**：`fieldsOf` 五态（pending / denied（工具结束后仍在）/ allow 结束（无字段）/ cancelled（无字段）/ **没问过（`off` 档，F5 的常态）**）+ 上限**只数 decided**：连插 300 条已决 → 最早的被丢；在**有一条 pending** 时再插 300 条已决 → pending 仍在 | host-check | 把已决也算进上限并淘汰 pending → 红；`denied` 在工具结束后丢掉 → 红；`fieldsOf` 无条件派生 `pending` → 第五态红 |
+| A6b | **真 `SessionHostController` 的 `snapshot()`（C6 的主守卫；第 1 轮评审 B2 把它从 controller-check 搬过来，**改法未经复核** —— 它不需要模型）**：用 A2 的假模型夹具、但经**真 controller**（`SessionHostControllerOptions.pi` 本来就允许传句柄 ⇒ 测试传一个"只换 `createAgentSessionFromServices` 里的模型流与 model"的包装句柄，**不改生产代码**）→ ① `onApprovalPending` 里**先** `snapshot()`：卡片带 `approval:"pending"`；**再** `decideApproval("deny")`；② 第二轮（allow）之后再 `snapshot()`：字段消失（N3 的时序）；③ `off` 档跑一次 → 卡片**不带** `approval`（C1 的"不多发"） | host-check | `snapshot()` 那条路漏掉派生（只在实时 `onToolExecutionStart` 里加）→ ① 红；`decide` 后不移除字段 → ② 红；`off` 档也派生 → ③ 红 |
 | A7 | **宿主接线**：真 `ChatViewProvider` + 假 controller → 发一条 `approvalDecision` 恰好调 `decideApproval(id,"deny")` 一次；未知 id / 畸形消息不崩且 Output 有一行；面板不可见时弹一次通知、点按钮执行聚焦命令 | host-check | 不转发 → 红；把 `visible` 判断去掉 → 通知那条红 |
 | A8 | **渲染字符串**：`pending` → 两个按钮（带 `data-approve`/`data-deny` 与转义后的 toolCallId）；`denied` → 「已拒绝」且**无按钮**；`toolCallId` 里的 `<`/`"` 被转义；**`renderToolCard` 与真 `main.ts` 两条路径都产出它** | render-xss-check（字符串）+ webview-dom-check（真 DOM） | 只在 `renderToolCard` 里渲染 → 真 DOM 那条红（S3 的箭头教训） |
-| A9 | **真点击**：点「允许」→ 恰好一条 `{type:"approvalDecision",decision:"allow"}` 且卡片**不展开**；点「拒绝」→ `deny`；Enter/Space 同效；状态行出现可点提示且点了滚动到那张卡片 | webview-dom-check | 去掉 `stopPropagation` → 展开态那条红；去掉键盘分支 → Enter 那条红 |
+| A8b | **结构不变量**（第 1 轮评审 B1；改法未经复核）：审批行是 `.tool-head` 的**兄弟**——`document.querySelector(".tool-head .tool-approval") === null`（不是后代），且 `.tool-approval.previousElementSibling` 是 head。这条守的是"点审批按钮不会顺带展开/折叠"（`toggleTool` 只挂在 head 自己的监听器上，`main.ts:292/296/303`） | webview-dom-check | 把审批行渲染进 head 里面（改 `render.ts` 一行）→ 红。**注**："点了不展开"本身是这条结构的**推论**，不单独当断言 —— 兄弟节点上根本没有通往 `toggleTool` 的路，那种断言从写下第一天起就是绿的 |
+| A9 | **真点击**：点「允许」→ **恰好一条** `{type:"approvalDecision",decision:"allow"}`；点「拒绝」→ `deny`；**Enter/Space 也只发一条**（`<button>` 在 Enter 后本来会补一个合成 click ⇒ 键盘分支必须 `preventDefault()`）；状态行出现可点提示且点了滚动到那张卡片 | webview-dom-check | 去掉键盘分支 → Enter 那条红；去掉 `preventDefault()` → "只发一条"那条红（两条消息） |
 | A10 | **项目信任真的生效（真 pi、临时目录）**：`.pi/settings.json` = `{"defaultTools":["read"]}` → `createAgentSessionServices(...)` + 我们的 resolver 返回 `true` 时：`settingsManager.isProjectTrusted() === true` **且**新会话的 `getActiveToolNames()` 只有 `read`；返回 `false` 时四个工具都在 | host-check | resolver 直接把 `settingsManager` 设成 true（或用 `projectTrusted:true` 硬编码）→ 后一条红；忽略钩子 → 前一条红（F13/F18） |
 | A11 | **裁决顺序**：① memo（同一 cwd 只问一次）；② 持久化的 `true`/`false` 直接用、不问；③ `hasTrustRequiringProjectResources === false` → 不问且 true；④ `defaultProjectTrust` = `always`/`never` → 不问 | host-check（注入假的"问"与假的 store） | 去掉 memo → ① 红；把 `false` 当"没记录"→ ② 红 |
 | A12 | **只写 true、只写一次**：选"信任并记住" → `trust.json` 出现该 cwd（canonical 形态）；选"仅本次" → 文件**一个字节都没变**（空目录时仍然不存在）；选"不信任" → 文件不变 | host-check | 把"仅本次"也写进去 → 红（这条是 C9 的唯一守卫） |
 | A13 | **模态询问的映射**（真 `vscode` 桩）：`showWarningMessage` 的标题含 cwd 与"信任"；三个按钮；`undefined`（ESC）→ `{trusted:false, remember:false}` | host-check | 把 `undefined` 当信任 → 红（安全方向：红法必须能说明是**安全**判据） |
-| A14 | **`Pi: Project Trust…` 命令**的 QuickPick 映射：五个选项各自对应的 `trustStore`/memo 变化；执行后 memo 被清 | host-check | 把"清除记录"写成 `set(cwd,false)` → 红 |
+| A14 | **`Pi: Project Trust…` 命令**的 QuickPick 映射：五个选项各自对应的 `trustStore`/memo 变化；执行后 memo 被清；**"信任父文件夹"写两条 update**（先 `set(cwd,true)` 再选它 → `trust.json` 里 cwd 那条**消失**、parent 那条出现，第 1 轮评审 S6） | host-check | 把"清除记录"写成 `set(cwd,false)` → 红；"信任父文件夹"只写 parent → 那条红（子记录会永远遮住它，F15） |
 | A15 | **真模型端到端**（PLAN 验收 1 的自动版）：`approvalMode:"all"` + `onApprovalPending → decideApproval("deny")`，让模型跑一条 `touch <临时文件>` 的命令 → 文件不存在 + 卡片 `approval:"denied"` + 正文含原因；第二轮改成 allow → 文件存在 | controller-check（真模型，不进 CI） | 把 `deny` 改成 `allow` → 红 |
-| A15b | **待审批时 `controller.snapshot()` 的卡片带 `approval:"pending"`**（C6：面板重开还能答的判据）；随后 `decideApproval("allow")` → 按钮字段消失 | controller-check（与 A15 复用**同一个**挂起的审批项，不额外花模型调用） | 只在实时路径加字段、`snapshot()` 那条路漏掉 → 红（S7 的重放漏字段就是这么暴露的） |
 | A16 | **自测 T14（gating）**：A2/A3/A4 的同一批断言在**真 VS Code 宿主**里跑一遍（假模型 + `getModels()[0]` 的内存 key + **独立的临时 agentDir**，见 F8），输出 `T14 PASS <细节>`；T14 排在 T4/T6/T7/T9 **之后**，并加进 `REQUIRED_ITEMS` | `Pi: Run Self-Test`（`npm run check:gate`；Windows W0 也跑它） | 同 A2/A4；`REQUIRED_ITEMS` 加 T14 后不 PASS 即 `GATE BLOCKED` |
 | A17 | **设置与文档同步**：`package.json` 的 `approvalMode` 描述不再含"尚未生效"、README 中英两处改成"已生效/effective"（F24 的词表），且描述里写清三档语义 | `scripts/settings-check.mjs`（既有脚本扩一条） | 只改 `package.json` 不改 README → 红 |
 
@@ -310,14 +333,17 @@ resolve(cwd):
   待审批项消失、面板回到可输入状态（`生成中…` 结束）；
 - 把面板切到别的侧边栏（视图隐藏）再触发一次 → 应该弹一条通知，点它能回到面板。
 
-**M2（项目信任）**：在一个**带 `.pi/settings.json`** 的目录里打开窗口，文件内容写
-`{"defaultTools":["read"]}`（**这是唯一一个面板里看得见的项目级效果**，F13）→ 打开面板：
+**M2（项目信任）**：⓪ **先准备一个临时工作区**：在 `os.tmpdir()` 下**新建**一个目录，里面放
+`.pi/settings.json` = `{"defaultTools":["read"]}`（**这是唯一一个面板里看得见的项目级效果**，F13），
+用 `File > Open Folder…` 打开它（**不要用本仓**：本仓的 `.pi/settings.json` 是 git 跟踪的、且一旦被
+打进包就是记录在案的旧事故 —— 第 1 轮评审 S7）。然后打开面板：
 
 - **第一次**：弹一个模态问"是否信任 <这个文件夹>"；点「不信任」→ 模型仍然四个工具都在（`bash` 可用）；
 - `Pi: Project Trust…` → 信任并记住 → **新建会话** → 面板里模型只剩 `read` 一个工具（用一句
   "跑一条 echo 命令"验证它会说没有这个工具）；
 - 重载窗口 → **不再问**（信任已记住）；
-- `Pi: Project Trust…` → 清除记录 → 新建会话 → 恢复成四个工具。
+- `Pi: Project Trust…` → 清除记录 → 新建会话 → 恢复成四个工具；
+- 顺带确认模态文案点明了"这是 pi 的项目资源信任，与 VS Code 的工作区信任是两回事"（§3.5 的 S8）。
 
 > 为什么必须人工：①真焦点/真点击（webview 里的按钮、状态行、原生模态按钮）；②真进程（重载后的
 > memo/trust.json 读取）；③排版（卡片上多一行、状态行多一句会不会挤）。三类都在 AGENTS.md §1 的清单里。
@@ -325,7 +351,9 @@ resolve(cwd):
 ## 8. Windows 项（不新增人工动作）
 
 - **W0**：`Pi: Run Self-Test` —— T14 会自动覆盖"审批拦住 bash / 拒绝不产生副作用 / 中止能收口"。
-  期望仍是 `GATE PASS`（14 PASS / 0 FAIL / 1 SKIP = T12，现在多一项 T14）。
+  现在是 15 项（12 gating + T5c/T12/T13 advisory，`selftest.ts:77` 的 `REQUIRED_ITEMS` 12 项），
+  加 T14 后 **16 项** ⇒ 期望 **`GATE PASS`：15 PASS / 0 FAIL / 1 SKIP（= T12）**（第 1 轮评审 N1：
+  上一版这里写的 14 是加 T14 **之前**的数）。
 - **W1**：重启后会话正常（不变）。
 
 ## 9. 步骤（每步单独提交 + 门禁全绿）
@@ -333,11 +361,11 @@ resolve(cwd):
 | 步 | 内容 | 结束时的门禁 |
 | --- | --- | --- |
 | 1 | `src/pi/approval.ts`（三档纯函数 + 审批表 + 扩展工厂）+ A1/A6 | typecheck / self-test（host-check） |
-| 2 | 装配接线（`session.ts` 的 `extensionFactories`、controller 的审批表与 `decideApproval`、协议 v6）+ A2/A3/A4/A5 | self-test（host-check） |
-| 3 | 渲染与点击链路（`serialize.ts` 派生、`render.ts` 那一行、`main.ts` 的 `view.approval`/委托/键盘/状态行）+ A8/A9 | self-test（render + webview-dom） |
+| 2 | 装配接线（`session.ts` 的**具名 + hidden** `extensionFactories`、controller 的审批表与 `decideApproval`、协议 v6）+ A2/A3/A4/A5/A5b | self-test（host-check） |
+| 3 | 渲染与点击链路（`serialize.ts` 派生、`render.ts` 那一行、`main.ts` 的 `view.approval`/委托/键盘 `preventDefault`/状态行）+ A8/A8b/A9 | self-test（render + webview-dom） |
 | 4 | 宿主接线（`chatView` 路由 + 通知/聚焦）+ A7 | self-test（host-check） |
-| 5 | 项目信任（`trust.ts` + `trustPrompt.ts` + 装配 + 命令 + README 里的信任一节）+ A10/A11/A12/A13/A14 | self-test（host-check） |
-| 6 | 自测 **T14** + controller-check 的 A15/A15b + 文档（README 中英配置表/已知限制、`pi-traps` 两条）+ A16/A17 | 全部 + `check:gate`（T14 要真宿主）|
+| 5 | 项目信任（`trust.ts` + `trustPrompt.ts` + 装配 + 命令 + README 里的信任一节与"两层信任"）+ A10/A11/A12/A13/A14 | self-test（host-check） |
+| 6 | 自测 **T14** + controller-check 的 A15 + 文档（README 中英配置表/已知限制、`pi-traps` 三条、**`PLAN.md` §5.3 那句按 Q10 改口**）+ A6b/A16/A17 | 全部 + `check:gate`（T14 要真宿主）|
 | 7 | 版本 **0.1.10** + 打包 + Mac M1/M2 + 上传核验 + Windows W0/W1 + §12 回填 → 关阶段 | 发布流程（STATUS §4） |
 
 > 版本为什么还是 `0.1.x`：`PLAN.md` §5.4 规定预发布走奇数段、**第一个正式版是 0.2.0（偶数段）**，
@@ -349,7 +377,43 @@ resolve(cwd):
 **纪律**（承 S4–S7）：**≤3 轮**；第 3 轮只核转写、不审设计；每轮结论**立刻落盘**；
 每条记 `ACCEPT` / `REJECT`（附实质理由）/ `DEFER`。评审者只读。
 
-### 第 1 轮（待送审）
+### 第 1 轮（2026-09-15，Claude，本仓 `w60:pC` 面板；结论 `VERDICT: BLOCKING`，3 B / 8 S / 5 N）
+
+**处置：16 条全部 ACCEPT**（其中 4 条按我自己的复核**改了改法**：B1 的断言换成结构不变量、
+S1 挪到纯函数层、N5 并进 A6/A6b、B3 用新增的 Q10 落裁决）。评审者复跑了我落盘的两个探针，
+判定 **§0 的 25 条事实一条都没错**（这是它审的四份计划里事实底子最扎实的一份），16 条全部落在
+§6 的断言与跨节口径上。
+
+| # | 意见（摘要） | 处置 | 我怎么处置的 |
+| --- | --- | --- | --- |
+| **B1** | A9 的「点『允许』→ 卡片不展开」**恒真**：审批行是 `.tool-head` 的**兄弟**，而 `toggleTool` 只挂在 head 自己的监听器上 —— 去掉 `stopPropagation` 也红不了 | ACCEPT（已复核） | 核了 `main.ts:292/296/303`：`toggleTool` 只有 head 的 click/keydown 两个入口 ⇒ 兄弟节点的点击到不了它。⇒ A9 把"不展开"降级为**推论**，改成结构断言 **A8b**（`.tool-approval` 不是 `.tool-head` 的后代），能红验证 = 把审批行渲染进 head。**我自己又补了一条**：Enter 必须 `preventDefault()`，否则 `<button>` 的合成 click 会让同一次按键**发两条** `approvalDecision`（能红验证：去掉 `preventDefault` → 两条消息） |
+| **B2** | C6 的唯一守卫 A15b 放在 `controller-check`（无凭据整体 SKIP），而它**不需要模型** | ACCEPT | 搬成 **A6b**（host-check）：`SessionHostControllerOptions.pi` 本来就允许传句柄 ⇒ 测试传一个"只换 `createAgentSessionFromServices` 里的模型流/model"的包装句柄，**生产代码不动**。controller-check 只留真模型端到端 A15 |
+| **B3** | PLAN §5.3 承诺四条取消路径，计划只落实两条；"Webview 被销毁"既没做也没说不做，且与 C6 冲突 | ACCEPT | 新增 **Q10** 显式裁决"销毁**不**取消、等重放"，并在 §9 第 6 步同步改 `PLAN.md:186-187` 那一句（AGENTS.md §0：改 PLAN 正文 = 改项目的承诺） |
+| **S1** | `reset()` 结掉的 `cancelled` 可能以"用户拒绝了"到达模型（`signal?.aborted` 的检查在 `block` 之前） | ACCEPT（已复核） | 核了 `agent-loop.js:419` 在 `:426` 之前 ⇒ 机制成立。⇒ §3.1 第 4 条：`cancelled` 用 `Cancelled: session ended`；断言放**纯函数层**（**A5b**：两条路径的 reason 必须不同）—— 端到端那条在 signal 已 abort 时会被 pi 覆盖，**写了也恒绿** |
+| **S2** | A3① 绿的时候证明不了 C1（"审批方没被叫"与"扩展根本没装上"**观察等价**；工厂抛错被静默 catch） | ACCEPT（已复核） | 核了 `resource-loader.js:743-757` ⇒ 成立。⇒ A3 改成**同一个会话里切 mode** + 断言 `errors` 为空 + 第 ③ 项（`all` + 读操作会问）当"扩展在场"的阳性证据。**这就是 STRONGEST_OBJECTION 要的那条防线** |
+| **S3** | A1 是实现的镜像（手抄名单，没有第二份实现对照）；pi 恰好导出了 `createReadOnlyTools` | ACCEPT（已实跑） | 跑出 `typeof pi.createReadOnlyTools === "function"`、`names = read,grep,find,ls` ⇒ oracle 可用。⇒ A1 加漂移守卫（`READ_ONLY_TOOLS` 逐字等于它的名字） |
+| **S4** | C2 的"未知/扩展工具也要确认"没有端到端断言 | ACCEPT（已实跑） | 跑出 `activeTools = read,bash,edit,write,probe_tool`（扩展工具默认就在活动集里）⇒ A3 加第 ④ 项，顺带验了 `event.toolName` 的字符串 |
+| **S5** | inline 扩展要用「具名 + `hidden`」注册，否则会出现在扩展清单里 | ACCEPT（已实跑） | 跑出具名形态 `path="<inline:jerrypi-approval>"`、`hidden=true`、`errors=[]`；`resource-loader.js:749-752` 证实 `hidden` **只对具名形态**生效。⇒ §3.2 改成具名形态，新增 F10b |
+| **S6** | 「信任父文件夹」漏了 pi 的**第二条** update（`{cwd: null}`），子目录已有记录时父记录永远轮不到 | ACCEPT（已复核） | 核了 `trust-manager.js:42-54`（pi 自己就是两条 update）与 `:20-32`（从 cwd 起找**最近**一条）⇒ 成立。⇒ §3.4 照抄两条；A14 加"先 `set(cwd,true)` 再选它 → cwd 那条消失" |
+| **S7** | §7 M2 会去改一个 git 跟踪的文件，而**本仓自己就带着** `.pi/settings.json` | ACCEPT（已复核） | `git ls-files .pi` → `.pi/settings.json` ⇒ 成立。⇒ M2 改成"在 `os.tmpdir()` 下**新建**目录 + `File > Open Folder…`"，并明说不要动本仓的 `.pi/` |
+| **S8** | VS Code 的工作区信任与 pi 的项目信任是两套闸门，计划一个字没提 | ACCEPT | §3.5 加"两层信任的分工"（含 `untrustedWorkspaces.supported === false` 这条事实），README 与模态文案同步 |
+| **N1** | §8 的 W0 期望数字没更新（加 T14 后是 16 项 / 15 PASS） | ACCEPT | §8 改成 **15 PASS / 0 FAIL / 1 SKIP（= T12）**，并写明 15→16 的来由 |
+| **N2** | §3.1-3 与 §3.6 对"上限"的口径要合成一句 | ACCEPT | §3.1 写死"**一个 map、上限只数 decided**"，§3.6 改成"所以 200 只对 decided 生效（pending 天然 ≤1）" |
+| **N3** | A15/A15b 的时序互斥 | ACCEPT | A6b 写明"`onApprovalPending` 里**先** `snapshot()` 断言 pending、**再** decide；第二轮之后再 `snapshot()` 断言字段消失" |
+| **N4** | F11 少记一条关键事实：inline 扩展在预信任阶段实例化、最终集合**复用同一实例** | ACCEPT（已复核） | 核了 `resource-loader.js:444-447` ⇒ 成立，不会双注册 `tool_call`。⇒ 新增 **F11b** |
+| **N5** | C1 的"一个字节都不多发"没有断言 | ACCEPT | 并进 A6（第五态：没问过 → `fieldsOf` 恒 `{}`）与 A6b ③（`off` 档的 `snapshot()` 不带 `approval`） |
+
+**STRONGEST_OBJECTION**（"这份计划把『审批确实生效』的举证责任，全压在几条分不清『闸门在工作』与『闸门不存在』的断言上"）：
+**照单全收** —— S2 的修法就是冲它写的（同一个会话切三档 + `errors` 为空 + 第 ③ 项阳性证据）。
+它附的那句方法论要记牢：**"跑真 pi"只保证断言在场，不保证断言能分辨**；这与 AGENTS.md §2 的
+"判据的主语被悄悄换掉"是同一副面孔（C1 的主语是"**off 这一档**"，而 A3① 原来的主语是"回调的调用次数"）。
+
+**本轮之后新增/改动的、评审者尚未复核的内容**（第 2 轮请重点看）：
+1. B1 的改法（A8b 的结构断言 + Enter 的 `preventDefault` 那条）；
+2. S1 的改法（reason 分开 + A5b 放纯函数层的理由）；
+3. **A6b 这个新夹具**（包一层真 pi 的句柄驱动真 controller）—— 它是 C1/C6 的主守卫，也是本阶段最重的装配；
+4. Q10（webview 销毁不取消）与随之要改的 `PLAN.md` §5.3 那一句；
+5. §3.5 新增的"两层信任的分工"。
 
 ## 11. 实施期发现
 
@@ -361,4 +425,4 @@ resolve(cwd):
 
 ## 13. 待用户拍板
 
-见 §4 的 **Q1–Q9**。**默认值都是我的建议**；用户说"可以"之后才动代码。
+见 §4 的 **Q1–Q10**。**默认值都是我的建议**；用户说"可以"之后才动代码。
