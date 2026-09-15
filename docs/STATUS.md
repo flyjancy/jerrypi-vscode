@@ -11,7 +11,7 @@
 
 ## 1. 现在
 
-**进行中**：**S8 计划：第 1 轮评审已吸收，待第 2 轮**（`docs/S8-plan.md`：工具审批三档 + 项目信任流程；§0 的 25 条事实全部带证据，其中两条探针**已落盘可重跑** —— `scripts/probes/s8-approval-probe.mjs`、`scripts/probes/s8-trust-probe.mjs`）。第 1 轮评审（`w60:pC` 的 Claude，`VERDICT: BLOCKING` 3 B / 8 S / 5 N）**16 条已全部 ACCEPT 并落进计划**（处置见 `docs/S8-plan.md` §10.1；其中 4 条按自核改了改法）。**下一步：第 2 轮评审（重点看 §10.1 末尾那 5 处未经复核的改动）→ 把 §4 的 Q1–Q10 默认值摆给你拍板 → 你说“可以”才动代码**
+**进行中**：**S8 计划：第 2 轮评审已吸收，待第 3 轮（只核转写）**（`docs/S8-plan.md`：工具审批三档 + 项目信任流程；§0 的 25 条事实全部带证据，其中两条探针**已落盘可重跑** —— `scripts/probes/s8-approval-probe.mjs`、`scripts/probes/s8-trust-probe.mjs`）。三轮评审（`w60:pC` 的 Claude）**全部 ACCEPT 并已落进计划**：第 1 轮 `BLOCKING` 3 B / 8 S / 5 N（§10.1）、第 2 轮 `BLOCKING` 1 B / 6 S / 5 N（§10.2）。第 2 轮抓到的是**我第 1 轮自己补的那条断言**（在 happy-dom 里恒绿 —— 修「恒绿断言」这件事本身复发了一次），改法已落。**下一步：第 3 轮（只核转写）→ 把 §4 的 Q1–Q10 默认值摆给你拍板 → 你说「可以」才动代码**
 
 | | |
 | --- | --- |
