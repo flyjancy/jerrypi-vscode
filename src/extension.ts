@@ -14,7 +14,14 @@ import { SessionHostController } from "./pi/controller";
 import { createApiKeyStore } from "./pi/runtime";
 import { createDiffPresenter } from "./host/diff";
 import { workspaceCwd } from "./host/workspace";
-import { applyAgentDirSetting, describeAgentDir, readAgentDirSetting, registerAgentDirWatcher } from "./host/config";
+import {
+  applyAgentDirSetting,
+  describeAgentDir,
+  readAgentDirSetting,
+  readApprovalModeSetting,
+  registerAgentDirWatcher,
+} from "./host/config";
+import { createApprovalModeReader } from "./pi/approval";
 
 const OUTPUT_CHANNEL_NAME = "jerrypi";
 
@@ -48,6 +55,9 @@ export function activate(context: vscode.ExtensionContext): void {
     uiContext: createVSCodeUIContext(channel),
     log: channel,
     onMessage: (message) => provider.post(message),
+    // S8：审批档位**每次工具调用现读**（machine scope 设置，改了不用重载窗口）；
+    // 非法值只记一行 Output（R9）。
+    approvalMode: createApprovalModeReader({ read: readApprovalModeSetting, log: channel }),
     // D6：会话替换成功后让面板**全量重放** —— 否则它会继续显示上一个会话的转写
     // （并且新消息的 `msg-<下标>` 会和旧内容撞号）。`provider` 在下面才赋值，
     // 但这个箭头只在替换发生时（远晚于 activate）才执行。

@@ -19,6 +19,7 @@ import {
 } from "../shared/protocol";
 import { clipToolText, toolTextFromContent, utf8Length } from "../shared/toolText";
 import { diffFieldsOf, type FileChangeStore } from "./filechanges";
+import type { Approvals } from "./approval";
 
 /**
  * 序列化的上下文。
@@ -35,6 +36,11 @@ export interface SerializeContext {
    * 而协议每帧都要过）。没传就是"这次序列化不关心 diff"（自测/纯函数断言用）。
    */
   fileChanges?: FileChangeStore;
+  /**
+   * S8：工具审批的字段也从 store 派生（同一个理由：协议每帧都要过，不塞正文）。
+   * 没传就是"这次序列化不关心审批"（自测/纯函数断言用）。
+   */
+  approvals?: Approvals;
 }
 
 /** 没有 cwd 时的兜底（不会用到，但让类型不必可空）。 */
@@ -202,6 +208,9 @@ export function serializeMessage(
             isError: message.isError === true,
             pending: false,
           })),
+      // S8：审批字段（重放这条路上工具已经结束，所以 pending 恒为 false ——
+      // "待审批"的那种卡片在 controller.snapshot() 的 pendingToolCalls 分支里）
+      ...(context.approvals === undefined ? {} : context.approvals.fieldsOf(id, false)),
       // 空数组不写字段：没有可点路径是常态，写一个 `[]` 只会让两端各写一遍空判断。
       ...(openablePaths.length > 0 ? { openablePaths } : {}),
     };

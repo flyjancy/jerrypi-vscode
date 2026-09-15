@@ -172,6 +172,8 @@ async function buildModules(tempDir) {
       `export { createCustomTools } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/custom-tools"))};`,
       `export { createDiffPresenter, DIFF_SCHEME } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/diff"))};`,
       `export { parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/approval"))};`,
+      `export { createSessionHost } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/session"))};`,
+      `export { createSelfTestUIContext } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/selftest-ui"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -189,7 +191,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES, createSessionHost, createSelfTestUIContext } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 const vscodeStub = await import(pathToFileURL(STUB_PATH).href);
@@ -1495,6 +1497,25 @@ check(
 // —— 这正是 S8-plan §6 的分工（真 pi 的那一半在 A2/A3/A4/A6b）。
 {
   const silentLog = { lines: [], appendLine(line) { this.lines.push(line); } };
+  /**
+   * 等一个"应该会收口"的 promise，**带超时**。
+   *
+   * 为什么必须有：`node` 在"顶层 await 永不收口、事件循环空转"时以 exit 13 退出，
+   * 而且**一行输出都不打**（实测）—— 那时既看不到是哪条判据，也看不到前面的 ok。
+   */
+  const settled = async (promise, label, ms = 2000) => {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(`(未收口:${label})`), ms);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
   // ---- A1：三档判定 + 只读集的漂移守卫（oracle = pi 自己的 createReadOnlyTools）
   {
@@ -1601,24 +1622,43 @@ check(
     check("A6：卡片已经不是 pending 时不派生", JSON.stringify(approvals.fieldsOf("t1", false)) === "{}", JSON.stringify(approvals.fieldsOf("t1", false)));
     check("A6：size 把待答算在 pending 里", JSON.stringify(approvals.size()) === '{"pending":1,"decided":0}', JSON.stringify(approvals.size()));
     check("A6：答一次返回 true，再答返回 false", approvals.decide("t1", "allow") === true && approvals.decide("t1", "allow") === false);
-    check("A6：allow 的结果是放行", (await asked) === "allow", String(await asked));
+    const askedOutcome = await settled(asked, "t1");
+    check("A6：allow 的结果是放行", askedOutcome === "allow", String(askedOutcome));
     check("A6：放行之后不派生（卡片回普通形态）", JSON.stringify(approvals.fieldsOf("t1", false)) === "{}", JSON.stringify(approvals.fieldsOf("t1", false)));
 
     const denied = approvals.ask({ toolCallId: "t2", toolName: "write", title: "a.ts", requestedAt: 2 }, undefined);
     approvals.decide("t2", "deny");
     check("A6：拒绝后工具已结束时仍派生 denied", JSON.stringify(approvals.fieldsOf("t2", false)) === '{"approval":"denied"}', JSON.stringify(approvals.fieldsOf("t2", false)));
-    check("A6：拒绝的理由走 decide 的返回值口径", (await denied) === "deny");
+    const deniedOutcome = await settled(denied, "t2");
+    check("A6：拒绝的理由走 decide 的返回值口径", deniedOutcome === "deny", String(deniedOutcome));
 
     // 中止路径：signal 触发 → cancelled（且 reason 与 deny 分开，见 A5b）
     const controller = new AbortController();
     const aborted = approvals.ask({ toolCallId: "t3", toolName: "bash", title: "x", requestedAt: 3 }, controller.signal);
     controller.abort();
-    check("A6：signal 触发 → cancelled", (await aborted) === "cancelled");
+    const abortedOutcome = await settled(aborted, "t3");
+    check("A6：signal 触发 → cancelled", abortedOutcome === "cancelled", String(abortedOutcome));
     check("A6：cancelled 不派生（不冒充拒绝）", JSON.stringify(approvals.fieldsOf("t3", false)) === "{}", JSON.stringify(approvals.fieldsOf("t3", false)));
     const pre = new AbortController();
     pre.abort();
-    check("A6：进来时 signal 已经 abort → 直接 cancelled（连 onPending 都不叫）", (await approvals.ask({ toolCallId: "t4", toolName: "bash", title: "x", requestedAt: 4 }, pre.signal)) === "cancelled" && !pendingSeen.some((r) => r.toolCallId === "t4"), JSON.stringify(pendingSeen.map((r) => r.toolCallId)));
+    const preOutcome = await settled(approvals.ask({ toolCallId: "t4", toolName: "bash", title: "x", requestedAt: 4 }, pre.signal), "t4");
+    check("A6：进来时 signal 已经 abort → 直接 cancelled（连 onPending 都不叫）", preOutcome === "cancelled" && !pendingSeen.some((r) => r.toolCallId === "t4"), JSON.stringify({ preOutcome, seen: pendingSeen.map((r) => r.toolCallId) }));
     check("A6：未知 id 的 decide 返回 false（不抛）", approvals.decide("nope", "deny") === false);
+    {
+      // signal 的监听是"中止能收口"的**唯一**机制（端到端那条见 A4/A5；这里钉住机制本身：
+      // 不注册监听的话 A4 会以超时红，但那要看 5 秒 —— 这条立刻就能报出来）
+      const ctl = new AbortController();
+      const pendingOne = approvals.ask({ toolCallId: "signal-probe", toolName: "bash", title: "s", requestedAt: 11 }, ctl.signal);
+      ctl.abort();
+      const probeOutcome = await settled(pendingOne, "signal-probe");
+      check("A6：abort 之后 ask 立刻以 cancelled 收口（监听真的挂上了）", probeOutcome === "cancelled", String(probeOutcome));
+    }
+
+    // onPending 抛错也要收口（"ask 永不抛、永不无限挂"包的是整条路）
+    const boomLog = { lines: [], appendLine(line) { this.lines.push(line); } };
+    const boomApprovals = createApprovals({ onPending: () => { throw new Error("panel gone"); }, log: boomLog });
+    const boomOutcome = await settled(boomApprovals.ask({ toolCallId: "boom", toolName: "bash", title: "x", requestedAt: 9 }, undefined), "boom");
+    check("A6：onPending 抛错 → 按未回答收口（不挂死、不抛）", boomOutcome === "cancelled" && boomApprovals.size().pending === 0 && boomLog.lines.length === 1, JSON.stringify({ boomOutcome, size: boomApprovals.size(), lines: boomLog.lines }));
 
     // 上限：只数已决；待答的那条永远不会被淘汰（第 1 轮 N2；S7 墓碑教训的正面写法）
     const held = approvals.ask({ toolCallId: "keep", toolName: "bash", title: "keep", requestedAt: 5 }, undefined);
@@ -1632,9 +1672,354 @@ check(
     // reset：会话替换/卸载 → 全部收口 + 清空
     approvals.reset();
     check("A6：reset 之后 pending 清零、已决也清空", JSON.stringify(approvals.size()) === '{"pending":0,"decided":0}', JSON.stringify(approvals.size()));
-    check("A6：reset 把待答的收成 cancelled", (await held) === "cancelled");
+    const heldOutcome = await settled(held, "keep");
+    check("A6：reset 把待答的收成 cancelled", heldOutcome === "cancelled", String(heldOutcome));
     check("A6：reset 之后旧 id 再也答不了", approvals.decide("keep", "allow") === false && approvals.get("keep") === undefined);
   }
+}
+
+// ------------------------------------- S8 第 2 步：真 pi + 假模型（A2/A3/A4/A5）
+//
+// **不用模型、不用凭据、不联网**地驱动真实的工具调用（S8-plan F8）：
+//   · 假模型：`session.agent.streamFunction` 换成一个脚本化的 async iterable；
+//   · 那把"内存 key"走**生产路径**注入（`ApiKeyStore` → `getModelRuntime` 的
+//     `injectStoredApiKeys`），不碰任何磁盘上的凭据；
+//   · agentDir / cwd / sessions 全是 `os.tmpdir()` 下的一次性目录（F8：假 key 会留在这个
+//     ModelRuntime 里，而 `getModelRuntime` 按 agentDir 缓存 ⇒ 必须隔离）。
+//
+// 假流的三条纪律（S8-plan R2，都是探针挂过的地方）：
+//   ① `opts.signal.aborted` → `stopReason:"aborted"`（否则 abort 之后循环不退出）；
+//   ② 第一次吐工具调用、之后收尾（被拦下的调用**不会**终止循环，F7b）；
+//   ③ 每个 `prompt()` 都套超时（挂死的断言最贵）。
+{
+  const piModule = await loadPi(REPO_ROOT);
+  /** 扩展工具的夹具：仓库里现成的那个（selftest T3 用的同一个），只为拿到一个"未知工具" */
+  const SMOKE_FIXTURE = path.join(REPO_ROOT, "test-fixtures", "ext-smoke", "index.ts");
+  const approvalFixtures = [];
+
+  /**
+   * 造一个装了审批的会话宿主。
+   *
+   * `modeRef.mode` 是**可变**的：A3 要在**同一个会话**里切三档（第 1 轮评审 S2 的核心 ——
+   * 换会话就分不清"没问"与"扩展没装上"）。
+   */
+  async function makeApprovalHost({
+    modeRef,
+    answer,
+    toolName = "bash",
+    input,
+    subscribe,
+    additionalExtensionPaths,
+  }) {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "s8-approval-"));
+    approvalFixtures.push(root);
+    const agentDir = path.join(root, "agent");
+    const cwd = path.join(root, "ws");
+    const sessionDir = path.join(root, "sessions", "--ws--");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(cwd, { recursive: true });
+
+    // ① 先建 runtime（拿到一个可用模型 + provider），再按**生产路径**注入内存 key
+    const bootstrapRuntime = await piModule.ModelRuntime.create({
+      authPath: path.join(agentDir, "auth.json"),
+      modelsPath: path.join(agentDir, "models.json"),
+      modelsStorePath: path.join(agentDir, "models-store.json"),
+      allowModelNetwork: false,
+    });
+    const model = bootstrapRuntime.getModels()[0];
+    const keys = {
+      listProviders: () => [model.provider],
+      getApiKey: async (providerId) => (providerId === model.provider ? "probe-key" : undefined),
+      saveApiKey: async () => {},
+      removeApiKey: async () => {},
+    };
+
+    const asked = [];
+    const log = { lines: [], appendLine(line) { this.lines.push(line); } };
+    const approvals = createApprovals({
+      log,
+      onPending: (request) => {
+        asked.push(request);
+        // 回答走**真路径**（decide）：这样"面板答题"这件事和真机是同一条链
+        const decision = typeof answer === "function" ? answer(request) : answer;
+        if (decision === "allow" || decision === "deny") approvals.decide(request.toolCallId, decision);
+      },
+    });
+
+    const host = await createSessionHost({
+      pi: piModule,
+      cwd,
+      agentDir,
+      sessionManager: piModule.SessionManager.create(cwd, sessionDir),
+      keys,
+      uiContext: createSelfTestUIContext(log),
+      mode: "rpc",
+      sink: log,
+      model,
+      approval: { mode: () => modeRef.mode, approvals },
+      ...(additionalExtensionPaths === undefined ? {} : { additionalExtensionPaths }),
+      onEvent: subscribe,
+    });
+
+    const calls = [];
+    /**
+     * 换一份模型剧本：第 i 次调用吐 `steps[i]`，用完就收尾（纯文本 stop）。
+     *
+     * 纪律（S8-plan R2）：① 尊重 signal；② **工具调用之后必须收尾** —— 被拦下的调用不会
+     * 终止循环（F7b），剧本用完还接着吐工具调用就会无限转。
+     */
+    const script = (steps) => {
+      let turn = 0;
+      host.session.agent.streamFunction = async (m, _ctx, opts) => {
+        const aborted = opts?.signal?.aborted === true;
+        const step = aborted ? undefined : steps[turn];
+        turn += 1;
+        calls.push({ aborted, turn });
+        const base = {
+          role: "assistant",
+          api: m.api,
+          provider: m.provider,
+          model: m.id,
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0 } },
+          timestamp: Date.now(),
+        };
+        const message = aborted
+          ? { ...base, content: [{ type: "text", text: "(aborted)" }], stopReason: "aborted" }
+          : step !== undefined
+            ? { ...base, content: [{ type: "toolCall", id: step.id, name: step.name, arguments: step.arguments }], stopReason: "stop" }
+            : { ...base, content: [{ type: "text", text: "(done)" }], stopReason: "stop" };
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "start", partial: message };
+            yield { type: "done" };
+          },
+          async result() {
+            return message;
+          },
+        };
+      };
+    };
+    script([{ id: "call-1", name: toolName, arguments: input }]);
+
+    const withTimeout = async (promise, ms, label) =>
+      Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} 超时 ${ms}ms`)), ms)),
+      ]);
+    return { root, cwd, host, approvals, asked, calls, log, script, withTimeout };
+  }
+
+  /**
+   * 带超时、吞错地卸载宿主。
+   *
+   * 为什么不能直接 `await host.dispose()`：待审批被卡住时 `dispose()` 会一直等下去
+   * （内部的 abort 要等这一轮收口），而**在 `finally` 里挂住**会让整个脚本以 exit 13
+   * 静默退出 —— 前面所有 ok/FAIL 一行都打不出来。
+   */
+  const safeDispose = async (host) => {
+    try {
+      await Promise.race([host.dispose(), new Promise((r) => setTimeout(r, 5000))]);
+    } catch {
+      // 卸载失败不该盖住真正的判据
+    }
+  };
+
+  const toolResultsOf = (session) =>
+    session.messages
+      .filter((m) => m.role === "toolResult")
+      .map((m) => ({ toolName: m.toolName, isError: m.isError === true, text: m.content?.[0]?.text ?? "" }));
+
+  // ---- A2：拒绝 → 工具没执行；允许 → 工具执行
+  {
+    const marker = path.join(os.tmpdir(), `s8-marker-${Date.now()}`);
+    for (const [label, answer] of [["deny", "deny"], ["allow", "allow"]]) {
+      fs.rmSync(marker, { force: true });
+      const f = await makeApprovalHost({
+        modeRef: { mode: "all" },
+        answer,
+        input: { command: `touch ${marker}` },
+      });
+      try {
+        await f.withTimeout(f.host.session.prompt("go"), 15000, `A2 ${label} 的 prompt()`);
+        const results = toolResultsOf(f.host.session);
+        const hit = results[0] ?? { text: "", isError: false };
+        if (label === "deny") {
+          check("A2①：拒绝之后交给 bash 的命令**没有执行**（文件不存在）", fs.existsSync(marker) === false, `marker=${fs.existsSync(marker)}`);
+          check(
+            "A2①：落盘的是 isError，且正文是我们给的 reason（含被拒的命令）",
+            results.length === 1 && hit.isError === true && hit.text.startsWith("Rejected by user: ") && hit.text.includes(marker),
+            JSON.stringify(results),
+          );
+          check("A2①：reason 逐字等于 denyReason(卡片上那个标题)", f.asked.length === 1 && hit.text === denyReason(f.asked[0].title), JSON.stringify({ got: hit.text, asked: f.asked.length, expected: f.asked.length === 1 ? denyReason(f.asked[0].title) : "(没问过)" }));
+          check("A2①：问的是这次调用的 toolCallId、且拿到了 signal", f.asked.length === 1 && f.asked[0].toolCallId === "call-1" && typeof f.asked[0].toolName === "string");
+          check("A2①：工具结束后 pendingToolCalls 清空", f.host.session.state.pendingToolCalls.size === 0, String(f.host.session.state.pendingToolCalls.size));
+        } else {
+          check("A2②：允许之后命令真的执行了（文件存在）", fs.existsSync(marker) === true, `marker=${fs.existsSync(marker)}`);
+          check("A2②：工具结果是成功", results.length === 1 && hit.isError === false, JSON.stringify(results));
+        }
+      } finally {
+        await safeDispose(f.host);
+        fs.rmSync(f.root, { recursive: true, force: true });
+        fs.rmSync(marker, { force: true });
+      }
+    }
+  }
+
+  // ---- A3：三档只拦该拦的（**同一个会话里切** + 扩展在场的阳性证据）
+  {
+    const readTarget = path.join(os.tmpdir(), `s8-read-${Date.now()}.txt`);
+    fs.writeFileSync(readTarget, "hello-from-approval-fixture\n");
+    const modeRef = { mode: "off" };
+    const marker = path.join(os.tmpdir(), `s8-marker3-${Date.now()}`);
+    const f = await makeApprovalHost({
+      modeRef,
+      answer: "deny",
+      toolName: "bash",
+      input: { command: `touch ${marker}` },
+    });
+    try {
+      // 扩展在场的阳性证据：装了审批扩展，且没有加载错误（F10b：工厂抛错是静默缺席）
+      const ext = f.host.runtime.services.resourceLoader.getExtensions();
+      check("A3：审批扩展在场且没有加载错误（静默缺席的反面）", ext.extensions.some((e) => e.path === "<inline:jerrypi-approval>") && ext.errors.length === 0, JSON.stringify({ paths: ext.extensions.map((e) => e.path), errors: ext.errors }));
+
+      // ① off + bash：不问、命令执行
+      await f.withTimeout(f.host.session.prompt("go"), 15000, "A3① prompt()");
+      check("A3①：off 档不问", f.asked.length === 0, JSON.stringify(f.asked));
+      check("A3①：off 档命令照常执行", fs.existsSync(marker) === true, `marker=${fs.existsSync(marker)}`);
+
+      // ② mutating + read：不问、工具执行（正文里有文件内容）
+      modeRef.mode = "mutating";
+      f.calls.length = 0;
+      const readSession = f.host.session;
+      f.script([{ id: "call-read", name: "read", arguments: { path: readTarget } }]);
+      await f.withTimeout(readSession.prompt("read it"), 15000, "A3② prompt()");
+      const readResults = toolResultsOf(readSession).filter((r) => r.toolName === "read");
+      check("A3②：mutating 档不问只读工具", f.asked.length === 0, JSON.stringify(f.asked));
+      check("A3②：只读工具真的执行了（正文含文件内容）", readResults.length >= 1 && String(readResults.at(-1)?.text ?? "").includes("hello-from-approval-fixture"), JSON.stringify(readResults.at(-1)));
+
+      // ③ all + 同一个读操作：问了（扩展在场 + 档位真的在拦）
+      modeRef.mode = "all";
+      f.script([{ id: "call-read-2", name: "read", arguments: { path: readTarget } }]);
+      await f.withTimeout(readSession.prompt("read again"), 15000, "A3③ prompt()");
+      check("A3③：all 档问了同一个读操作（阳性证据：闸门真的在场）", f.asked.length === 1 && f.asked[0].toolName === "read", JSON.stringify(f.asked));
+
+      // ④ mutating + **扩展注册的工具**：必须问（第 1 轮评审 S4：C2 的"未知工具"那半句要有端到端断言）
+      //
+      // 未知工具从哪来：用仓库里现成的 smoke 夹具（`test-fixtures/ext-smoke/index.ts`，T3 用的同一个）
+      // 经 `additionalExtensionPaths` 装进来 —— 它的 `smoke_tool` 对我们是彻头彻尾的"未知名字"。
+      const g = await makeApprovalHost({
+        modeRef: { mode: "mutating" },
+        answer: "deny",
+        toolName: "smoke_tool",
+        input: { message: "from-approval-fixture" },
+        additionalExtensionPaths: [SMOKE_FIXTURE],
+      });
+      try {
+        const active = g.host.session.getActiveToolNames();
+        check("A3④（前提）：扩展注册的工具默认就在活动集里", active.includes("smoke_tool"), JSON.stringify(active));
+        await g.withTimeout(g.host.session.prompt("custom"), 15000, "A3④ prompt()");
+        check(
+          "A3④：扩展工具（未知名字）在 mutating 档被问了一次，名字原样",
+          g.asked.length === 1 && g.asked[0].toolName === "smoke_tool",
+          JSON.stringify(g.asked.map((r) => r.toolName)),
+        );
+        const results = toolResultsOf(g.host.session).filter((r) => r.toolName === "smoke_tool");
+        check("A3④：拒绝之后扩展工具**没有被调用**（正文里没有它的回应）", results.length === 1 && results[0].isError === true && !String(results[0].text ?? "").includes("smoke tool ok"), JSON.stringify(results));
+      } finally {
+        await safeDispose(g.host);
+        fs.rmSync(g.root, { recursive: true, force: true });
+      }
+    } finally {
+      await safeDispose(f.host);
+      fs.rmSync(f.root, { recursive: true, force: true });
+      fs.rmSync(readTarget, { force: true });
+      fs.rmSync(marker, { force: true });
+    }
+  }
+
+  // ---- A4：待审批时中止（F6）
+  {
+    const marker = path.join(os.tmpdir(), `s8-marker4-${Date.now()}`);
+    const f = await makeApprovalHost({
+      modeRef: { mode: "all" },
+      answer: "hang",
+      input: { command: `touch ${marker}` },
+    });
+    try {
+      const running = f.host.session.prompt("go").then(() => "resolved", (e) => `threw:${e.message}`);
+      for (let i = 0; i < 60 && f.asked.length === 0; i++) await new Promise((r) => setTimeout(r, 25));
+      check("A4①：挂起时审批表里有一条待答", f.approvals.size().pending === 1, JSON.stringify(f.approvals.size()));
+      try {
+        await f.withTimeout(f.host.session.abort(), 5000, "A4 abort()");
+      } catch {
+        // abort 本身挂住也是红（下面三条会报出来），但不许把它变成 exit 13
+      }
+      // 超时本身也是一种失败，但必须**报出是哪条判据**（不能让它变成 unhandled rejection 崩脚本）
+      let outcome = "(超时未收口)";
+      try {
+        outcome = await f.withTimeout(running, 5000, "A4 中止后的 prompt()");
+      } catch (error) {
+        outcome = `timeout:${error.message}`;
+      }
+      check("A4②：中止之后 prompt() 收口（不是永远挂着）", outcome === "resolved", String(outcome));
+      check("A4②：会话回到空闲", f.host.session.isIdle === true && f.host.session.isStreaming === false, JSON.stringify({ idle: f.host.session.isIdle, streaming: f.host.session.isStreaming }));
+      check("A4③：文件不存在（工具没执行）", fs.existsSync(marker) === false, `marker=${fs.existsSync(marker)}`);
+      check("A4④：待审批项被清掉", f.approvals.size().pending === 0, JSON.stringify(f.approvals.size()));
+      const record = f.approvals.get("call-1");
+      check("A4⑤：记录是 cancelled，且不冒充拒绝", record?.decision === "cancelled" && JSON.stringify(f.approvals.fieldsOf("call-1", false)) === "{}", JSON.stringify(record));
+      check("A4⑥：落盘的是 pi 的 Operation aborted（不是我们的 reason）", toolResultsOf(f.host.session).some((r) => r.isError && r.text === "Operation aborted"), JSON.stringify(toolResultsOf(f.host.session)));
+      check("A4⑦：模型被问了两次（abort 之后那次必须返回 aborted）", f.calls.length === 2 && f.calls[1].aborted === true, JSON.stringify(f.calls));
+    } finally {
+      await safeDispose(f.host);
+      fs.rmSync(f.root, { recursive: true, force: true });
+      fs.rmSync(marker, { force: true });
+    }
+  }
+
+  // ---- A5：会话替换/卸载时待审批项清干净
+  {
+    for (const how of ["newSession", "dispose"]) {
+      const marker = path.join(os.tmpdir(), `s8-marker5-${Date.now()}-${how}`);
+      const f = await makeApprovalHost({
+        modeRef: { mode: "all" },
+        answer: "hang",
+        input: { command: `touch ${marker}` },
+      });
+      let disposed = false;
+      try {
+        const running = f.host.session.prompt("go").then(() => "resolved", () => "threw");
+        for (let i = 0; i < 60 && f.asked.length === 0; i++) await new Promise((r) => setTimeout(r, 25));
+        // 替换/卸载本身超时也要报得出来（否则"挂住"会变成 unhandled rejection 崩脚本，
+        // 看不出是哪条判据 —— 这是本轮夹具有意做硬的地方）
+        let replaced = "(ok)";
+        try {
+          if (how === "newSession") {
+            await f.withTimeout(f.host.runtime.newSession(), 10000, "A5 newSession()");
+          } else {
+            disposed = true;
+            await f.withTimeout(f.host.dispose(), 10000, "A5 dispose()");
+          }
+        } catch (error) {
+          replaced = `throw:${error.message}`;
+        }
+        check(`A5（${how}）：替换/卸载本身收口`, replaced === "(ok)", replaced);
+        try {
+          await f.withTimeout(running, 5000, `A5 ${how} 之后的 prompt()`);
+        } catch {
+          // 超时 → 下面那三条会因为"还挂在那儿"而红，比让脚本崩掉好
+        }
+        check(`A5（${how}）：待审批项清零`, f.approvals.size().pending === 0, JSON.stringify(f.approvals.size()));
+        check(`A5（${how}）：旧 id 再也答不了`, f.approvals.decide("call-1", "allow") === false);
+        check(`A5（${how}）：文件不存在`, fs.existsSync(marker) === false, `marker=${fs.existsSync(marker)}`);
+      } finally {
+        if (!disposed) await safeDispose(f.host);
+        fs.rmSync(f.root, { recursive: true, force: true });
+        fs.rmSync(marker, { force: true });
+      }
+    }
+  }
+
+  for (const root of approvalFixtures) fs.rmSync(root, { recursive: true, force: true });
 }
 
 // ----------------------------------------------------------------- 汇总

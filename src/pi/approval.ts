@@ -183,7 +183,15 @@ export function createApprovals(options: ApprovalsOptions): Approvals {
         signal?.addEventListener("abort", () => settle(request.toolCallId, "cancelled"), { once: true });
       });
       // 先登记 `waiting` 再叫宿主：宿主（或测试）在 `onPending` 里就能直接 `decide`。
-      options.onPending({ ...request });
+      // 宿主抛错也必须收口 —— 否则 `waiting` 里留下一条永远没人答的（文件头第 1 条：
+      // "永不无限挂"包的是整条路，不只是 signal 那一段）。fail-closed：按没答上处理。
+      try {
+        options.onPending({ ...request });
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        options.log.appendLine(`[approval] 通知面板时出错，按未回答处理：${text}`);
+        settle(request.toolCallId, "cancelled");
+      }
       return promise;
     },
 

@@ -16,7 +16,7 @@
 //   3. `busy` 的判定：**空闲以 `agent_settled` 为准**，不能以第一个 `agent_end`
 //      （`agent_end` 之后可能还有 followUp 队列或自动重试）。
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 /**
  * 当前会话的**元信息**（模型 / 思考等级 / 上下文用量），显示在输入框下方那一行。
@@ -117,6 +117,14 @@ export type ChatItem =
        */
       diffUnavailable?: "evicted" | "too-large" | "read-failed" | "none";
       /**
+       * 工具审批（S8）。
+       *
+       * `pending` = 这次调用正等着用户答（卡片上给「允许 / 拒绝」）；`denied` = 被拒绝过
+       * （工具已结束时**仍保留**，留一条可回溯的标记）。**放行与取消都不派生** ——
+       * 取消时 pi 给模型看的是 `Operation aborted`，我们再标一句只会让人以为是我们干的。
+       */
+      approval?: "pending" | "denied";
+      /**
        * 卡片标题（照 pi 的 call 行）：`~/a.ts:10-20`、`命令 (timeout 30s)`…
        *
        * `link` 是标题里**可点击的那一段**：`text` 是显示形态（家目录缩成 `~`），
@@ -154,7 +162,14 @@ export type ClientMessage =
   /** 打开思考等级选择器。 */
   | { type: "openThinkingPicker" }
   /** 打开会话选择器（QuickPick 在**宿主**侧，与模型选择器同一个理由）。 */
-  | { type: "openSessionPicker" };
+  | { type: "openSessionPicker" }
+  /**
+   * 回答了某次待审批的工具调用（S8）。
+   *
+   * 只带 toolCallId 与决定 —— 白名单在 controller 的审批表里（"这条 id 现在真的在等吗"），
+   * 面板说什么不算数。未知/过期的 id 会被拒并记一行 Output。
+   */
+  | { type: "approvalDecision"; toolCallId: string; decision: "allow" | "deny" };
 
 /** 扩展 → webview */
 export type ServerMessage =

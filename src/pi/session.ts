@@ -23,6 +23,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { bindSession, type EventSink, type RuntimeMode, type SessionBinding } from "./bindings";
+import { createApprovalExtension, type ApprovalMode, type Approvals } from "./approval";
 import { createCustomTools, type WriteRecorder } from "./custom-tools";
 import type { PiModule } from "./loader";
 import { getModelRuntime, type ApiKeyStore } from "./runtime";
@@ -40,6 +41,11 @@ export interface SessionHostOptions {
   model?: unknown;
   additionalExtensionPaths?: string[];
   writeRecorder?: WriteRecorder;
+  /**
+   * S8：工具审批。传了就挂一个具名 inline 扩展（`{name:"jerrypi-approval", hidden:true}`，
+   * F10b：具名才有 `hidden`）；**档位每次调用现读**，所以改设置不需要重连会话。
+   */
+  approval?: { mode: () => ApprovalMode; approvals: Approvals };
   /**
    * 是否信任工作区里的项目级设置。
    *
@@ -85,6 +91,19 @@ export async function createSessionHost(options: SessionHostOptions): Promise<Se
       modelRuntime: await getModelRuntime(pi, agentDir, options.keys),
       resourceLoaderOptions: {
         additionalExtensionPaths: options.additionalExtensionPaths,
+        // 审批扩展走 inline factory（S8）：它必须和我们的会话**同一条装配路径**，
+        // 否则"面板里以为装了、实际没装"就是静默的（F10b）。
+        extensionFactories:
+          options.approval === undefined
+            ? []
+            : [
+                createApprovalExtension({
+                  mode: options.approval.mode,
+                  approvals: options.approval.approvals,
+                  cwd,
+                  log: options.sink,
+                }),
+              ],
       },
     });
 

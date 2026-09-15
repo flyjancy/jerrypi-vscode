@@ -486,7 +486,22 @@ S1 挪到纯函数层、N5 并进 A6/A6b、B3 用新增的 Q10 落裁决）。�
 
 ## 11. 实施期发现
 
-（待实施）
+| # | 发现 | 处置 |
+| --- | --- | --- |
+| 2-1 | **`ask` 的"永不无限挂"漏了 `onPending` 这条**：夹具里我把 `answer` 写错成字符串，`onPending` 一抛，`waiting` 里就留下一条永远没人答的记录（`pending` 恒为 1），而 handler 的 catch 又把它变成"fail-closed 拦下"。⇒ 计划只写了 signal 那一段，实际整条路都得包 | `createApprovals` 里把 `options.onPending` 包 try/catch：抛错 → 记一行 + 按 `cancelled` 收口；A6 加一条断言（能红：去掉那个 catch → 那条红） |
+| 2-2 | ⚠️ **挂住的 promise 会让 node 以 `exit 13` 静默退出、一行输出都不打**（实测：把 `ask` 的中止监听去掉 → `HOST-CHECK` 连 `ok` 行都没了）。这对"能红验证"是坏形态：红了，但看不出是哪条判据 | host-check 的 S8 段加两个助手：`settled(promise, label, ms)`（等"应该收口"的东西，带超时）与 `safeDispose(host)`（`finally` 里卸载也要带超时 —— 卡住的 `dispose()` 会把整段拖成 exit 13）。现在同样的破法给出 12 条**指名**的 FAIL |
+| 1-1 | 夹具用 `os.tmpdir()` 直接建目录时，macOS 的 `/var → /private/var` 会让"清理守卫"里的字符串比较假红（S5 的 6-8 同类坑） | 一次性目录一律建在 `fs.realpathSync(os.tmpdir())` 之下 |
+
+**实施期的"能红验证"记录（每步都做了，破法 → 红在哪）**：
+
+| 步 | 破法 | 结果 |
+| --- | --- | --- |
+| 1 | 大小写不敏感 / mutating 连 read 也拦 / 手塞只读名单 / cancelled 沿用 Rejected / 出错直接抛 / off 也去问 / 上限算上待答 / 没问过也派生 | 8 种全部红（见提交 `d167cee`） |
+| 2 | `needsApproval` 一律放行（闸门形同不存在） | 红 10 条；**A3①/② 照样绿** —— 这正是第 1 轮 S2 要防的形态，靠 A3③④ 才红 |
+| 2 | 审批扩展没挂上（F10b 的静默缺席） | 红 10 条（含"扩展在场"那条） |
+| 2 | 拒绝的理由写死 | 红 4 条 |
+| 2 | `ask` 不监听 signal | 红 12 条（含 A4/A5 的全部收口判据） |
+| 2 | 拒绝理由不带标题 | 红 4 条 |
 
 ## 12. 实施与验收结果
 

@@ -43,6 +43,13 @@ import {
 } from "./serialize";
 import { createSessionHost, type SessionHost } from "./session";
 import { createFileChanges, recordEditsFromMessages, type FileChangeStore } from "./filechanges";
+import {
+  createApprovals,
+  type ApprovalDecision,
+  type ApprovalMode,
+  type ApprovalRequest,
+  type Approvals,
+} from "./approval";
 import { resolveSessionDir, sessionsRootOf } from "./sessions";
 import { getModelRuntime, type ApiKeyStore } from "./runtime";
 
@@ -85,6 +92,17 @@ export interface SessionHostControllerOptions {
   onSessionReplaced?: () => void;
   /** 额外加载的 pi 扩展（测试用；后续的 `jerrypi.extensionPaths` 设置也会走这里）。 */
   additionalExtensionPaths?: string[];
+  /**
+   * S8：工具审批档位。**每次工具调用现读**（`approvalMode` 是 machine scope 设置，
+   * 改了不需要重载窗口）。缺省 = 永远 `off`。
+   */
+  approvalMode?: () => ApprovalMode;
+  /**
+   * S8：有工具调用在等确认。宿主用它弹通知（面板不可见时）、Q10 的"销毁后再提一次"也走这里。
+   *
+   * 与 `onSessionReplaced` 同一条纪律：controller 不认识 `vscode`，通知由宿主做。
+   */
+  onApprovalPending?: (request: ApprovalRequest) => void;
 }
 
 /**
@@ -191,6 +209,17 @@ export class SessionHostController {
    * 活到扩展卸载（重放要靠它把 edit 的 patch 找回来）。
    */
   private readonly fileChanges: FileChangeStore = createFileChanges();
+
+  /**
+   * S8：工具审批表。
+   *
+   * 与 `fileChanges` 同一个理由挂在 controller 上（会话替换时只 `reset()`，表本身活着）：
+   * 面板重开要靠它把"还在等的那条"重放出来（C6）。
+   */
+  private readonly approvals: Approvals = createApprovals({
+    onPending: (request) => this.onApprovalPending(request),
+    log: { appendLine: (line) => this.options.log.appendLine(line) },
+  });
 
   private readonly toolCalls: ToolCallIndex = createToolCallIndex();
   /** 已发出的工具行，用于"中止时把仍在执行的标记为已中止"。 */
@@ -338,6 +367,11 @@ export class SessionHostController {
       },
       // 与 pi CLI 的行为刻意不同：不信任工作区里的项目级设置（见 README 已知限制）。
       projectTrusted: false,
+      // S8：审批扩展（档位现读；审批表挂在 controller 上，切会话不丢历史记录）
+      approval: {
+        mode: this.options.approvalMode ?? (() => "off"),
+        approvals: this.approvals,
+      },
       onEvent: (event) => this.handleEvent(event),
       onExtensionError: (error) => this.handleExtensionError(error),
       // 面板不钉模型：用户选过就听用户的（见 alignPanelModel 的注释）。
@@ -719,7 +753,7 @@ export class SessionHostController {
 
   /** 序列化上下文：cwd + diff 的记录源（S7）。 */
   private serializeContext(): SerializeContext {
-    return { cwd: this.options.cwd, fileChanges: this.fileChanges };
+    return { cwd: this.options.cwd, fileChanges: this.fileChanges, approvals: this.approvals };
   }
 
   snapshot(): ReplaySnapshot {
@@ -775,6 +809,9 @@ export class SessionHostController {
           summary: known?.argsText ?? "",
           isError: false,
           pending: true,
+          // S8：面板重开时"还在等的那条"要带着按钮回来（C6）。工具已结束的那种由
+          // serializeMessage 那条路派生（pending:false）—— 两条路同一份表，不会各说各话。
+          ...this.approvals.fieldsOf(toolCallId, true),
           ...(paths.length > 0 ? { openablePaths: paths } : {}),
           ...titleOf(known?.name, known?.args, this.options.cwd),
         },
@@ -1134,6 +1171,44 @@ export class SessionHostController {
     return `live-${this.liveCounter}`;
   }
 
+  // ---------------------------------------------------------------- 工具审批（S8）
+
+  /** 有人要问：把那张卡片**就地重发**一次（带上按钮），并把"该通知了"交给宿主。 */
+  private onApprovalPending(request: ApprovalRequest): void {
+    this.options.log.appendLine(
+      `[approval] 等待确认：${request.toolName}｜${request.title}（面板上点「允许/拒绝」）`,
+    );
+    this.refreshToolApproval(request.toolCallId, true);
+    this.options.onApprovalPending?.(request);
+  }
+
+  /**
+   * 面板答了一次（`chatView` 路由过来）。返回 `false` = 没有这条待审批
+   * （重发 / 过期 / 已中止）—— **不抛错**，但记一行 Output："看着能点却没反应"是最烦的失败形态。
+   */
+  decideApproval(toolCallId: string, decision: ApprovalDecision): boolean {
+    if (!this.approvals.decide(toolCallId, decision)) {
+      this.options.log.appendLine(`[approval] 忽略一次过期的回答：${toolCallId}（${decision}）`);
+      return false;
+    }
+    // 答完立刻把按钮撤掉：工具还在跑，卡片回到普通的"运行中…"（拒绝的那种随后由
+    // toolResult 那条路派生出 `denied` 标记）。
+    this.refreshToolApproval(toolCallId, true);
+    return true;
+  }
+
+  /**
+   * 把 `tool-<id>` 那张卡片按审批表的**当前**状态重发一次。
+   *
+   * 注意：`toolItems` 里存的是"卡片本身"（`tool_execution_start` 那一刻的形态），
+   * 审批字段只在发出去的那一份上 —— 所以这里 `{...item, ...fields}` 不会留下过期字段。
+   */
+  private refreshToolApproval(toolCallId: string, pending: boolean): void {
+    const item = this.toolItems.get(toolCallId);
+    if (item === undefined) return;
+    this.emit({ type: "item", item: { ...item, ...this.approvals.fieldsOf(toolCallId, pending) } });
+  }
+
   /** 宿主侧（选择器等）要往面板发一条提示时的入口。 */
   notifyUser(level: "info" | "warn" | "error", text: string): void {
     this.notice(level, text);
@@ -1177,6 +1252,9 @@ export class SessionHostController {
     this.toolLastEmit.clear();
     this.toolItems.clear();
     this.openableFiles = new Set();
+    // S8：待审批项以 toolId 为键，跨会话留着就是"新会话里冒出一个答不了的按钮"。
+    // （会话替换之前 pi 已经 abort 过，所以这里多半只是在收口 + 清历史。）
+    this.approvals.reset();
   }
 
   private emit(message: ServerMessage): void {
