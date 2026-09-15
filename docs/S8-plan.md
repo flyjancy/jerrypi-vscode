@@ -507,6 +507,7 @@ S1 挪到纯函数层、N5 并进 A6/A6b、B3 用新增的 Q10 落裁决）。�
 | **M2-2** | 真机看到的模态与桩里"一样但多一个按钮"：macOS 的**原生模态会自动加一个 `Cancel`**（我们传给 API 的只有三个：信任并记住 / 仅本次信任 / 不信任），所以用户看到四个。`Cancel` 与 `Esc` 一样返回 `undefined` ⇒ 落到"**不信任且不写文件**"（安全方向）。**但文案上"Cancel"与"不信任"并存会让人犹豫**，而这是 macOS 的原生行为、API 控制不了 | 记成**已知行为**（不改代码）：不动它；A13 的"三个按钮"断言仍然成立（断言的是我们**传进去**的 items，桩记录的就是那三个）。若将来要消掉它，只能去掉 `{modal:true}`（那会变成没有焦点的通知，更差） |
 | **M2-3** | 真机同时看到**两层信任**：dev host 窗口里有 VS Code 自己的 `Restricted Mode` 横幅（未信任这个文件夹），而我们的模态照样弹出 —— 因为 **F5 的 dev host 会无条件加载开发中的扩展**，`capabilities.untrustedWorkspaces.supported=false` 在那里不生效。Marketplace 装的正规用户处在这个状态时，扩展**整个不会被激活**（我们声明过），也就看不到这个模态 | 不是缺陷，但值得写清：README 的"两层信任"那段已经写了"后者决定要不要在窗口里启用扩展"，这里补一句 dev host 的例外给将来的验收者看 | 
 | **P-1** | `node scripts/compare-vsix.mjs` 在本机**必须带 `NODE_USE_ENV_PROXY=1`**：它用 Node 的 `fetch` 去 Marketplace 取包，而本机的代理只写在环境变量里（`http_proxy=http://127.0.0.1:7897`），Node 的 fetch **默认不看**环境变量 ⇒ 第一次跑是 `UND_ERR_CONNECT_TIMEOUT`（10s 超时）。这正是 S6 的 L1 那条教训的同一机制（`NODE_USE_ENV_PROXY` 只在**进程启动前**设才有效） | 记进 §12.3 的命令示例；将来给 `compare-vsix.mjs` 的用法注释补一行（不是缺陷，是环境约定） |
+| **W0-1** | 🔴 **Windows W0 抓到：T14 FAIL `E_APPROVAL_NOT_EXECUTING`（"允许之后 bash 没有执行"）—— 是夹具的锅，不是产品的锅**。T14 里那条 bash 命令用了 **Windows 形态的路径**（`touch C:\Users\…\t14-marker.txt`），而 **Git Bash 会把命令里的反斜杠当转义吃掉** ⇒ 实际建出来的是 cwd 下一个叫 `C:Usersfengrui…t14-marker.txt` 的文件，于是"断言里用 Windows 形态去 `existsSync`"必然为假。本机复现（macOS 的 bash 同一条规则）：`bash -c 'touch C:\Users\x\y.txt'` → `ls` 出来的是 `C:Usersxy.txt` | 凡是**拼进 bash 命令**的路径一律前斜杠（`marker.split("\\").join("/")`，MSYS 会转成 `/c/...`）；T14 里那三处命令 + host-check/controller-check 的同类夹具（7 + 1 处）一起改，并把这句写进 T14 的注释。**教训**：跨平台的夹具里，"路径用哪种写法"和"谁来解释它"是两件事 —— bash 命令里的路径由 **shell** 解释，工具参数里的路径由 **pi** 解释 |
 | 6-4 | 顺手确认了一件好事：**待审批时 `dispose()`** 会让 pi 把手里的 `ctx` 判成 stale（`This extension ctx is stale after session replacement or reload`）—— 我们的处理器把它 catch 住并 **fail-closed 拦下**，所以"边挂边卸载"不会变成"静默放行" | 这正是文件头第 2 条想要的行为；A5（host-check）断言了待审批在替换/卸载后清零 |
 
 **实施期的"能红验证"记录（每步都做了，破法 → 红在哪）**：
@@ -588,9 +589,12 @@ NODE_USE_ENV_PROXY=1 node scripts/compare-vsix.mjs 0.1.11   # 本机代理只写
 （6,050,303 字节 / `bd3cdcde541698cc1e861e9adfb9abcdd5d208d3b1b1dfa024b2e76d86bccd47`）；
 留档 `~/jerrypi-releases/jerrypi-0.1.11.vsix`；tag **`v0.1.11`** 已打并推送（注解里带字节数与 SHA-256）。
 
-**Windows（W0/W1）—— ⏳ 待验**（用户在 Windows 上装 0.1.11 预发布后跑：
-W0 `Pi: Run Self-Test` 期望 **15 PASS / 0 FAIL / 1 SKIP = T12**（那台机器没有 `pi`；这次多一项 T14）、
-W1 重启 VS Code 后面板正常接过上一会话）
+**Windows（W0/W1）—— 0.1.11 第一次跑：`GATE BLOCKED T14`（14 PASS / 1 FAIL / 1 SKIP），已定位并修复**
+
+| 轮 | 结果 |
+| --- | --- |
+| 0.1.11（第一次） | `T14 FAIL E_APPROVAL_NOT_EXECUTING`（"允许之后 bash 没有执行"）；其余 14 项 PASS、`T12 SKIP E_NO_PI`（预期）。**根因是 T14 夹具的路径写法**：`touch C:\Users\…` 里的反斜杠被 Git Bash 当转义吃掉（§11 的 W0-1，本机已复现同一机制）—— 产品本身没问题（T14 的拒绝/中止两条都过了，说明审批门在 Windows 上工作） |
+| 0.1.12 | 修掉路径写法后重打包：`GATE PASS`（16 项）—— 等 Windows 复跑确认 |
 
 ### 12.4 已知未覆盖
 

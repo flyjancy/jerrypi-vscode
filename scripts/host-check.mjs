@@ -1850,7 +1850,7 @@ check(
       const f = await makeApprovalHost({
         modeRef: { mode: "all" },
         answer,
-        input: { command: `touch ${marker}` },
+        input: { command: `touch ${marker.split("\\").join("/")}` },
       });
       try {
         await f.withTimeout(f.host.session.prompt("go"), 15000, `A2 ${label} 的 prompt()`);
@@ -1888,7 +1888,7 @@ check(
       modeRef,
       answer: "deny",
       toolName: "bash",
-      input: { command: `touch ${marker}` },
+      input: { command: `touch ${marker.split("\\").join("/")}` },
     });
     try {
       // 扩展在场的阳性证据：装了审批扩展，且没有加载错误（F10b：工厂抛错是静默缺席）
@@ -1956,7 +1956,7 @@ check(
     const f = await makeApprovalHost({
       modeRef: { mode: "all" },
       answer: "hang",
-      input: { command: `touch ${marker}` },
+      input: { command: `touch ${marker.split("\\").join("/")}` },
     });
     try {
       const running = f.host.session.prompt("go").then(() => "resolved", (e) => `threw:${e.message}`);
@@ -1996,7 +1996,7 @@ check(
       const f = await makeApprovalHost({
         modeRef: { mode: "all" },
         answer: "hang",
-        input: { command: `touch ${marker}` },
+        input: { command: `touch ${marker.split("\\").join("/")}` },
       });
       let disposed = false;
       try {
@@ -2597,7 +2597,7 @@ check(
   try {
     await controller.ensure();
     // 会话创建完之后再设剧本（`ensure()` 之前 pi 还没建会话）
-    setScript([{ id: "call-1", name: "bash", arguments: { command: `touch ${marker}` } }]);
+    setScript([{ id: "call-1", name: "bash", arguments: { command: `touch ${marker.split("\\").join("/")}` } }]);
 
     // ---- ①/②：待审批时的快照 + 答完之后的就地撤回
     // `controller.prompt()` 会 await 整轮（`sendPrompt` 等的是 `session.prompt`），
@@ -2636,7 +2636,7 @@ check(
     // ---- ③ 第二轮：允许 → 文件出现，卡片上没有审批标记
     answer = "allow";
     fs.rmSync(marker, { force: true });
-    setScript([{ id: "call-2", name: "bash", arguments: { command: `touch ${marker}` } }]);
+    setScript([{ id: "call-2", name: "bash", arguments: { command: `touch ${marker.split("\\").join("/")}` } }]);
     await controller.prompt("again", "auto");
     check("A6b：允许之后文件存在", fs.existsSync(marker) === true, `marker=${fs.existsSync(marker)}`);
 
@@ -2644,7 +2644,7 @@ check(
     mode = "off";
     fs.rmSync(marker, { force: true });
     const beforeOff = emitted.length;
-    setScript([{ id: "call-3", name: "bash", arguments: { command: `touch ${marker}` } }]);
+    setScript([{ id: "call-3", name: "bash", arguments: { command: `touch ${marker.split("\\").join("/")}` } }]);
     await controller.prompt("third", "auto");
     const offSnapshot = controller.snapshot();
     const offTool = offSnapshot.items.find((item) => item.kind === "tool" && item.toolCallId === "call-3");

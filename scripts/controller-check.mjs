@@ -1308,7 +1308,7 @@ async function main() {
         const say = (extra) =>
           [
             "请用 bash 执行下面这一条命令，就这一条，做完就停下：",
-            `touch ${marker}`,
+            `touch ${marker.split("\\").join("/")}`,
             extra,
           ].join("\n");
 

@@ -851,6 +851,15 @@ class SelfTestRun {
     mkdirSync(agentDir, { recursive: true });
     mkdirSync(cwd, { recursive: true });
     const marker = join(cwd, "t14-marker.txt");
+    /**
+     * 给 **bash 命令**用的路径形态。
+     *
+     * ⚠️ Windows（Git Bash）会把命令里的反斜杠当**转义**吃掉：`touch C:\Users\x\y.txt` 实际建出来的是
+     * cwd 下一个叫 `C:Usersxy.txt` 的文件 —— 于是"允许之后文件不存在"（断言里用的是 Windows 形态的路径）
+     * 会以 `E_APPROVAL_NOT_EXECUTING` 收场。**W0 真机验收就是这么红的**（S8-plan §11 的 W0-1）。
+     * 前斜杠两种 shell 都认（MSYS 会把它转成 `/c/...`），所以**凡是拼进 bash 命令的路径，一律前斜杠**。
+     */
+    const bashMarker = marker.split("\\").join("/");
 
     const bootstrap = await pi.ModelRuntime.create({
       authPath: join(agentDir, "auth.json"),
@@ -952,7 +961,7 @@ class SelfTestRun {
 
     try {
       // ① 拒绝 → 工具没执行，且 agent 收到我们给的原因
-      script([{ id: "t14-1", name: "bash", arguments: { command: `touch ${marker}` } }]);
+      script([{ id: "t14-1", name: "bash", arguments: { command: `touch ${bashMarker}` } }]);
       await withTimeout(host.session.prompt("go"), 15_000, "T14 拒绝轮的 prompt()");
       if (existsSync(marker)) fail("E_APPROVAL_NOT_BLOCKING", "拒绝之后 bash 仍然执行了（文件被创建）");
       const denied = toolResultTexts();
@@ -962,7 +971,7 @@ class SelfTestRun {
 
       // ② 允许 → 真的执行
       answer = "allow";
-      script([{ id: "t14-2", name: "bash", arguments: { command: `touch ${marker}` } }]);
+      script([{ id: "t14-2", name: "bash", arguments: { command: `touch ${bashMarker}` } }]);
       await withTimeout(host.session.prompt("again"), 15_000, "T14 允许轮的 prompt()");
       if (!existsSync(marker)) fail("E_APPROVAL_NOT_EXECUTING", "允许之后 bash 没有执行（文件不存在）");
 
@@ -977,7 +986,7 @@ class SelfTestRun {
       mode = "all";
       answer = "hang";
       rmSync(marker, { force: true });
-      script([{ id: "t14-4", name: "bash", arguments: { command: `touch ${marker}` } }]);
+      script([{ id: "t14-4", name: "bash", arguments: { command: `touch ${bashMarker}` } }]);
       const running = host.session.prompt("hang").then(() => "resolved", () => "threw");
       // 等的是"**这一轮**又问了一次"（`asked` 里前面几轮也有 bash，用个数比对，
       // 否则循环立刻退出、下面那条断言会看到 0 而误报）
