@@ -160,7 +160,8 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
   - 点「拒绝」→ 工具**不执行**，agent 收到一句 `Rejected by user: <这次调用要做什么>`（它能看到被拒的是什么，可以换个做法）；
   - 待确认时点「中止」→ 这一轮结束、待确认项被清掉；
   - **它拦的是"工具调用"，不是"权限"**：允许一次 `bash` 就是允许那条命令能做的一切（写文件、删东西、联网都一样）；批准 `write`/`edit` 就是批准那次写。想要更细的边界请用 pi 自己的工具白名单/`shellPath` 和操作系统权限。
-  - 面板**重开后**那张卡片还在（按钮还在，可以继续答）；只有重启 VS Code 才会丢掉"待确认"这件事（那时这一轮本来也已经中止了）。
+  - 面板**重开后**那张卡片还在（按钮还在，可以继续答）；只有重启 VS Code 才会丢掉"待确认"这件事（那时这一轮本来也已经中止了）；
+  - **一次只有一个待确认项**：pi 是"逐个预检"的（同一批里前一个没答完，后一个连卡片都还没出现），所以没有"允许本批剩余全部"这种东西。
 - **没打开工作区时，会话的 cwd 是用户主目录**：`bash` 与文件工具会以 `~`（Windows 上是 `C:\Users\<你>`）为工作目录运行，Output 里会写一行提示。**请先打开一个工作区**再用面板，否则模型的操作范围不受任何目录约束。
 - **无 Node 的机器上不支持 `npm:` 包源**，也不支持带 `package.json` 的 git 包源（二者都需要 `npm`）；本地路径包源可用。
 - **Bedrock SigV4a** 需要额外的 `@aws-sdk/signature-v4-crt` 包，本扩展不带，相关场景会明确报错。
@@ -173,7 +174,8 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
   - 目录没有这些资源时**根本不问**（此时信任与否不影响任何事）；`settings.json` 里的 `defaultProjectTrust` 是 `always`/`never` 时也不问；
   - 信任之后加载的是**这个仓库自带**的配置：项目 `.pi/settings.json` 能改 `shellPath`、默认工具等。**它改不了 `jerrypi.approvalMode`**（那是 VS Code 的机器级设置，只有你能改）；
   - **这与 VS Code 的「工作区信任」是两回事**：后者决定要不要在这个窗口里启用扩展（我们已声明不受信任的工作区不启用），前者决定要不要加载这个仓库自带的 pi 配置；
-  - 改判之后要**新建会话或重载窗口**才生效（信任是在建会话时裁决的，`Pi: Project Trust…` 会提示这一句）。
+  - 改判之后要**新建会话或重载窗口**才生效（信任是在建会话时裁决的，`Pi: Project Trust…` 会提示这一句）；
+  - **pi 扩展的 `project_trust` 事件不会被触发**：终端 `pi` 允许全局扩展在信任流程里表态（"我信任这些目录"就自动放行），面板**不支持**这件事 —— 那些扩展在这里只会被**多问一次**（这是刻意的：那个事件的语义只能按猜实现，宁可多问，不能悄悄放权）。
 - **生成中切换模型不影响本轮**：pi 只改 `state.model`，正在跑的那轮仍用旧模型（下一轮生效）。切模型本身是**异步**的（要校验凭据），面板在切换完成前仍显示旧值。
 - **面板里选的模型只在本窗口有效**：面板内的选择不写入 pi 的 `settings.json`（等价于 pi TUI 里"选了但没按 Ctrl+S 保存"），重开窗口会回到 pi 的默认/你自己的设置。写入设置属于 S6。
 - **模型列表是"这台机器上 pi 的目录"，而且不会自己联网更新**：面板直接用 pi 的 `getAvailable()`（不硬编码、不过滤），而 pi 会把**内置目录**与 `<agentDir>/models-store.json`（缓存）合并。我们的运行时**显式关掉了自动联网刷新**（`allowModelNetwork: false`），所以面板不会替用户往外发请求 —— 代价是新模型名（例如 `deepseek-flash`）**不会自动出现**。需要跟上时跑 **`Pi: Refresh Model Catalog`**（点了才联网，刷新的是 `<agentDir>/models-store.json`）；也可以把别的 pi 环境刷出来的同格式文件直接复制到这台机器的 `<agentDir>` 下，重启面板即生效。
@@ -339,7 +341,8 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full notices and lice
   - "Deny" → the tool **does not run**, and the agent receives `Rejected by user: <what this call wanted to do>` so it can try something else;
   - "Abort" while an approval is pending ends that turn and clears the pending item;
   - **It gates tool calls, not permissions**: allowing one `bash` call allows everything that command can do (writing files, deleting things, network); allowing `write`/`edit` allows that write. For finer boundaries use pi's own tool allow-lists/`shellPath` and OS permissions.
-  - The card **survives a panel reload** (the buttons come back); only restarting VS Code drops a pending approval (by which point the turn has ended anyway).
+  - The card **survives a panel reload** (the buttons come back); only restarting VS Code drops a pending approval (by which point the turn has ended anyway);
+  - **only one approval is pending at a time**: pi preflights tool calls one by one (in a batch, the next call's card does not even exist until the previous one is answered), so there is no "allow the rest of this batch".
 - **With no workspace open, the session cwd is your home directory**: `bash` and the file tools then use `~` (on Windows `C:\Users\<you>`) as the working directory, and the output channel says so. **Open a workspace first**, otherwise nothing constrains where the agent operates.
 - **`npm:` and git package sources are unavailable on machines without Node/npm**; local-path sources work.
 - **Bedrock SigV4a** requires an extra `@aws-sdk/signature-v4-crt` package that is not bundled; affected setups fail with an explicit error.
@@ -354,7 +357,8 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full notices and lice
   - a folder with none of those resources is **never asked about** (trust would change nothing there), and `defaultProjectTrust` set to `always`/`never` in `settings.json` skips the dialog too;
   - trusting loads **the repo's own** config: its `.pi/settings.json` can change `shellPath`, the default tool set, etc. It **cannot** change `jerrypi.approvalMode` (that is a machine-scoped VS Code setting only you control);
   - **This is not VS Code's workspace trust**: that one decides whether extensions run in this window at all (we declare that we do not activate in untrusted workspaces); this one decides whether the repo's pi config gets loaded;
-  - after changing your answer, **start a new session or reload the window** (trust is resolved when a session is created; the command says so).
+  - after changing your answer, **start a new session or reload the window** (trust is resolved when a session is created; the command says so);
+  - **the `project_trust` event of pi extensions is never emitted**: the terminal `pi` lets global extensions weigh in on trust ("I trust these folders" ⇒ auto-approve); the panel **does not** do that — such extensions simply cause **one extra prompt** here (deliberate: that event's semantics could only be guessed, and asking again is the safe direction).
 - **Remote images are not loaded**: a markdown `![](https://…)` is downgraded to its alt text. Allowing remote images would turn a model-controlled URL into an outbound channel (a 1×1 pixel can encode content in its query string), so inside messages **only `data:image/...` is allowed** (the CSP reads `img-src <extension's own resources> data:` and also allows the extension's own icons); no remote URL is ever fetched.
 - **Images are not displayed**: reading an image shows a single `[Image: image/png]` line. Rendering it would mean pushing base64 through the protocol (a single image can be several MB) and blowing the replay budget; this is also exactly how pi degrades on a terminal without image support.
 - **pi extensions that rely on `ctx.ui.custom()` do not work in the panel**: that API renders a full-screen TUI component and needs a real TUI instance, which an extension host cannot provide. Such commands show an **explicit error** (rather than failing silently); everything else about the extension keeps working.

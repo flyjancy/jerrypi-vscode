@@ -594,11 +594,23 @@ NODE_USE_ENV_PROXY=1 node scripts/compare-vsix.mjs 0.1.11   # 本机代理只写
 | 轮 | 结果 |
 | --- | --- |
 | 0.1.11（第一次） | `T14 FAIL E_APPROVAL_NOT_EXECUTING`（"允许之后 bash 没有执行"）；其余 14 项 PASS、`T12 SKIP E_NO_PI`（预期）。**根因是 T14 夹具的路径写法**：`touch C:\Users\…` 里的反斜杠被 Git Bash 当转义吃掉（§11 的 W0-1，本机已复现同一机制）—— 产品本身没问题（T14 的拒绝/中止两条都过了，说明审批门在 Windows 上工作） |
-| 0.1.12 | 修掉路径写法后重打包：`GATE PASS`（16 项）—— 等 Windows 复跑确认 |
+| **0.1.12（复验）** | ✅ **`GATE PASS`（15 PASS / 0 FAIL / 1 SKIP = T12）**：`T14 PASS 三档 + 拒绝/允许/中止都符合；问过 3 次（bash）`；T12 SKIP E_NO_PI 预期（那台机器没有 `pi`）；其余 14 项含真模型项全部 PASS（`T4 delta=[text_delta, thinking_delta]`、`T6 patch 287 字符 + before=null/newFile 已核对`） |
+| **0.1.12 发布核验** | ✅ `NODE_USE_ENV_PROXY=1 node scripts/compare-vsix.mjs 0.1.12`：338 个文件逐个字节相同、整体 `.vsix` 字节也相同（6,050,314 字节 / `3ffd7adccfa1c8fb2b3afc162ca94f4eceb7260100554ce49342c2f2d2c553ae`）、留档 + tag `v0.1.12` |
+| W1 | ⏳ 待确认（重启 VS Code → 面板自动接过上一会话、能直接打字） |
 
 ### 12.4 已知未覆盖
 
-（待 Windows 验收完一起写）
+| 项 | 为什么 | 记在哪 |
+| --- | --- | --- |
+| **键盘激活（Tab + Enter）** 只由真机覆盖 | happy-dom **不实现** `<button>` 的原生激活 —— 任何"按 Enter 会怎样"的断言在那台测试上都是恒绿的（第 2 轮评审 B1 实测），所以自动化只能守**结构**（A8b(b)：真 `<button type="button">`），行为留给 M1 的第 ④ 条 | §3.3 · §6 A8b · §12.3 M1④ · README |
+| **macOS 模态会多一个 `Cancel`** | 那是系统原生行为（我们只传了三个按钮），API 控制不了；`Cancel` 与 `Esc` 一样落到"不信任且不写文件" | §11 的 M2-2 · README 没写（不值得让用户操心） |
+| **`project_trust` 扩展事件不触发**（Q6） | 符号没导出、语义只能猜，且没有第二份实现能对照 ⇒ 不做（方向安全：少一个自动同意） | §2 不做清单 · §4 Q6 · README 已知限制（本轮补写） |
+| **"允许本批剩余全部" / "本会话不再问这个工具"** | 同时只有一个待审批项（F5），"剩余"在 UI 上还不存在；"不再问"是降低安全档位的捷径，要单独设计 | §2 不做清单 · §4 Q2 · README 已知限制（本轮补写） |
+| **重启 VS Code 后待审批项丢失** | 审批是"此刻"的事；重启后那一轮本来也已中止 | README 已知限制 |
+| 审批**挡不住 `bash` 的间接副作用** | `bash` 本身就是一档权限：批准一条命令 = 批准它能做的一切（README 明写） | §5 R1 · README 已知限制 |
+| `WebviewView.onDidDispose` 在隐藏/重挂时到底发不发 | 本仓**没测过**（`retainContextWhenHidden: true` 下是版本相关行为），Q10 的裁决也不依赖它 | §0.3 F26 |
+| 真机上"面板不可见"只有一次（M1 ⑥） | 覆盖到了即可；`onDidDispose` 那条路只由 A7 的假 view 断言 | §12.3 · §6 A7 |
+| Windows 上的 `T12 SKIP`（没有 `pi` CLI） | 那台机器的 PATH 上没有 `pi`（受限机的常态），T12 是 advisory | S1-plan · §8 |
 
 ## 13. 待用户拍板
 
