@@ -374,7 +374,13 @@ type FileChange =
 | M2 重载后的口径 | ✅ `Developer: Reload Window` 后同一会话恢复（Output 里的会话文件路径不变）；两张 **edit** 卡片的「查看 diff」**仍可打开**且内容正确（从会话文件里的 `details.patch` 重建）；三张 **write** 卡片显示「本次会话不可用」且**不可点** |
 | 用户在验收中提的 4 个问题 | 全部核过并记进 §11（M1-1…M1-4）：红条 / `tail` / `Took 0.0s` / 窄列的上下视图**都是预期行为**；只有第 4 条顺带补了 README 一句话 |
 
-**Windows（W0/W1）—— 待做（0.1.9 上传后）**
+**Windows（W0/W1）—— ✅ PASS（2026-09-15，0.1.9 从 Marketplace 装，Verified）**
+
+| 项 | 结果 |
+| --- | --- |
+| W0 `Pi: Run Self-Test` | **`GATE PASS`：14 PASS / 0 FAIL / 1 SKIP**（`T12 SKIP E_NO_PI` 预期 —— 那台机器没有 `pi`）。首行确认是 `flyjancy.jerrypi 0.1.9 selftest-v1 win32 node=24.18.1`；`T6` 的返回行带上了 S7 的新核对（`before=null/newFile 已核对`）；`T13` 仍是 advisory（`fetch=wrapped；http.proxySupport=override；http.proxy=(未设)；代理环境变量存在=[…]；PI_OFFLINE=未设`） |
+| W1 重启 VS Code → 面板 | ✅ 用户确认"没问题"（自动接过上一会话、能直接打字） |
+| diff 的 Windows 项 | **不新增人工动作**（§8 的口径）：解析与虚拟文档与平台无关，Windows 形态的路径与 URI 编码已由 host-check 的 A3 覆盖 |
 
 ### 12.4 已知未覆盖
 
