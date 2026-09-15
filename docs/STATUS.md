@@ -11,11 +11,11 @@
 
 ## 1. 现在
 
-**进行中**：**S7 已关闭**（2026-09-15）—— 0.1.9 已发布并逐字节核验（tag `v0.1.9`），Mac（M1/M2）与 Windows（W0 `GATE PASS` 14/0/1、W1 正常）都验过。**下一步：等你拍板是否开始 S8**（工具审批三档 + 项目信任流程；按流程先写计划 → 送评审 → 摆默认值给你）
+**进行中**：**S8 计划已起草，待评审**（`docs/S8-plan.md`：工具审批三档 + 项目信任流程；§0 的 25 条事实全部带证据，其中两条探针**已落盘可重跑** —— `scripts/probes/s8-approval-probe.mjs`、`scripts/probes/s8-trust-probe.mjs`）。**下一步：送评审（≤3 轮）→ 把 §4 的 Q1–Q9 默认值摆给你拍板 → 你说“可以”才动代码**
 
 | | |
 | --- | --- |
-| 阶段 | **S5、S6、S7 均已关闭**；**下一步 S8**（工具审批 + 项目信任，待拍板开始） |
+| 阶段 | **S5、S6、S7 均已关闭**；**S8 计划期**（工具审批 + 项目信任；计划已写，待评审） |
 | 最新发布 | **0.1.9**（2026-09-14，预发布；S7 的全部内容；上一个 0.1.8） |
 | 发布核验 | `node scripts/compare-vsix.mjs 0.1.9` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,037,572 字节 / `85db1434…` 的 SHA-256，Marketplace 显示 **Verified**）；tag `v0.1.9`；留档 `~/jerrypi-releases/jerrypi-0.1.9.vsix`（0.1.8：338 文件 / `30505f6e…`；0.1.7：338 文件 / `04c60b7b…`） |
 | 真机验收 | S4：Mac ✅ ／ Windows ✅（S4-plan §12.3）｜ S5：Mac ✅ ／ Windows ✅（S5-plan §12.3）｜ S6：Mac ✅ ／ Windows ✅（S6-plan §12.3）｜ **S7：Mac ✅ ／ Windows ✅**（**W0 `GATE PASS` 14 PASS / 0 FAIL / 1 SKIP = T12；W1 正常**；T6 带上了 `before=null/newFile` 的核对 —— S7-plan §12.3） |
@@ -48,22 +48,20 @@
 | **旧位置**的会话不会被自动搬 | ≤0.1.6 写的会话平铺在 `~/.pi/agent/sessions/` 根上，面板与 `pi --resume` 都看不到（但没丢：`cd ~ && pi --session-dir ~/.pi/agent/sessions --resume`）；符号链接写法下写过的会话同理。**刻意不替用户搬数据** | README 已知限制 · S5-plan §3.8 / §11 的 6-9 |
 | 多写者检测（同一个会话被两边同时写） | 只写进了已知限制，没做检测。候选：记下 `.jsonl` 的 `size+mtime`，下一条消息前比一次 | S5-plan 的 R8 |
 | 「真·后台并行」（切走让旧会话继续跑，像 Codex/Claude 插件那样） | 划出 S5：需要"多会话宿主"（多份 runtime + 事件分流 + 多份 UI 状态），且并行会撞 R8 的两个写者 | S5-plan §2 / §4 D7 / §12.4 |
-| 项目级设置（`.pi/settings.json` 等） | 固定 `projectTrusted: false`，信任流程没做。⚠️ **这不是 S6 的欠账**：早期计划（S1/S2/S5）的指针写着“信任 UI 在 S6”，而 `PLAN.md` §6 的 S6 范围里从来没有它（S6 的 4 轮评审也没审过）。**用户 2026-09-14 拍板：排到 S8**（与工具审批同阶段，见 `PLAN.md` §6 的 S8 注；具体设计待 S8 计划期，尚未评审） | S1-plan §4.3 · S2-plan §7 · S5-plan §4；**PLAN.md §6 的 S8 注** |
-| **三项 `jerrypi.*` 设置** | `agentDir` **已生效**（进程环境变量 + 重载窗口）；`proxy` 未实现（T13 只报告，Q2 不做第二层）；`approvalMode` 只登记、未生效（**S8**）。README 配置表中英双语逐条标明（`settings-check` 钉住） | README 配置表 + 已知限制 |
+| 项目级设置（`.pi/settings.json` 等） | 固定 `projectTrusted: false`，信任流程没做。⚠️ **这不是 S6 的欠账**：早期计划（S1/S2/S5）的指针写着“信任 UI 在 S6”，而 `PLAN.md` §6 的 S6 范围里从来没有它（S6 的 4 轮评审也没审过）。**用户 2026-09-14 拍板：排到 S8**（与工具审批同阶段）。设计已写进 **`docs/S8-plan.md` §3.4/§4 的 Q5–Q7（待评审）** | S1-plan §4.3 · S2-plan §7 · S5-plan §4；**PLAN.md §6 的 S8 注** · S8-plan |
+| **三项 `jerrypi.*` 设置** | `agentDir` **已生效**（进程环境变量 + 重载窗口）；`proxy` 未实现（T13 只报告，Q2 不做第二层）；`approvalMode` 只登记、未生效 —— **S8 计划里就是让它生效**（`docs/S8-plan.md` §3.1/§3.3，待评审）。README 配置表中英双语逐条标明（`settings-check` 钉住） | README 配置表 + 已知限制 · S8-plan |
 | `ctx.ui.custom()` 类扩展命令 | 设计上不支持（终端 TUI 专有），会给明确错误 | README 已知限制 |
 | 模型目录**不会自动联网**刷新 | 我们显式写死 `allowModelNetwork: false`（刻意：不替用户往外发请求），所以新模型名（如 `deepseek-flash`）不会自己出现。现在有显式入口 `Pi: Refresh Model Catalog`（点才联网，A12 守住“自动路径不碰 pi.dev”） | README 已知限制 · S6-plan §3.5 / §6
 
-## 3. 下一步（S7：diff 审阅）
+## 3. 下一步（S8：工具审批 + 项目信任）
 
-**S5、S6 已关闭**（S6 的完整过程：`docs/S6-plan.md` §11 实施期发现 / §12 实施与验收结果；发布 0.1.8）。
+**S5、S6、S7 已关闭**（S7 的完整过程：`docs/S7-plan.md` §11 实施期发现 / §12 实施与验收结果；发布 0.1.9）。
 
-S7 的范围（`docs/PLAN.md` §6）：`filechanges.ts` + `diff.ts` —— 按 `toolCallId` 收集 `edit` 的 patch 与 `write` 的前后内容，`edit` 卡片能打开真实 diff。
-验收（PLAN 原文）：让 agent 在**同一条消息里**对同一文件发出两次 edit，两张卡片各自只显示该次 patch；同一条消息里两次 write 同一文件，两张卡片前后内容各自正确；重启 VS Code 恢复会话后，edit 卡片的 diff 仍可打开，write 卡片显示“本次会话不可用”。
+S8 的范围（`docs/PLAN.md` §6）：`approval.ts` 三档工具审批（开 `all` 后每次工具调用停在面板等确认；拒绝后 agent 收到 block 原因；待审批时点中止，待审批项被清除且 agent 结束），加上**用户 2026-09-14 拍板追加**的项目级设置信任流程。
 
-**S6 关闭时排给 S8 的一件事**：项目级设置的信任流程（见 §2 与 `PLAN.md` §6 的 S8 注）。
-
-下一步：写 `docs/S7-plan.md` → 送评审（≤3 轮）→ 把默认值摆给用户 → 用户说“可以”才动代码。
-（S6 的流程可照抄：`docs/S6-plan.md` 是这一整套纪律的最新样例。）
+计划已经写完（`docs/S8-plan.md`），当前**卡在“送评审”**这一步：评审（≤3 轮）→ 把 §4 的 Q1–Q9 默认值摆给用户 → 用户说“可以”才动代码。
+阶段内还欠的两件事已经在计划里落地了指向：① Windows 的自动覆盖靠新增的 **T14**（工具审批，**不用模型** —— 见 §0.1 的 F8）进 `Pi: Run Self-Test`；② 版本仍是 **0.1.10**（`0.1.x` = 预发布通道，第一个正式版 0.2.0 与 `CHANGELOG.md` 是 S10 的事，`PLAN.md` §5.4）。
+（S7 的流程可照抄：`docs/S7-plan.md` 是这一整套纪律的最新样例。）
 
 ## 4. 发布流程（每次都一样）
 
