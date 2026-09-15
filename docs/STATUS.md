@@ -13,7 +13,11 @@
 
 **进行中**：**S9 计划期**（pi 包管理：`Pi: Install Package` / `Pi: List Packages` / `Pi: Remove Package`）。
 计划已写完：`docs/S9-plan.md`（§0 有 28 条带证据的事实 + 两个**可重跑探针** —— `scripts/probes/s9-package-probe.mjs`、`scripts/probes/s9-reload-probe.mjs`；§4 是 Q1–Q8 待你拍板）。
-当前卡在**送评审**：评审（≤3 轮）→ 把 Q1–Q8 的默认值摆给用户 → 用户说“可以”才动代码。
+**第 1 轮评审已吸收完**（`VERDICT: BLOCKING`，3 B / 6 S / 5 N，14 条全部 ACCEPT —— §10.1）。
+其中 **B1 我先自己复现再改**：探针第 1 版 7 个场景共用一个进程与 agentDir ⇒ S2（F15 的唯一证据）是假绿；
+已重写成"每场景独立进程 + 独立 agentDir + 装包前前置断言"，重跑得到 `loader-only: []`、
+`settings+loader: []`（两步都不够）、`session-reload: ["pkg-two"]`（一步够，**F16 比原计划更强**）。
+**按用户要求暂不启动第 2 轮**；下一步：把 §4 的 Q1–Q8 摆给用户拍板（或等用户说"再送一轮"）。
 
 > S8 收尾（已关闭）：Mac（M1/M2）与 Windows（W0 `GATE PASS` 15 PASS / 0 FAIL / 1 SKIP = T12，含 T14；W1 正常）都验过；发布 **0.1.12**（逐字节核验、tag `v0.1.12`）。
 
