@@ -27,7 +27,7 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const STUB_PATH = path.join(SCRIPT_DIR, "fixtures", "vscode-stub.mjs");
 
 const stub = await import(pathToFileURL(STUB_PATH).href);
-const { resetStub, callsOf, stubCalls, queueQuickPickResponse, queueWarningResponse, queueInformationResponse, queueInputBoxAnswer, queueConfiguration, fireConfigurationChange } = stub;
+const { resetStub, callsOf, stubCalls, queueQuickPickResponse, queueWarningResponse, queueInformationResponse, queueInputBoxAnswer, queueConfiguration, fireConfigurationChange, setWorkspaceFolders } = stub;
 
 const results = [];
 const check = (name, ok, detail = "") => results.push([name, ok, detail]);
@@ -184,6 +184,8 @@ async function buildModules(tempDir) {
       `export { parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/approval"))};`,
       `export { createSessionHost } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/session"))};`,
       `export { createSelfTestUIContext } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/selftest-ui"))};`,
+      `export { createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/trust"))};`,
+      `export { createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/trustPrompt"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -201,7 +203,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES, createSessionHost, createSelfTestUIContext } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES, createSessionHost, createSelfTestUIContext, createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS, createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 const vscodeStub = await import(pathToFileURL(STUB_PATH).href);
@@ -2125,6 +2127,333 @@ check(
   await view2.send({ type: "ready", protocol: PROTOCOL_VERSION });
   check("A7/Q10：重建面板后快照里仍有 pending → 也弹一次", callsOf("showInformationMessage").length === 1, JSON.stringify(callsOf("showInformationMessage")));
   snapshotItems = [];
+}
+
+
+// ------------------------------------- S8 第 5 步：项目信任（A10/A11/A12/A13/A14）
+//
+// 夹具分三层，按"离实现有多近"排：
+//   · A10 用**真 pi**（`createAgentSessionServices` + 真 `ProjectTrustStore` + 真 settings.json）——
+//     观察点是 pi 自己的 `isProjectTrusted()` 与 `getActiveToolNames()`，不是我们的镜像；
+//   · A11/A12 用**真 trust.json**（临时 agentDir）验裁决顺序与"只写 true"；
+//   · A13/A14 用 `vscode` 桩验对话框/QuickPick 的映射（真模态只有真机能验）。
+{
+  const piModule = await loadPi(REPO_ROOT);
+  const trustRoot = () => fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "s8-trust-"));
+  const quiet = { lines: [], appendLine(line) { this.lines.push(line); } };
+  /** 假的信任存储（只给"裁决顺序"那组用；A10/A12/A14 一律用 pi 的真 store）。 */
+  const fakeStore = (initial = {}) => {
+    const data = { ...initial };
+    const writes = [];
+    return {
+      data,
+      writes,
+      get: (cwd) => (cwd in data ? data[cwd] : null),
+      set(cwd, decision) { writes.push([cwd, decision]); if (decision === null) delete data[cwd]; else data[cwd] = decision; },
+      setMany(decisions) { for (const { path, decision } of decisions) this.set(path, decision); },
+    };
+  };
+
+  // ---- A10：信任之后项目级设置真的生效（真 pi + 真文件）
+  {
+    for (const [label, trusted] of [["信任", true], ["不信任", false]]) {
+      const root = trustRoot();
+      const agentDir = path.join(root, "agent");
+      const cwd = path.join(root, "proj");
+      fs.mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+      fs.mkdirSync(agentDir, { recursive: true });
+      // 唯一一个"面板里看得见"的项目级效果（F13）：defaultTools 会改 getActiveToolNames()
+      fs.writeFileSync(path.join(cwd, ".pi", "settings.json"), JSON.stringify({ defaultTools: ["read"] }));
+      const settingsManager = piModule.SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+      let asked = 0;
+      const resolver = createTrustResolver({
+        cwd,
+        trustStore: new piModule.ProjectTrustStore(agentDir),
+        hasRequiringResources: (value) => piModule.hasTrustRequiringProjectResources(value),
+        defaultProjectTrust: () => "ask",
+        ask: async () => {
+          asked += 1;
+          return { trusted, remember: false };
+        },
+        log: quiet,
+      });
+      const services = await piModule.createAgentSessionServices({
+        cwd,
+        agentDir,
+        settingsManager,
+        resourceLoaderReloadOptions: { resolveProjectTrust: resolver },
+      });
+      const created = await piModule.createAgentSessionFromServices({
+        services,
+        sessionManager: piModule.SessionManager.create(cwd, path.join(root, "sessions", "--probe--")),
+        customTools: [],
+      });
+      const tools = created.session.getActiveToolNames().join(",");
+      const isTrusted = services.settingsManager.isProjectTrusted();
+      if (trusted) {
+        check("A10：信任之后 pi 自己认这个工作区已被信任", isTrusted === true && asked === 1, JSON.stringify({ isTrusted, asked }));
+        check("A10：项目级 defaultTools 真的生效（可用工具集只剩 read）", tools === "read", tools);
+
+        // ⑨ 装配那一层：**生产路径**（`createSessionHost`）真的把钩子交给了 `createAgentSessionServices`。
+        //    少了这一条，"裁决函数本身对"与"我们把它接上了"就会各绿一次、合起来是坏的
+        //    （实测：把 session.ts 里那三行删掉，上面两条照样绿）。
+        const host = await createSessionHost({
+          pi: piModule,
+          cwd,
+          agentDir,
+          sessionManager: piModule.SessionManager.create(cwd, path.join(root, "sessions", "--host--")),
+          keys: { listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {}, removeApiKey: async () => {} },
+          uiContext: createSelfTestUIContext({ appendLine() {} }),
+          mode: "rpc",
+          sink: { appendLine() {} },
+          projectTrust: { ask: async () => ({ trusted: true, remember: false }) },
+        });
+        try {
+          // 注意判据：生产路径会把自己的 `write` 包装作为 customTools 挂上（S7），
+          // 所以这里**不是**"只剩 read"，而是"项目设置把 bash/edit 拿掉了"。
+          const hostTools = host.session.getActiveToolNames();
+          check(
+            "A10：生产装配路径（createSessionHost）真的把信任钩子接上了",
+            host.runtime.services.settingsManager.isProjectTrusted() === true &&
+              hostTools.includes("read") &&
+              !hostTools.includes("bash") &&
+              !hostTools.includes("edit"),
+            JSON.stringify({ trusted: host.runtime.services.settingsManager.isProjectTrusted(), tools: hostTools }),
+          );
+        } finally {
+          await host.dispose();
+        }
+      } else {
+        check("A10：不信任时项目设置不生效（四个内置工具都在）", isTrusted === false && tools === "read,bash,edit,write", JSON.stringify({ isTrusted, tools }));
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // ---- A11：裁决顺序（memo → 没资源 → trust.json → defaultProjectTrust → 问）
+  {
+    const cwd = "/w/proj";
+    // ① memo：同一个 resolver 问两次只问一遍
+    {
+      const store = fakeStore();
+      let asked = 0;
+      const resolver = createTrustResolver({
+        cwd, trustStore: store, hasRequiringResources: () => true,
+        defaultProjectTrust: () => "ask",
+        ask: async () => { asked += 1; return { trusted: true, remember: false }; },
+        log: quiet,
+      });
+      const first = await resolver({});
+      const second = await resolver({});
+      check("A11①：同一个 cwd 只裁决一次（memo）", first === true && second === true && asked === 1, JSON.stringify({ first, second, asked }));
+    }
+    // ② trust.json 里有记录（true 或 false）→ 直接用、不问
+    for (const saved of [true, false]) {
+      const store = fakeStore({ [cwd]: saved });
+      let asked = 0;
+      const resolver = createTrustResolver({
+        cwd, trustStore: store, hasRequiringResources: () => true,
+        defaultProjectTrust: () => "ask",
+        ask: async () => { asked += 1; return { trusted: !saved, remember: false }; },
+        log: quiet,
+      });
+      const outcome = await resolver({});
+      check(`A11②：trust.json 里的 ${saved} 直接用、不问（CLI 写的 false 也认）`, outcome === saved && asked === 0, JSON.stringify({ outcome, asked }));
+    }
+    // ③ 没有需要信任的资源 → 不问、按信任
+    {
+      const store = fakeStore();
+      let asked = 0;
+      const resolver = createTrustResolver({
+        cwd, trustStore: store, hasRequiringResources: () => false,
+        defaultProjectTrust: () => "ask",
+        ask: async () => { asked += 1; return { trusted: false, remember: true }; },
+        log: quiet,
+      });
+      check("A11③：没有 .pi/.agents 资源时直接信任、不问（F14）", (await resolver({})) === true && asked === 0 && store.writes.length === 0, JSON.stringify({ asked, writes: store.writes }));
+    }
+    // ④ defaultProjectTrust 的 always / never 直接短路
+    for (const [fallback, expected] of [["always", true], ["never", false]]) {
+      const store = fakeStore();
+      let asked = 0;
+      const resolver = createTrustResolver({
+        cwd, trustStore: store, hasRequiringResources: () => true,
+        defaultProjectTrust: () => fallback,
+        ask: async () => { asked += 1; return { trusted: !expected, remember: false }; },
+        log: quiet,
+      });
+      check(`A11④：defaultProjectTrust=${fallback} → ${expected}、不问`, (await resolver({})) === expected && asked === 0, JSON.stringify({ asked }));
+    }
+    // ⑤ 询问答案的落盘规则（Q5：只有"记住且信任"才写；**从不写 false**）
+    for (const [label, answer, expectWrite] of [
+      ["记住 + 信任", { trusted: true, remember: true }, true],
+      ["仅本次信任", { trusted: true, remember: false }, false],
+      ["不信任（记住了也不写）", { trusted: false, remember: true }, false],
+    ]) {
+      const store = fakeStore();
+      const resolver = createTrustResolver({
+        cwd, trustStore: store, hasRequiringResources: () => true,
+        defaultProjectTrust: () => "ask", ask: async () => answer, log: quiet,
+      });
+      await resolver({});
+      check(`A11⑤：${label} → ${expectWrite ? "写一条 true" : "不写文件"}`, (store.writes.length > 0) === expectWrite && (!expectWrite || store.data[cwd] === true), JSON.stringify(store.writes));
+    }
+    // ⑥ 问不出来（对话框崩了）→ 不信任、不写文件
+    {
+      const store = fakeStore();
+      const resolver = createTrustResolver({
+        cwd, trustStore: store, hasRequiringResources: () => true,
+        defaultProjectTrust: () => "ask",
+        ask: async () => { throw new Error("panel gone"); },
+        log: quiet,
+      });
+      check("A11⑥：询问失败 → 按不信任处理且不写文件（安全方向）", (await resolver({})) === false && store.writes.length === 0, JSON.stringify(store.writes));
+    }
+  }
+
+  // ---- A12：只写 true、只写一次（真 trust.json）
+  {
+    const cases = [
+      ["信任并记住", { trusted: true, remember: true }, true],
+      ["仅本次信任", { trusted: true, remember: false }, false],
+      ["不信任", { trusted: false, remember: false }, false],
+      // 这条防的是"记住了不信任"被写进文件（CLI 会这么写，我们不写 —— Q5）
+      ["不信任（且记住了）", { trusted: false, remember: true }, false],
+    ];
+    for (const [label, answer, shouldExist] of cases) {
+      const root = trustRoot();
+      const agentDir = path.join(root, "agent");
+      const cwd = path.join(root, "proj");
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.mkdirSync(cwd, { recursive: true });
+      const store = new piModule.ProjectTrustStore(agentDir);
+      const trustFile = path.join(agentDir, "trust.json");
+      const resolver = createTrustResolver({
+        cwd, trustStore: store, hasRequiringResources: () => true,
+        defaultProjectTrust: () => "ask", ask: async () => answer, log: quiet,
+      });
+      const outcome = await resolver({});
+      const exists = fs.existsSync(trustFile);
+      if (shouldExist) {
+        const raw = JSON.parse(fs.readFileSync(trustFile, "utf8"));
+        const key = Object.keys(raw)[0];
+        check("A12：选「信任并记住」→ trust.json 里恰好一条 true（key 是 canonical 路径）", exists && raw[key] === true && Object.keys(raw).length === 1 && path.isAbsolute(key), JSON.stringify({ exists, raw }));
+        check("A12：真实存储回读得到", store.get(cwd) === true && outcome === true, JSON.stringify({ get: store.get(cwd), outcome }));
+      } else {
+        check(`A12：选「${label}」→ trust.json **一个字节都没变**（空目录时仍然不存在）`, exists === false, JSON.stringify({ exists, files: fs.existsSync(agentDir) ? fs.readdirSync(agentDir) : [] }));
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // ---- A13：模态询问的映射（vscode 桩）
+  {
+    resetStub();
+    const prompter = createTrustPrompter({ log: quiet });
+    const cwd = "/w/proj";
+    for (const [label, queued, expected] of [
+      ["点「信任并记住」", TRUST_REMEMBER_ITEM, { trusted: true, remember: true }],
+      ["点「仅本次信任」", TRUST_SESSION_ITEM, { trusted: true, remember: false }],
+      ["点「不信任」", TRUST_DENY_ITEM, { trusted: false, remember: false }],
+      ["ESC/关掉", undefined, { trusted: false, remember: false }],
+    ]) {
+      queueWarningResponse(queued);
+      const answer = await prompter.ask(cwd);
+      check(`A13：${label} → ${JSON.stringify(expected)}`, JSON.stringify(answer) === JSON.stringify(expected), JSON.stringify(answer));
+    }
+    const call = callsOf("showWarningMessage").at(-1);
+    check("A13：模态（modal:true）且标题里有那个文件夹", call?.options?.modal === true && String(call.message).includes(cwd), JSON.stringify(call?.options));
+    check("A13：三个按钮齐全", JSON.stringify(call?.items) === JSON.stringify([TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM]), JSON.stringify(call?.items));
+    check("A13：文案说清两种触发源，并点明与 VS Code 工作区信任不是一回事", String(call.message).includes(".agents/skills") && String(call.message).includes("工作区信任"), String(call.message).slice(0, 60));
+  }
+
+  // ---- A14：`Pi: Project Trust…` 的动作映射（真 store + 真命令 + QuickPick 桩）
+  {
+    // ① 纯动作：五个动作各自改了什么
+    {
+      const root = trustRoot();
+      const agentDir = path.join(root, "agent");
+      const cwd = path.join(root, "proj");
+      const child = path.join(cwd, "sub");
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.mkdirSync(child, { recursive: true });
+      const store = new piModule.ProjectTrustStore(agentDir);
+      const memo = new Map();
+      check("A14：有五个动作、文案各不同", TRUST_ACTIONS.length === 5 && new Set(TRUST_ACTIONS.map((a) => TRUST_ACTION_LABELS[a])).size === 5, JSON.stringify(TRUST_ACTIONS));
+
+      memo.set(cwd, false);
+      applyTrustAction("trust-remember", { cwd, trustStore: store, memo, log: quiet });
+      check("A14：「信任并记住」→ 落盘 true 且清掉本进程旧裁决", store.get(cwd) === true && memo.get(cwd) === undefined, JSON.stringify({ get: store.get(cwd), memo: memo.get(cwd) }));
+
+      // 先给子目录塞一条记录（模拟 CLI 写过 false），再"信任父文件夹"
+      store.set(child, false);
+      const message = applyTrustAction("trust-parent", { cwd: child, trustStore: store, memo, log: quiet });
+      check("A14：「信任父文件夹」写**两条** update：父目录 true + 子目录记录清掉（第 1 轮评审 S6）", store.get(child) === true && message.includes(cwd), JSON.stringify({ childGet: store.get(child), message }));
+      check("A14：父目录那条真的在 trust.json 里", JSON.parse(fs.readFileSync(path.join(agentDir, "trust.json"), "utf8"))[cwd] === true);
+
+      applyTrustAction("trust-session", { cwd, trustStore: store, memo, log: quiet });
+      check("A14：「仅本次信任」只动 memo、不动文件", memo.get(cwd) === true && store.get(cwd) === true, JSON.stringify({ memo: memo.get(cwd) }));
+      applyTrustAction("deny-session", { cwd, trustStore: store, memo, log: quiet });
+      check("A14：「不信任（仅本次）」只动 memo、不写 false", memo.get(cwd) === false, JSON.stringify({ memo: memo.get(cwd) }));
+      const cleared = applyTrustAction("clear", { cwd, trustStore: store, memo, log: quiet });
+      check("A14：「清除记录」把记录删掉并清 memo", store.get(cwd) === null && memo.get(cwd) === undefined && cleared.includes("清除"), JSON.stringify({ get: store.get(cwd), message: cleared }));
+      check("A14：根目录没有「父文件夹」可信任（不越界）", trustParentOf("/") === undefined && trustParentOf("/a") === "/", JSON.stringify([trustParentOf("/"), trustParentOf("/a")]));
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+
+    // ② 命令层：真注册 + 真 store + QuickPick 桩（映射错了这里会红）
+    {
+      resetStub();
+      const root = trustRoot();
+      const agentDir = path.join(root, "agent");
+      const cwd = path.join(root, "proj");
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.mkdirSync(cwd, { recursive: true });
+      const savedAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
+      const savedCwd = process.cwd;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      // workspaceCwd() 读 vscode.workspace.workspaceFolders → 用桩预置
+      setWorkspaceFolders([{ uri: vscode.Uri.file(cwd) }]);
+      try {
+        const context = {
+          extensionUri: vscode.Uri.file(REPO_ROOT),
+          extension: { packageJSON: { version: "0.0.0-check" } },
+          subscriptions: [],
+          secrets: { get: async () => undefined, store: async () => {}, delete: async () => {} },
+          globalState: { get: (_k, fallback) => fallback, update: async () => {} },
+        };
+        const memo = new Map([[cwd, false]]);
+        let memoReads = 0;
+        const output2 = makeOutput();
+        registerCommands(context, output2, {
+          runModelPicker: async () => {},
+          runThinkingPicker: async () => {},
+          runNewSession: async () => {},
+          runSessionPicker: async () => {},
+          trustMemo: () => {
+            memoReads += 1;
+            return memo;
+          },
+        });
+        check("A14：命令 jerrypi.projectTrust 注册了", callsOf("registerCommand").some((c) => c.id === "jerrypi.projectTrust"), JSON.stringify(callsOf("registerCommand").map((c) => c.id)));
+        queueQuickPickResponse((items) => items.find((item) => item.action === "trust-remember"));
+        await vscodeStub.commands.executeCommand("jerrypi.projectTrust");
+        const stored = new piModule.ProjectTrustStore(agentDir).get(cwd);
+        check("A14：命令走的是同一条 applyTrustAction（真 store 落盘 + memo 被清）", stored === true && memo.get(cwd) === undefined && memoReads === 1, JSON.stringify({ stored, memo: memo.get(cwd), memoReads }));
+        check("A14：命令给了用户一句反馈", callsOf("showInformationMessage").some((c) => String(c.message).includes("已记住信任")), JSON.stringify(callsOf("showInformationMessage").map((c) => c.message)));
+        check("A14：QuickPick 的五个选项都在（含父文件夹的路径说明）", (() => {
+          const call = callsOf("showQuickPick").at(-1);
+          return call.items.length === 5 && call.items.some((i) => i.label === TRUST_ACTION_LABELS["trust-parent"]);
+        })(), JSON.stringify(callsOf("showQuickPick").at(-1)?.items?.map((i) => i.label)));
+      } finally {
+        setWorkspaceFolders([]);
+        void savedCwd;
+        if (savedAgentDirEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = savedAgentDirEnv;
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  }
 }
 
 // ----------------------------------------------------------------- 汇总

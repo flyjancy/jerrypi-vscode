@@ -24,6 +24,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { bindSession, type EventSink, type RuntimeMode, type SessionBinding } from "./bindings";
 import { createApprovalExtension, type ApprovalMode, type Approvals } from "./approval";
+import { createTrustResolver, type TrustAnswer } from "./trust";
 import { createCustomTools, type WriteRecorder } from "./custom-tools";
 import type { PiModule } from "./loader";
 import { getModelRuntime, type ApiKeyStore } from "./runtime";
@@ -46,6 +47,14 @@ export interface SessionHostOptions {
    * F10b：具名才有 `hidden`）；**档位每次调用现读**，所以改设置不需要重连会话。
    */
   approval?: { mode: () => ApprovalMode; approvals: Approvals };
+  /**
+   * S8：项目信任。给 host 侧的"问"（VS Code 模态）与跨会话的裁决缓存，
+   * 这里把它接成 pi 的 `resolveProjectTrust` 钩子（F11）。
+   *
+   * 不给 ⇒ **完全保持今天的行为**（`projectTrusted:false`、钩子都不传）——
+   * 自测与其它夹具因此不受影响。
+   */
+  projectTrust?: { ask: (cwd: string) => Promise<TrustAnswer>; memo?: Map<string, boolean> };
   /**
    * 是否信任工作区里的项目级设置。
    *
@@ -84,11 +93,32 @@ export async function createSessionHost(options: SessionHostOptions): Promise<Se
     sessionManager,
     sessionStartEvent,
   }) => {
+    // `projectTrusted` 只是**初值**：信任钩子返回之后由 loader 自己
+    // `setProjectTrusted` + 重新 reload（F11）。`defaultProjectTrust` 也从这份 manager 现读
+    // （它读的是 global settings —— 项目级的还轮不到，因为此刻还没信任）。
+    const settingsManager = pi.SettingsManager.create(cwd, agentDir, { projectTrusted });
+
+    // S8：信任裁决的接线。
+    const trustResolver =
+      options.projectTrust === undefined
+        ? undefined
+        : createTrustResolver({
+            cwd,
+            trustStore: new pi.ProjectTrustStore(agentDir),
+            hasRequiringResources: (value: string) => pi.hasTrustRequiringProjectResources(value),
+            defaultProjectTrust: () => settingsManager.getDefaultProjectTrust(),
+            ask: options.projectTrust.ask,
+            log: options.sink,
+            ...(options.projectTrust.memo === undefined ? {} : { memo: options.projectTrust.memo }),
+          });
     const services = await pi.createAgentSessionServices({
       cwd,
       agentDir,
-      settingsManager: pi.SettingsManager.create(cwd, agentDir, { projectTrusted }),
+      settingsManager,
       modelRuntime: await getModelRuntime(pi, agentDir, options.keys),
+      ...(trustResolver === undefined
+        ? {}
+        : { resourceLoaderReloadOptions: { resolveProjectTrust: trustResolver } }),
       resourceLoaderOptions: {
         additionalExtensionPaths: options.additionalExtensionPaths,
         // 审批扩展走 inline factory（S8）：它必须和我们的会话**同一条装配路径**，

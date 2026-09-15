@@ -22,6 +22,7 @@ import {
   registerAgentDirWatcher,
 } from "./host/config";
 import { createApprovalModeReader } from "./pi/approval";
+import { createTrustPrompter } from "./host/trustPrompt";
 
 const OUTPUT_CHANNEL_NAME = "jerrypi";
 
@@ -64,6 +65,8 @@ export function activate(context: vscode.ExtensionContext): void {
     onSessionReplaced: () => provider.replay(),
     // S8：有工具调用在等确认 —— 面板可见就不打扰，不可见才弹通知（Q9/Q10 的宿主侧）
     onApprovalPending: (request) => provider.notifyApprovalPending(request),
+    // S8：项目信任的问（原生模态 —— 这一问发生在 ensure() 里，用面板问会自锁，F16）
+    askProjectTrust: createTrustPrompter({ log: channel }).ask,
   });
   context.subscriptions.push({ dispose: () => void controller.dispose() });
   if (!isWorkspace) {

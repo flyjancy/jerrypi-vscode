@@ -102,6 +102,11 @@
         "category": "Pi"
       },
       {
+        "command": "jerrypi.projectTrust",
+        "title": "Project Trust",
+        "category": "Pi"
+      },
+      {
         "command": "jerrypi.resumeSession",
         "title": "Resume Session",
         "category": "Pi"

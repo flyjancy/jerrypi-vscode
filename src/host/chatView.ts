@@ -22,6 +22,7 @@ import { replaceSessionWithConfirm, reportReplaceOutcome } from "./sessionAction
 import { MetaStatusBar } from "./statusBar";
 import type { DiffPresenter } from "./diff";
 import type { ApprovalDecision, ApprovalRequest } from "../pi/approval";
+import type { TrustMemoLike } from "../pi/trust";
 
 export const CHAT_VIEW_ID = "jerrypi.chat";
 
@@ -101,6 +102,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   async runNewSession(): Promise<void> {
     await this.options.controller.ensure();
     await this.replaceSession((force) => this.options.controller.newSession({ force }));
+  }
+
+  /** S8：`Pi: Project Trust…` 用的本进程信任缓存（权威在 controller 上）。 */
+  trustMemo(): TrustMemoLike {
+    return this.options.controller.trustMemo;
   }
 
   /** 会话列表入口。 */

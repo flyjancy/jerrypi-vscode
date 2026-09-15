@@ -11,6 +11,14 @@ import { clearStoredApiKeys, createApiKeyStore, DEFAULT_PROVIDER, getModelRuntim
 import { describeAuthSource } from "./shared/format";
 import { runSelfTest } from "./pi/selftest";
 import { workspaceCwd } from "./host/workspace";
+import {
+  applyTrustAction,
+  TRUST_ACTION_LABELS,
+  TRUST_ACTIONS,
+  trustParentOf,
+  type TrustAction,
+} from "./pi/trust";
+import type { TrustMemoLike } from "./pi/trust";
 
 const CUSTOM_PROVIDER = "其他（手动输入 provider id）";
 
@@ -22,6 +30,8 @@ export interface PickerCommands {
   runNewSession(): Promise<void>;
   /** `Pi: Resume Session`。 */
   runSessionPicker(fromPanel: boolean): Promise<void>;
+  /** S8：`Pi: Project Trust…` 改判之后要读写的那个本进程缓存。 */
+  trustMemo(): TrustMemoLike;
 }
 
 export function registerCommands(
@@ -234,6 +244,55 @@ export function registerCommands(
         const message = error instanceof Error ? error.message : String(error);
         void vscode.window.showErrorMessage(`jerrypi: 刷新模型目录失败：${message}`);
       }
+    }),
+
+    // S8：项目信任的"改判"入口。
+    //
+    // 为什么需要它（Q5/Q6）：面板只写 `true`、从不写 `false`（免得一个误点变成"永不再问"），
+    // 但 pi CLI **会**写 false，而用户也可能想撤销自己刚才的"记住"。没有这个入口，
+    // 唯一办法就是手改 `<agentDir>/trust.json` —— 那是替用户干他的活。
+    vscode.commands.registerCommand("jerrypi.projectTrust", async () => {
+      const { cwd } = workspaceCwd();
+      let module;
+      try {
+        module = await pi();
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        output.appendLine(`[trust] 加载 pi 失败：${text}`);
+        void vscode.window.showErrorMessage(`jerrypi: 项目信任需要先同步 pi-runtime（${text}）`);
+        return;
+      }
+      const agentDir = module.getAgentDir();
+      const store = new module.ProjectTrustStore(agentDir);
+      const current = store.get(cwd);
+      const parent = trustParentOf(cwd);
+      const picked = await vscode.window.showQuickPick(
+        TRUST_ACTIONS.map((action) => ({
+          label: TRUST_ACTION_LABELS[action],
+          description:
+            action === "trust-parent"
+              ? (parent ?? "（已在根目录，没有父文件夹）")
+              : action === "clear"
+                ? `当前记录：${current === null ? "没有" : current ? "信任" : "不信任"}`
+                : action.startsWith("trust") && current !== null
+                  ? "（当前已有记录）"
+                  : undefined,
+          action,
+        })),
+        {
+          title: `项目信任：${cwd}`,
+          placeHolder: "选择这次要怎么处理这个文件夹的 pi 项目级资源",
+        },
+      );
+      if (picked === undefined) return;
+      const message = applyTrustAction(picked.action as TrustAction, {
+        cwd,
+        trustStore: store,
+        memo: pickers?.trustMemo() ?? new Map(),
+        log: output,
+      });
+      output.appendLine(`[trust] trust.json=${join(agentDir, "trust.json")}｜cwd=${cwd}`);
+      void vscode.window.showInformationMessage(`jerrypi: ${message}`);
     }),
 
     vscode.commands.registerCommand("jerrypi.openSettingsFile", async () => {

@@ -491,6 +491,9 @@ S1 挪到纯函数层、N5 并进 A6/A6b、B3 用新增的 Q10 落裁决）。�
 | 2-1 | **`ask` 的"永不无限挂"漏了 `onPending` 这条**：夹具里我把 `answer` 写错成字符串，`onPending` 一抛，`waiting` 里就留下一条永远没人答的记录（`pending` 恒为 1），而 handler 的 catch 又把它变成"fail-closed 拦下"。⇒ 计划只写了 signal 那一段，实际整条路都得包 | `createApprovals` 里把 `options.onPending` 包 try/catch：抛错 → 记一行 + 按 `cancelled` 收口；A6 加一条断言（能红：去掉那个 catch → 那条红） |
 | 2-2 | ⚠️ **挂住的 promise 会让 node 以 `exit 13` 静默退出、一行输出都不打**（实测：把 `ask` 的中止监听去掉 → `HOST-CHECK` 连 `ok` 行都没了）。这对"能红验证"是坏形态：红了，但看不出是哪条判据 | host-check 的 S8 段加两个助手：`settled(promise, label, ms)`（等"应该收口"的东西，带超时）与 `safeDispose(host)`（`finally` 里卸载也要带超时 —— 卡住的 `dispose()` 会把整段拖成 exit 13）。现在同样的破法给出 12 条**指名**的 FAIL |
 | 1-1 | 夹具用 `os.tmpdir()` 直接建目录时，macOS 的 `/var → /private/var` 会让"清理守卫"里的字符串比较假红（S5 的 6-8 同类坑） | 一次性目录一律建在 `fs.realpathSync(os.tmpdir())` 之下 |
+| 5-1 | ⚠️ **`vscode` 桩的 `Uri` 没有 `fsPath`**（只有 scheme/path/query/fragment）⇒ `workspaceCwd()` 静默返回 `cwd: undefined`，命令拿它去问 pi，**在 pi 内部才炸**（`normalizePath` 里 `undefined.startsWith`）。桩缺一个成员时，坏的是**被测代码看到的输入** —— 这类缺口永远不会以"桩不对"的形式报错 | 给桩的 `Uri` 补 `fsPath`（读 `path`），并在注释里写明这次是怎么发现的。顺带把 `workspace.workspaceFolders` 也挪进共享状态（它原先是个裸导出对象，esbuild 内联之后检查脚本改的是**另一份副本**）：新增 `setWorkspaceFolders()` |
+| 5-2 | 🔴 **"裁决函数对"与"我们把它接上了"是两件事**：A10 原先直接调 `createAgentSessionServices` 验 resolver 的**机制**，把 `session.ts` 里传钩子的那三行删掉，A10 照样全绿（破法 ⑧ 一条都没红）。这正是第 1 轮 S2「闸门不在场」的同构形态，只是换到了信任这一侧 | A10 补第 ⑨ 条：**经生产装配路径**（`createSessionHost({projectTrust})`）断言 `services.settingsManager.isProjectTrusted() === true` 且项目设置真的改变了可用工具集。补完之后破法 ⑧ 红 |
+| 5-3 | 生产路径的可用工具集**不是**"只剩 `read`"：我们自己的 `write` 包装作为 `customTools` 会被追加进活动集（S7 的机制）⇒ 信任打开后项目级 `defaultTools` 拿掉的是 `bash`/`edit` | 断言写成 `includes("read") && !includes("bash") && !includes("edit")`，并把这个组合写进注释（两个阶段的机制叠在一起时才看得见） |
 
 **实施期的"能红验证"记录（每步都做了，破法 → 红在哪）**：
 
@@ -512,6 +515,8 @@ S1 挪到纯函数层、N5 并进 A6/A6b、B3 用新增的 Q10 落裁决）。�
 | 4 | 不判 `view.visible`（面板可见也弹通知） | A7"可见时不打扰"红 |
 | 4 | 去掉 Q10 的"销毁再喊" / "重建看快照" | A7/Q10 两条各红 |
 | 4 | 点了「打开面板」不聚焦 | A7 的聚焦红 |
+| 5 | 忽略 trust.json 的记录 / 没资源也照问 / 把 false 也写进去 / 忽略 memo / 忽略 defaultProjectTrust / ESC 当信任 / "信任父文件夹"只写一条 | 各 1–2 条红（A11①–⑥、A12、A13、A14） |
+| 5 | **装配里不传 `resolveProjectTrust` 钩子** | 第一次跑**一条都没红** —— 见 §11 的 5-2（补了"生产装配路径"那条断言之后才红） |
 
 ## 12. 实施与验收结果
 

@@ -43,6 +43,7 @@ import {
 } from "./serialize";
 import { createSessionHost, type SessionHost } from "./session";
 import { createFileChanges, recordEditsFromMessages, type FileChangeStore } from "./filechanges";
+import type { TrustAnswer, TrustMemoLike } from "./trust";
 import {
   createApprovals,
   type ApprovalDecision,
@@ -103,6 +104,11 @@ export interface SessionHostControllerOptions {
    * 与 `onSessionReplaced` 同一条纪律：controller 不认识 `vscode`，通知由宿主做。
    */
   onApprovalPending?: (request: ApprovalRequest) => void;
+  /**
+   * S8：项目信任的问（VS Code 模态；`src/host/trustPrompt.ts`）。不给 ⇒ 不传信任钩子，
+   * 行为与今天完全一致（`projectTrusted:false`）。
+   */
+  askProjectTrust?: (cwd: string) => Promise<TrustAnswer>;
 }
 
 /**
@@ -216,6 +222,12 @@ export class SessionHostController {
    * 与 `fileChanges` 同一个理由挂在 controller 上（会话替换时只 `reset()`，表本身活着）：
    * 面板重开要靠它把"还在等的那条"重放出来（C6）。
    */
+  /**
+   * S8：信任裁决的**跨会话缓存**（同一个 cwd 只裁决一次，CLI 的 `projectTrustByCwd`；F11）。
+   * `Pi: Project Trust…` 改判之后要 `clearTrustMemo()`，否则下一个会话还用旧答案。
+   */
+  private readonly trustDecisions = new Map<string, boolean>();
+
   private readonly approvals: Approvals = createApprovals({
     onPending: (request) => this.onApprovalPending(request),
     log: { appendLine: (line) => this.options.log.appendLine(line) },
@@ -372,6 +384,10 @@ export class SessionHostController {
         mode: this.options.approvalMode ?? (() => "off"),
         approvals: this.approvals,
       },
+      // S8：项目信任（不给就不传钩子 —— 自测与夹具保持"今天的行为"）
+      ...(this.options.askProjectTrust === undefined
+        ? {}
+        : { projectTrust: { ask: this.options.askProjectTrust, memo: this.trustDecisions } }),
       onEvent: (event) => this.handleEvent(event),
       onExtensionError: (error) => this.handleExtensionError(error),
       // 面板不钉模型：用户选过就听用户的（见 alignPanelModel 的注释）。
@@ -1207,6 +1223,16 @@ export class SessionHostController {
     const item = this.toolItems.get(toolCallId);
     if (item === undefined) return;
     this.emit({ type: "item", item: { ...item, ...this.approvals.fieldsOf(toolCallId, pending) } });
+  }
+
+  /**
+   * S8：信任裁决的本进程缓存（`Pi: Project Trust…` 用它读写/清）。
+   *
+   * 为什么必须能清：`session.reload()` **不会**重跑信任钩子（F17）—— 钩子只在**建会话**时跑，
+   * 而这份缓存活在整个扩展进程里，不清就是"改判了、下一个会话还用旧答案"。
+   */
+  get trustMemo(): TrustMemoLike {
+    return this.trustDecisions;
   }
 
   /** 宿主侧（选择器等）要往面板发一条提示时的入口。 */

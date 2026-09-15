@@ -29,6 +29,9 @@ function state() {
     configurationListeners: [],
     outputChannels: new Map(),
     contentProviders: new Map(),
+    // S8：`workspace.workspaceFolders` 也挂在共享状态里 —— 桩文件会被 esbuild**内联**进
+    // 被测 bundle（见文件头第 3 条），而检查脚本里直接改导出的对象只改到它自己那份副本。
+    workspaceFolders: [],
   };
   return globalThis[KEY];
 }
@@ -36,6 +39,11 @@ function state() {
 /** 取某个 scheme 注册过的虚拟文档 provider（断言用）。 */
 export function contentProviderOf(scheme) {
   return state().contentProviders.get(scheme);
+}
+
+/** 预置工作区文件夹（S8 的 `Pi: Project Trust…` 命令靠 `workspaceCwd()`）。 */
+export function setWorkspaceFolders(folders) {
+  state().workspaceFolders = folders;
 }
 
 /** 清空全部记录（每个断言块之前调用）。 */
@@ -134,6 +142,16 @@ export class Uri {
   }
   static file(p) {
     return new Uri("file", p);
+  }
+  /**
+   * 真 vscode-uri 的 `fsPath`：`file:` URI 的本地路径。
+   *
+   * ⚠️ 桩上一版**没有**这个成员（S8 第 5 步才发现）：`workspaceCwd()` 读的是
+   * `folder.uri.fsPath`，于是它静默返回 `undefined`，命令拿 `undefined` 当 cwd 去问 pi，
+   * 在 pi 内部才炸 —— 桩缺一个成员时，坏的是**被测代码看到的输入**。
+   */
+  get fsPath() {
+    return this.scheme === "file" ? String(this.path) : String(this.path);
   }
   static parse(s) {
     const m = /^([a-zA-Z][a-zA-Z0-9+.-]*):([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/.exec(s);
@@ -312,7 +330,10 @@ export const env = {
 export const version = "0.0.0-stub";
 
 export const workspace = {
-  workspaceFolders: [],
+  /** 真 vscode 里这是个只读属性；这里读共享状态，于是"检查脚本改一份、产品代码看另一份"不可能发生。 */
+  get workspaceFolders() {
+    return state().workspaceFolders;
+  },
   getConfiguration(section) {
     record("getConfiguration", { section });
     const values = state().configuration.get(section) ?? {};
