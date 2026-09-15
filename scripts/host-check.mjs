@@ -2663,6 +2663,48 @@ check(
         !JSON.stringify(offSnapshot.items.filter((i) => i.kind === "tool" && i.toolCallId === "call-3")).includes('"approval"'),
       JSON.stringify({ offTool: offTool?.approval ?? "(无)", offApprovalFields, items: offSnapshot.items.filter((i) => i.kind === "tool").map((i) => ({ id: i.toolCallId, approval: i.approval ?? "(无)" })) }),
     );
+    // ---- A10⑩：**经真 controller** 把 `askProjectTrust` 接到建会话的信任钩子上
+    //
+    // 为什么还要这一条（第 5 步的 5-2 是同一类）：`createSessionHost({projectTrust})` 那条
+    // 只证明 session.ts 会传钩子；而生产链是 **extension.ts → controller → session.ts**，
+    // controller 少传一次，整条信任流程就是静默不生效的。判据用 `session.getActiveToolNames()`
+    // （真 pi 的公开 API，不是我们的镜像）+ `ask` 被叫过。
+    {
+      const trustCwd = path.join(root, "trustproj");
+      fs.mkdirSync(path.join(trustCwd, ".pi"), { recursive: true });
+      fs.writeFileSync(path.join(trustCwd, ".pi", "settings.json"), JSON.stringify({ defaultTools: ["read"] }));
+      let askedTrust = 0;
+      const trustController = new SessionHostController({
+        pi: wrappedPi,
+        cwd: trustCwd,
+        agentDir,
+        sessionsRoot: path.join(root, "sessions-trust"),
+        keys: {
+          listProviders: () => [probeModel.provider],
+          getApiKey: async (id) => (id === probeModel.provider ? "probe-key" : undefined),
+          saveApiKey: async () => {},
+          removeApiKey: async () => {},
+        },
+        uiContext: createSelfTestUIContext(log),
+        log,
+        onMessage: () => {},
+        askProjectTrust: async () => {
+          askedTrust += 1;
+          return { trusted: true, remember: false };
+        },
+      });
+      try {
+        await trustController.ensure();
+        const tools = trustController.session?.getActiveToolNames() ?? [];
+        check(
+          "A10⑩：真 controller 把 askProjectTrust 接到了信任钩子上（项目设置真的改变了工具集）",
+          askedTrust === 1 && tools.includes("read") && !tools.includes("bash"),
+          JSON.stringify({ askedTrust, tools }),
+        );
+      } finally {
+        await trustController.dispose().catch(() => undefined);
+      }
+    }
   } finally {
     await controller.dispose();
     fs.rmSync(root, { recursive: true, force: true });
