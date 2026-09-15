@@ -64,7 +64,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // 但这个箭头只在替换发生时（远晚于 activate）才执行。
     onSessionReplaced: () => provider.replay(),
     // S8：有工具调用在等确认 —— 面板可见就不打扰，不可见才弹通知（Q9/Q10 的宿主侧）
-    onApprovalPending: (request) => provider.notifyApprovalPending(request),
+    onApprovalPending: () => provider.notifyApprovalPending(),
     // S8：项目信任的问（原生模态 —— 这一问发生在 ensure() 里，用面板问会自锁，F16）
     askProjectTrust: createTrustPrompter({ log: channel }).ask,
   });

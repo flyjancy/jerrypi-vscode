@@ -1226,6 +1226,16 @@ export class SessionHostController {
   }
 
   /**
+   * S8：现在还有哪些工具调用在等确认（**权威来源**；宿主用它说"有 N 个待确认"）。
+   *
+   * 宿主**不要**自己攒一份 —— M1 真机验收实测：副本只会在"面板点按钮"那条路上被删，
+   * 被中止/被会话替换清掉的那些会一直留着，计数只增不减。
+   */
+  pendingApprovals(): ApprovalRequest[] {
+    return this.approvals.pending();
+  }
+
+  /**
    * S8：信任裁决的本进程缓存（`Pi: Project Trust…` 用它读写/清）。
    *
    * 为什么必须能清：`session.reload()` **不会**重跑信任钩子（F17）—— 钩子只在**建会话**时跑，

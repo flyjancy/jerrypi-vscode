@@ -1977,7 +1977,7 @@ check(
       check("A4②：中止之后 prompt() 收口（不是永远挂着）", outcome === "resolved", String(outcome));
       check("A4②：会话回到空闲", f.host.session.isIdle === true && f.host.session.isStreaming === false, JSON.stringify({ idle: f.host.session.isIdle, streaming: f.host.session.isStreaming }));
       check("A4③：文件不存在（工具没执行）", fs.existsSync(marker) === false, `marker=${fs.existsSync(marker)}`);
-      check("A4④：待审批项被清掉", f.approvals.size().pending === 0, JSON.stringify(f.approvals.size()));
+      check("A4④：待审批项被清掉", f.approvals.size().pending === 0 && f.approvals.pending().length === 0, JSON.stringify(f.approvals.size()));
       const record = f.approvals.get("call-1");
       check("A4⑤：记录是 cancelled，且不冒充拒绝", record?.decision === "cancelled" && JSON.stringify(f.approvals.fieldsOf("call-1", false)) === "{}", JSON.stringify(record));
       check("A4⑥：落盘的是 pi 的 Operation aborted（不是我们的 reason）", toolResultsOf(f.host.session).some((r) => r.isError && r.text === "Operation aborted"), JSON.stringify(toolResultsOf(f.host.session)));
@@ -2048,11 +2048,14 @@ check(
   const output = makeOutput();
   const decided = [];
   let snapshotItems = [];
+  /** S8：待确认的**权威列表**（真 controller 是审批表；这里由断言驱动） */
+  let pendingApprovals = [];
   const controller = makeController({
     decideApproval: (toolCallId, decision) => {
       decided.push({ toolCallId, decision });
       return toolCallId !== "unknown";
     },
+    pendingApprovals: () => pendingApprovals,
     snapshot: () => ({
       items: snapshotItems,
       truncated: false,
@@ -2094,12 +2097,14 @@ check(
   // ② 通知（面板不可见）
   resetStub();
   const request = { toolCallId: "call-9", toolName: "bash", title: "rm -rf /tmp/x", requestedAt: 1 };
-  provider.notifyApprovalPending(request);
+  pendingApprovals = [request];
+  provider.notifyApprovalPending();
   const info = callsOf("showInformationMessage");
   check("A7：面板不可见时弹一条通知", info.length === 1 && String(info[0].message).includes("bash") && String(info[0].message).includes("rm -rf"), JSON.stringify(info));
   check("A7：通知上带「打开面板」按钮", JSON.stringify(info[0].items) === JSON.stringify(["打开面板"]), JSON.stringify(info[0].items));
   queueInformationResponse("打开面板");
-  provider.notifyApprovalPending({ ...request, toolCallId: "call-10" });
+  pendingApprovals = [request, { ...request, toolCallId: "call-10" }];
+  provider.notifyApprovalPending();
   await new Promise((r) => setTimeout(r, 0));
   check("A7：点了「打开面板」会聚焦聊天视图", callsOf("executeCommand").some((c) => c.id === "jerrypi.chat.focus"), JSON.stringify(callsOf("executeCommand")));
 
@@ -2107,17 +2112,45 @@ check(
   resetStub();
   const before = callsOf("showInformationMessage").length;
   view.visible = true;
-  provider.notifyApprovalPending({ ...request, toolCallId: "call-11" });
+  pendingApprovals = [request, { ...request, toolCallId: "call-10" }, { ...request, toolCallId: "call-11" }];
+  provider.notifyApprovalPending();
   check("A7：面板可见时不弹通知（只记一行 Output）", callsOf("showInformationMessage").length === before && output.lines.some((l) => l.includes("面板可见，不再弹通知")), JSON.stringify(output.lines.slice(-1)));
 
-  // ④ Q10：视图销毁时若仍有待审批 → 再喊一次
+  // ④ **回归（M1 真机验收抓到的）**：数量必须等于 controller 报的**当前**待确认数，
+  //    不能像"宿主自己攒一份"那样只增不减（被中止结掉的那些当时没人删）
+  {
+    resetStub();
+    view.visible = false;
+    const counts = [];
+    let seenNotifications = 0;
+    for (const list of [[request, { ...request, toolCallId: "b" }], [{ ...request, toolCallId: "b" }], []]) {
+      pendingApprovals = list;
+      provider.notifyApprovalPending();
+      const calls = callsOf("showInformationMessage");
+      if (calls.length === seenNotifications) {
+        // 没有**新的**通知（不是"上一条还是旧的"）
+        counts.push("(没弹)");
+        continue;
+      }
+      seenNotifications = calls.length;
+      counts.push(/有 (\d+) 个/.exec(String(calls.at(-1).message))?.[1] ?? "?");
+    }
+    check(
+      "A7：通知里的数量跟着 controller 走（2 → 1 → 不弹），不是只增不减",
+      JSON.stringify(counts) === JSON.stringify(["2", "1", "(没弹)"]),
+      JSON.stringify(counts),
+    );
+  }
+
+  // ⑤ Q10：视图销毁时若仍有待审批 → 再喊一次
   resetStub();
   view.visible = false;
+  pendingApprovals = [request];
   const beforeDispose = callsOf("showInformationMessage").length;
   view.disposeView();
   check("A7/Q10：视图销毁时仍有待审批 → 再喊一次", callsOf("showInformationMessage").length === beforeDispose + 1, JSON.stringify(callsOf("showInformationMessage").length));
 
-  // ⑤ Q10：重建后快照里仍有 pending → 也喊（快照是权威）
+  // ⑥ Q10：重建后快照里仍有 pending → 也喊（快照是权威）
   resetStub();
   const view2 = makeView();
   view2.visible = false;
@@ -2126,8 +2159,10 @@ check(
   ];
   provider.resolveWebviewView(view2);
   await view2.send({ type: "ready", protocol: PROTOCOL_VERSION });
+  pendingApprovals = [request];
   check("A7/Q10：重建面板后快照里仍有 pending → 也弹一次", callsOf("showInformationMessage").length === 1, JSON.stringify(callsOf("showInformationMessage")));
   snapshotItems = [];
+  pendingApprovals = [];
 }
 
 
@@ -2592,6 +2627,11 @@ check(
     // ---- ② 工具结束之后：拒绝标记仍在
     const after = controller.snapshot();
     check("A6b②：工具结束后卡片仍是 approval:\"denied\"（可回溯）", toolItemOf(after, "call-1")?.approval === "denied", JSON.stringify(toolItemOf(after, "call-1") ?? null));
+    check(
+      "A6b：答完之后 controller.pendingApprovals() 为空（通知的数量就靠它）",
+      controller.pendingApprovals().length === 0,
+      JSON.stringify(controller.pendingApprovals().map((r) => r.toolCallId)),
+    );
 
     // ---- ③ 第二轮：允许 → 文件出现，卡片上没有审批标记
     answer = "allow";

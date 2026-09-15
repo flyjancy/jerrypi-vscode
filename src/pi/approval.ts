@@ -118,6 +118,14 @@ export interface Approvals {
   get(toolCallId: string): ApprovalRecord | undefined;
   /** 协议派生（与 S7 的 `diffFieldsOf` 同一个位置、同一个理由：不把正文塞进协议）。 */
   fieldsOf(toolCallId: string, pending: boolean): ApprovalFields;
+  /**
+   * **当前还在等**的那些（面板不可见时宿主据此说"有 N 个待确认"）。
+   *
+   * 为什么要它、而不是让宿主自己记一份：宿主记的那份**只有"面板点按钮"这条退出路径**
+   * （S8 的 M1 真机验收实测：被**中止**结掉的、以及会话替换清掉的那些会永远留在副本里，
+   * 于是通知里的计数只增不减）。权威只有这一张表。
+   */
+  pending(): ApprovalRequest[];
   /** 断言用（上限只数已决 —— 见文件头第 4 条）。 */
   size(): { pending: number; decided: number };
 }
@@ -208,6 +216,21 @@ export function createApprovals(options: ApprovalsOptions): Approvals {
     },
 
     get: (toolCallId) => records.get(toolCallId),
+
+    pending() {
+      const list: ApprovalRequest[] = [];
+      for (const [toolCallId, record] of records) {
+        if (record.decision !== undefined) continue;
+        if (!waiting.has(toolCallId)) continue;
+        list.push({
+          toolCallId,
+          toolName: record.toolName,
+          title: record.title,
+          requestedAt: record.requestedAt,
+        });
+      }
+      return list;
+    },
 
     fieldsOf(toolCallId, pending) {
       const record = records.get(toolCallId);

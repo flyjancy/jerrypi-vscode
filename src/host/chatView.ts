@@ -21,7 +21,7 @@ import { pickSession, type SessionPickerBridge } from "./sessionPicker";
 import { replaceSessionWithConfirm, reportReplaceOutcome } from "./sessionActions";
 import { MetaStatusBar } from "./statusBar";
 import type { DiffPresenter } from "./diff";
-import type { ApprovalDecision, ApprovalRequest } from "../pi/approval";
+import type { ApprovalDecision } from "../pi/approval";
 import type { TrustMemoLike } from "../pi/trust";
 
 export const CHAT_VIEW_ID = "jerrypi.chat";
@@ -41,11 +41,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly statusBar = new MetaStatusBar();
-  /**
-   * 还在等用户答的审批（S8）。前端那份在卡片上、controller 那份是权威；
-   * 宿主这份只服务于一件事：**面板不可见时把消息推送出去**（Q9/Q10）。
-   */
-  private readonly pendingApprovals = new Map<string, ApprovalRequest>();
 
   constructor(private readonly options: ChatViewOptions) {}
 
@@ -138,16 +133,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    *   3. Q10：视图**销毁**（`onDidDispose`）与**重建后仍有待审批**时各再喊一次 —— 这是
    *      "销毁不取消待审批"（与 C6 的重放口径一致）留下的洞的补法。
    */
-  notifyApprovalPending(request: ApprovalRequest): void {
-    this.pendingApprovals.set(request.toolCallId, request);
+  notifyApprovalPending(): void {
     this.announcePendingApproval();
   }
 
-  /** 把"还在等"这件事说出去（面板可见就只说给 Output）。 */
+  /**
+   * 把"还在等"这件事说出去（面板可见就只说给 Output）。
+   *
+   * 数量**每次都问 controller**（`pendingApprovals()`）—— 宿主不自己攒副本：
+   * M1 真机验收实测过一次"副本只增不减"（被中止结掉的不会被删掉），
+   * 而权威只有 controller 的审批表。
+   */
   private announcePendingApproval(): void {
-    if (this.pendingApprovals.size === 0) return;
-    const latest = [...this.pendingApprovals.values()].at(-1);
-    const count = this.pendingApprovals.size;
+    const pending = this.options.controller.pendingApprovals();
+    if (pending.length === 0) return;
+    const latest = pending.at(-1);
+    const count = pending.length;
     if (this.view?.visible === true) {
       this.options.output.appendLine(
         `[approval] 面板可见，不再弹通知（${count} 个待确认，最新：${latest?.toolName}）`,
@@ -174,14 +175,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const snapshot = this.options.controller.snapshot();
     this.post({ type: "state", protocol: PROTOCOL_VERSION, ...snapshot });
     // Q10 的"重建后仍有待审批"：快照是权威（与前端数卡片用的是同一份字段）
-    const pendingIds = new Set<string>();
-    for (const item of snapshot.items) {
-      if (item.kind === "tool" && item.approval === "pending") pendingIds.add(item.toolCallId);
+    // Q10 的"重建后仍有待审批"：快照与 controller 的审批表是同一份权威
+    if (snapshot.items.some((item) => item.kind === "tool" && item.approval === "pending")) {
+      this.announcePendingApproval();
     }
-    for (const id of [...this.pendingApprovals.keys()]) {
-      if (!pendingIds.has(id)) this.pendingApprovals.delete(id);
-    }
-    if (pendingIds.size > 0) this.announcePendingApproval();
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -313,9 +310,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
           if (!controller.decideApproval(message.toolCallId, message.decision satisfies ApprovalDecision)) {
             output.appendLine(`[webview] 这次审批已经不在了（已中止/已答过）：${message.toolCallId}`);
-            return;
           }
-          this.pendingApprovals.delete(message.toolCallId);
           return;
         }
         case "openDiff": {

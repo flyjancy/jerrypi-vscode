@@ -11,7 +11,7 @@
 
 ## 1. 现在
 
-**进行中**：**S8 已开工（2026-09-15，用户拍板「开工」= Q1–Q10 全按默认值）** —— 七步里**第 1–6 步全部完成、0.1.10 已打包待验收**（338 文件 / 5.77 MB）。**下一步：Mac 的 M1/M2 两个人工动作**（话术见下面的「S8 的验收动作」）→ 上传预发布 → `compare-vsix` 核验 → Windows W0/W1 → §12 回填（`docs/S8-plan.md`：工具审批三档 + 项目信任流程；§0 的 25 条事实全部带证据，其中两条探针**已落盘可重跑** —— `scripts/probes/s8-approval-probe.mjs`、`scripts/probes/s8-trust-probe.mjs`）。三轮评审（`w60:pC` 的 Claude）**全部 ACCEPT 并已落进计划**：第 1 轮 `BLOCKING` 3 B / 8 S / 5 N（§10.1）、第 2 轮 `BLOCKING` 1 B / 6 S / 5 N（§10.2）。第 2 轮抓到的是**我第 1 轮自己补的那条断言**（在 happy-dom 里恒绿 —— 修「恒绿断言」这件事本身复发了一次），改法已落。第 3 轮 `TRANSCRIPTION: 12/12 落实 + 3 处转写错误`（§10.3，已修且不再复核）。**用户 2026-09-15 说「开工」⇒ Q1–Q10 按默认值执行**（§4 的表就是裁决记录）。下一步照 §9 的七步走。
+**进行中**：**S8 已开工（2026-09-15，用户拍板「开工」= Q1–Q10 全按默认值）** —— 第 1–6 步完成、**0.1.10 的 Mac M1 验收抓到一个真 bug（宿主侧"待确认"副本只增不减）**，已修并加了回归断言；**0.1.11 已打包**（338 文件 / 5.77 MB）待**定向复验**（M1 的通知那条 + M2）→ 上传预发布 → `compare-vsix` 核验 → Windows W0/W1 → §12 回填（`docs/S8-plan.md`：工具审批三档 + 项目信任流程；§0 的 25 条事实全部带证据，其中两条探针**已落盘可重跑** —— `scripts/probes/s8-approval-probe.mjs`、`scripts/probes/s8-trust-probe.mjs`）。三轮评审（`w60:pC` 的 Claude）**全部 ACCEPT 并已落进计划**：第 1 轮 `BLOCKING` 3 B / 8 S / 5 N（§10.1）、第 2 轮 `BLOCKING` 1 B / 6 S / 5 N（§10.2）。第 2 轮抓到的是**我第 1 轮自己补的那条断言**（在 happy-dom 里恒绿 —— 修「恒绿断言」这件事本身复发了一次），改法已落。第 3 轮 `TRANSCRIPTION: 12/12 落实 + 3 处转写错误`（§10.3，已修且不再复核）。**用户 2026-09-15 说「开工」⇒ Q1–Q10 按默认值执行**（§4 的表就是裁决记录）。下一步照 §9 的七步走。
 
 | | |
 | --- | --- |
@@ -26,12 +26,12 @@
 | 命令 | 现在 |
 | --- | --- |
 | `npm run typecheck`（2 套 tsconfig） | ✅ |
-| `npm run self-test` | **9/9**（其中 host-check **319**、webview-dom **91**、render **128**、protocol 112、settings 16/16） |
+| `npm run self-test` | **9/9**（其中 host-check **321**、webview-dom 91、render 128、protocol 112、settings 16/16） |
 | `npm run check:protocol` | 112 |
 | `npm run check:render` | **128** |
 | `node scripts/tool-text-check.mjs` | **91** |
 | `node scripts/webview-dom-check.mjs` | **91** |
-| `node scripts/host-check.mjs` | **319** |
+| `node scripts/host-check.mjs` | **321** |
 | `npm run check:controller`（真模型，**不进 CI**） | **110/110**（S8 加了 A15：`approvalMode:all` 下拒绝→副作用没发生→允许→真的执行；另含 S7 的 A7 与一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **16 项（13 gating + T5c/T12/T13 advisory）GATE PASS**（本机 T12 也 PASS ⇒ 16 PASS / 0 FAIL / 0 SKIP；**T14 是 S8 新增的工具审批项，不用模型**；T13：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[…]；PI_OFFLINE=未设`） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **16 项（13 gating + T5c/T12/T13 advisory）GATE PASS**（0.1.8 时是 15 项；**S8 加了 T14 之后是 16 项**。上次 Windows W0 真宿主跑的是 15 项版：14 PASS / 0 FAIL / 1 SKIP = T12 —— 那台机器没有 `pi`） |
