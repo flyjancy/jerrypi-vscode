@@ -18,7 +18,7 @@
 | F2 | `SettingsManager.create(cwd, agentDir, options)` 也可用；**`getExtensionTempFolder` 没有从 bundle 导出**（`typeof === "undefined"`）⇒ 谁都不许依赖它 | 探针 F0 |
 | F2b | `isLocalPath` / `parseGitUrl` / `parseSource` **也没有导出**（各 `undefined`）⇒ 源分类只能靠"我们自己的保守判定"，**不能复刻 pi 的规则**（§3.1） | 评审 S3 实跑 |
 | F3 | 构造参数是 `{ cwd, agentDir, settingsManager }`（缺 `cwd` 会在 `startsWith` 处抛错 —— 这是 S1 就记下的坑） | `dist/core/package-manager.d.ts:66-70`（`PackageManagerOptions`）· PLAN §2 |
-| F4 | `SettingsManager` 落盘是**加锁的读-改-写、只合并"本次改过的字段"** ⇒ 两个实例（命令里新建的那个 vs 跑着的会话持有的那个）不会互相覆盖对方的字段 | `dist/core/settings-manager.js:376-400`（`persistScopedSettings` + `storage.withLock`） |
+| F4 | `SettingsManager` 落盘是**加锁的读-改-写、只合并"本次改过的字段"** ⇒ 两个实例**改不同字段**时不会互相覆盖。⚠️ **但它防不住同一字段的并发写**：`packages` 数组是在各实例内存里先算好的，锁只覆盖"写入"那一段，后写的会把先写的整份数组盖掉（F33 实测） | `dist/core/settings-manager.js:376-400`（`persistScopedSettings` + `storage.withLock`） |
 
 ### 0.2 源解析与作用域
 
@@ -75,6 +75,18 @@
 | F27 | 用户的真实 `~/.pi/agent/settings.json` **已经**有 `"packages": ["../../Desktop/prj/pi-config"]`，且 `theme: "catppuccin-mocha"` 正是 pi-config 的主题 ⇒ 拿 pi-config 当"新装一个包"的验收夹具会**撞上幂等分支**（装完什么都不变）；它更适合当"已经装过"的分支夹具 | 实读 `~/.pi/agent/settings.json`（2026-09-15） |
 | F28 | `Pi: Run Self-Test` 的**大部分**项用**真实 agentDir**（`module.getAgentDir()`）；只有 T14 这类自带隔离夹具的项例外 ⇒ 包管理的自测项**必须**自带临时 agentDir，否则会在用户配置里写 `packages` | `src/pi/selftest.ts`（T14 的夹具）+ `src/commands.ts:47-60`（`agentDir: module.getAgentDir()`） |
 
+### 0.7 第 2 轮评审补的事实（B1–B5 / S3 / S6 的依据）
+
+| # | 事实 | 证据 |
+| --- | --- | --- |
+| F31 | 🔴 **`SettingsManager.create` 默认 `projectTrusted: true`**（不传就是"信任项目"）⇒ 它会**合并项目 `.pi/settings.json`**；而包管理会读 `getNpmCommand()` 并 **spawn 那个命令** ⇒ 未信任的项目配置能决定我们执行什么程序 | 默认值 `dist/core/settings-manager.js:169-179`；`getNpmCommand` → `runNpmCommand` 见 `package-manager.js:1426-1446`。评审 B1 实测：项目里写 `npmCommand:["/nonexistent/s9-project-command"]` 后，按计划构造的 manager 装 `npm:…` 报 `spawn /nonexistent/s9-project-command ENOENT` |
+| F32 | **写盘失败不抛**：settings.json 是坏 JSON 时 `installAndPersist()` **正常返回**、内存里 `getPackages()` 也有那条，但**文件没写**；错误只留在 `SettingsManager` 内部，公开的出口是 **`drainErrors()`**（`d.ts:195`） | 评审 B4 实测：`{invalid-json` 的 settings → `threw:false`、`disk` 仍是坏内容、`errors:[{scope:"global",error:"SyntaxError…"}]`；`dist/core/settings-manager.js:355-366/401-410` |
+| F33 | **并发两次安装会丢更新**：两个 `SettingsManager` 各自算好 `packages` 再写 ⇒ 后写的覆盖先写的（实测只剩后一个包），而两次调用都"成功返回" | 评审 S3 实测（同一个临时 agentDir、两个 manager、两个不同本地包）；机制 = F4 的更正 |
+| F34 | 🔴 **`session.reload()` 不会重新裁决项目信任**：它沿用活会话 `settingsManager` 上的 `projectTrusted` ⇒ "空目录先建会话（按信任）、之后目录里长出 `.pi/extensions/`"时，`reload()` 会**未经询问**把那个扩展装进来 | 评审 B2 实测（用**已修好的** resolver + 真 pi）：`{"asked":0,"memoSize":0,"trusted":true,"commands":["unapproved-project"]}`；`dist/core/agent-session.js:2217-2239`（reload 里只有 `settingsManager.reload()`，没有信任钩子） |
+| F35 | **两个"忙"的口径不等价**：`isStreaming = _isAgentRunActive`、`isIdle = !_isAgentRunActive && !isCompacting` ⇒ **压缩期间** `snapshot().busy` 为 false 而 `controller.isBusy()`（= `pendingSend \|\| !isIdle`）为 true | `dist/core/agent-session.js:616-622`；`src/pi/controller.ts:336-338` vs `:856`；评审 B3 用真 getter 实测 |
+| F36 | **"新建会话"是既生效又重裁决的生产路径**：`session.ts:99` 的 `SettingsManager.create(...)` 在 `createRuntime` **闭包之内** ⇒ 每次新建会话都会新读 settings（看得见刚装的包）**并重跑信任钩子**（A10⑪ 就是"新会话必须问"） | `src/pi/session.ts:90-121`（`createRuntime` 内）；S8-plan §6 A10⑪ |
+| F37 | git 源在**带 `package.json`** 时也会调 npm（所以"这个源要 npm"确实不止 `npm:` 一种），但 **git 自己缺失**也会产生 spawn ENOENT ⇒ 不许把所有 git ENOENT 都叫成"缺 npm" | `dist/core/package-manager.js:1502-1528`；评审 S2 |
+
 ## 1. 目标与判据
 
 上游两条（PLAN §6）拆成可判的条目。断言编号见 §6。
@@ -83,11 +95,11 @@
 | --- | --- | --- |
 | C1 | `Pi: Install Package` 接受 **pi 原生源格式**（裸本地路径 / `npm:name` / git URL），**不发明** `path:` 之类前缀；只装 **user 作用域**（写 `<agentDir>/settings.json`），**绝不写工作区** | A1/A2/A3 |
 | C2 | 装成功后：`settings.json` 里出现该包（本地路径是**相对 agentDir** 的形态）、面板给出人话的反馈（安装了哪个源、写去了哪个文件、**怎么让它生效**） | A4/A5 |
-| C3 | 装完之后**包真的能生效**：空闲时自动 `session.reload()`（或明确告诉用户"新建会话/重载窗口后生效"），之后的会话里，包里的**工具**能用、**主题**在列表里 | A6/A7 |
+| C3 | 装完之后**包真的能生效**，而且**生效路径只有"新建会话 / 重载窗口"**（不自动 `session.reload()`，理由见 §3.3/§5 R9）；界面必须**明说**怎么生效。新建之后的会话里，包里的**工具**能用、**主题**在列表里 | A6/A7（生产路径 = `runtime.newSession()`） |
 | C4 | `Pi: List Packages` 显示 `listConfiguredPackages()` 的**全部**条目，标明作用域与解析后的路径；**本地路径已经失效**的条目要明说（这是 README 里那条"扩展升级后失效"的可见化） | A8 |
 | C5 | `Pi: Remove Package` 移除配置里的条目；pi 说"没匹配到"时**不许**报告成功（`removeAndPersist()` 返回 `false` ⇒ 明确提示"未移除"） | A9/A10 |
-| C6 | 受限机上 `npm:`（以及要 npm 的 git 源）失败时，给出**能懂的**提示（"这个源需要 npm"），而不是把 `spawn … ENOENT` 直接甩给用户；**不许**把失败说成成功，也不许留下写脏的 settings | A11/A12 |
-| C7 | 不碰用户数据：安装只动 `<agentDir>/settings.json`（且**必须显式给 agentDir**，不许回退到 pi 的默认目录）；自测项自带临时 agentDir；`Pi: Install Package` 在**没打开过面板**时也能用（不需要会话） | A3/A13a/A13b/A14 |
+| C6 | 受限机上 **`npm:` 源**失败时给出**能懂的**提示（"这个源需要 npm"），而不是把 `spawn … ENOENT` 甩给用户；**git 源**（含要 npm 的 git 源）保留 pi 的原文（F37：缺 git 与缺 npm 在 spawn 错误里分不开，硬翻译会撒谎）；**不许**把失败说成成功，也不许留下写脏的 settings | A11/A12 |
+| C7 | 不碰用户数据、也不许**未信任的项目配置**影响我们：①`agentDir` **必须显式给**（不许回退 pi 默认目录）；②**写路径**显式 `projectTrusted: false`（否则项目的 `npmCommand` 决定我们 spawn 什么，F31）；③配置只写 **user 作用域**，**不碰工作区**（`{local:true}` 一律不用）；④npm/git 的包存储由 pi 在它自己的目录里管（不是"只动一个文件"）；⑤自测项自带临时 agentDir；⑥`Pi: Install Package` 在没打开过面板时也能用 | A2/A3/A13a/A13b/A14/A18 |
 
 ## 2. 本步做什么 / 不做什么
 
@@ -98,10 +110,11 @@
   - `installPackage(source)` / `removePackage(source)` / `listPackages()`；
   - `translateSourceError(error, source)` —— 把 F22/F23 那两种形态翻成人话（纯函数，断言好写）；
   - `describePackage(entry)` —— `{label, description, detail}`（列表里那一行；纯函数）。
-- 三条命令（`src/commands.ts`）：`jerrypi.installPackage` / `jerrypi.listPackages` / `jerrypi.removePackage`
+- **四个 VS Code 命令**（`src/commands.ts`）：`jerrypi.installPackage` / `jerrypi.installPackageFromFolder` /
+  `jerrypi.listPackages` / `jerrypi.removePackage`（**三项能力、四条命令** —— 安装有两个入口，见 Q2/N1）
   （**主入口是输入框**；另加**从文件夹选**的辅助路径，见 Q2）。
-- 装/卸之后：**空闲时**自动 `session.reload()`（`SessionHost.reloadSession()`），并说清"已经生效"还是"下次新建会话生效"。
-- 文档：README 中英（三条命令 + 三条已知限制）、`pi-traps` 加条目、`PLAN.md` §6 那段"已知限制"逐字落地。
+- 装/卸之后：**写盘 + 写后回读校验**（§3.1），然后明说 **"新建会话（或重载窗口）后生效"** —— **不热重载**（Q3 改了，理由见 §3.3/B2）。
+- 文档：README 中英（四个命令 + 三条已知限制）、`pi-traps` 加条目、`PLAN.md` §6 那段"已知限制"逐字落地。
 - 自测 **T15**（gating，**不用模型**） + host-check 的 A1–A14。
 
 **不做**（每条都要说清为什么）：
@@ -113,6 +126,8 @@
 | `update` / `checkForAvailableUpdates` / 自动更新 | pi 有这些 API，但"联网更新"要单独的网络策略与验收（S6 的代理教训），且用户没要求 |
 | 在 VS Code 里编辑 pi 的包清单（过滤 `enabled` 字段、`autoload:false` 的 delta 包） | `PackageSource` 支持对象形态（`{source, extensions:[…]}`），面板要为此设计一套表单；v1 只处理字符串形态（列表里给 `filtered` 的加 `(filtered)` 后缀，与 CLI 一致，F24） |
 | 自己实现"包目录扫描/校验"（比如判断一个裸路径"像不像包"） | 那是 pi 的规则（F20），复刻一份就会分叉。我们只把 `false`/报错原样翻译 |
+| **装完自动 `session.reload()`**（第 1 轮 Q3 的默认值，第 2 轮 B2 推翻） | F34：`reload()` **不重新裁决项目信任** —— "空目录先建会话、之后目录里长出 `.pi/extensions/`"时，它会**未经询问**把那个扩展装进来（实测 `asked:0` 而 `commands:["unapproved-project"]`）。而"新建会话"这条路每次都会新读 settings **并重跑信任钩子**（F36）。为一个"省一次新建会话"的便利去开这个口子不划算（F18 的 stale ctx、F35 的忙口径也跟着一起来） |
+| **让"已信任的项目"影响包管理**（第 2 轮 B1 的备选） | 要做得对得起信任，就得把 S8 的裁决接进命令层再逐条断言；而 v1 只写 user 作用域（Q1），显式 `projectTrusted: false` 既够用又最安全。写路径**不许**复用"读列表"那份 manager |
 | 装完自动**重启**扩展宿主 | VS Code 不允许扩展重启自己；`session.reload()`（F15）已经够用 |
 
 ## 3. 关键设计
@@ -150,6 +165,24 @@ export function settingsPathOf(deps: PackageDeps): string;                 // <a
 - `agentDir` 为空/缺失 ⇒ **直接抛**（`jerrypi: 包管理需要明确的 agentDir`）。理由见 C7：
   一次"忘了传 agentDir，于是悄悄写进了用户真实配置"的事故，比一条显式的错误贵得多。
 
+**两份 `SettingsManager`，职责不重叠**（第 2 轮 B1/B5）：
+
+| 用途 | 构造 | 为什么 |
+| --- | --- | --- |
+| **写**（install/remove） | `SettingsManager.create(cwd, agentDir, { projectTrusted: false })` | F31：默认值 `true` 会合并**未信任项目**的 `.pi/settings.json`，而包管理会 spawn `npmCommand` ⇒ 那等于让项目配置决定我们执行什么程序。写 user 作用域本来也不需要项目配置 |
+| **读**（list） | `SettingsManager.create(cwd, agentDir, { projectTrusted: true })`，**只读** | 只为了把项目级条目也列出来（C4/pi CLI 的显示约定）。它**绝不**传给 install/remove —— A13b 用源码不变式钉住这一点（"读的那份不许出现在写函数里"） |
+
+**三件"看起来啰嗦但都有判例"的事**：
+
+1. **写后回读校验**（第 2 轮 B4）：`installAndPersist()` 正常返回**不等于**落盘成功（F32：坏 JSON 时它照样返回，
+   内存里还有那条）。所以写完用**一个新的 manager** 读回来确认那条源真的在文件里；不在 ⇒
+   报失败并把 `drainErrors()` 的内容写进 Output（**不许**报"已保存"）。
+2. **同一模块内的串行化**（第 2 轮 S3）：`installPackage`/`removePackage` 共用一个模块级 promise 链
+   （`withPackageLock`），保证"算数组 → 写文件"这一步不并发；F33 的丢更新就是这么来的。
+   **跨进程**（终端 `pi`、另一个窗口同时改同一个字段）**不在覆盖范围**，README/§12.4 明说 ——
+   不假装 F4 已经解决了它。
+3. **失败一律不抛**，返回 `{ok:false, message}`（`message` 由 `translateSourceError` 或校验失败产出）。
+
 `translateSourceError(error, source)` 的规则（每一条都要有断言，A11）：
 
 | pi 给的 | 我们给的 |
@@ -164,7 +197,7 @@ export function settingsPathOf(deps: PackageDeps): string;                 // <a
 判错的代价是"git 源在没 npm 的机器上退回 pi 的原文（用户看到 `spawn … ENOENT`）"，属于安全方向；
 而放宽成"含 `:` 就算 npm"会误伤 `C:\…` 这种 Windows 路径（A1 的红法就是这一条）。
 
-### 3.2 三条命令的形状（`src/commands.ts`）
+### 3.2 命令的形状与作用域边界（`src/commands.ts`）
 
 ```
 Pi: Install Package        → showInputBox（placeholder 列出三种源形态）→ installPackage()
@@ -172,9 +205,15 @@ Pi: Install Package        → showInputBox（placeholder 列出三种源形态�
                              → 失败：警告消息（人话）+ Output 原文
 Pi: Install Package from Folder…  → showOpenDialog({canSelectFolders}) → 同上（Q2）
 Pi: List Packages          → QuickPick（每项：源 + 作用域 + 解析路径，失效的标"找不到"）
-Pi: Remove Package         → QuickPick（候选 = 当前配置里的包）→ removeAndPersist()
+Pi: Remove Package         → QuickPick（候选 = **只有 user 作用域**的包）→ removeAndPersist()
                              → removed=false 时提示"未移除（配置里没有匹配的条目）"
 ```
+
+- **为什么候选要过滤作用域**（第 2 轮 B5）：`listConfiguredPackages()` 同时给 user/project 两类，
+  而我们的 remove 固定 user 作用域 ⇒ 若两边都有同一个本地源，用户选了 project 那一行、我们删的是
+  **user 那一行**（`removed:true`，但删错了对象）；只有 project 行时则永远"未匹配"。
+  ⇒ **移除候选只列 user**；project 行在 `Pi: List Packages` 里照常展示（C4），但标注
+  **"（项目作用域：本版本不管理）"** 且不可选中移除。
 
 - 输入框与 QuickPick **都由宿主侧弹**（与 S8 的 `Pi: Project Trust…` 一致），**不经过 webview** ⇒ 协议**不用改**。
   文件夹选择器必须用 `uri.fsPath`（**不是** `uri.toString()`，那会给出 `file:///…`）；这正是
@@ -183,43 +222,37 @@ Pi: Remove Package         → QuickPick（候选 = 当前配置里的包）→ 
 - `Pi: List Packages` 用**全新**的 `SettingsManager`（F3/F13），所以看到的是**文件里的真相**，
   不受"跑着的会话缓存"影响（F14）。
 
-### 3.3 装完之后怎么生效（`SessionHost.reloadSession()`）
+### 3.3 装完之后怎么生效：**不自动 reload，走"新建会话"**
 
-```ts
-// src/pi/session.ts：给 SessionHost 加一个方法（老方法不动）
-async reloadSession(): Promise<void> { await session.reload(); }
-```
+**决定（第 2 轮 B2 推翻第 1 轮的 Q3）：装/卸之后什么都不"热重载"，只写盘 + 告诉用户怎么让它生效。**
 
-**判断"忙不忙"必须用 controller 那一个口径**（评审 B3）：
+理由（三条，都有实测）：
 
-```ts
-// src/pi/controller.ts（已有，不动）
-private isBusy(): boolean { if (this.host === undefined) return false; return this.pendingSend || !this.view().isIdle; }
-// 公开出来的就是 snapshot().busy = session.isStreaming || this.pendingSend   （:856）
-```
+1. 🔴 **`session.reload()` 不重新裁决项目信任**（F34）：它只做 `settingsManager.reload()`（重读文件），
+   而 `projectTrusted` 是**活会话**上那个值 ⇒ "空目录先建会话（按信任）、之后目录里长出
+   `.pi/extensions/foo.ts`"时，reload 会把 foo **未经询问**装进当前会话（实测 `asked:0`、
+   `commands:["unapproved-project"]`）。我们**没有**能力在 reload 之前"补问一次"（那需要重建会话，
+   代价和"新建会话"一样）。
+2. **`reload()` 会让旧 runner 的 `ctx` 变 stale**（F18）+ 会重发 `session_start`（F19），
+   而我们正在跑一轮的时候不该动这些。
+3. **忙的口径**也不干净：`snapshot().busy` 与 `controller.isBusy()` 在**压缩期间**不等价（F35）——
+   要做到"只在真空闲时 reload"就得再引入一套判断，而收益只是省掉用户一次"新建会话"。
 
-- `session.isStreaming` **有一个盲窗**：用户按下发送、`agent_start` 还没到的那个窗口里它仍是 `false`，
-  而本仓为此专门维护了 `pendingSend`（`controller.ts:330-339` 的注释就是这件事的判例 —— D7/评审 B2）。
-  在命令里另起一套"看 `isStreaming`"等于把那个盲窗再开一次（R3）。
-- 所以走**同一个接缝**：`PickerCommands` 增加两个方法（与 S8 的 `trustMemo()` 同一条路子）：
+而**"新建会话"这条路本来就是对的**（F36）：`session.ts` 的 `SettingsManager.create(...)` 在
+`createRuntime` 闭包**之内** ⇒ 每个新会话都会**新读 settings**（看得见刚装的包）**并重跑信任钩子**
+（A10⑪ 那条"长出 `.pi/` 之后必须问"就是它）。所以：
 
-```ts
-// src/host/chatView.ts（ChatViewProvider）
-isBusy(): boolean { return this.options.controller.snapshot().busy; }   // host 未建时 snapshot() 安全返回
-async reloadSession(): Promise<boolean> { /* controller.reloadSession()：没有会话时返回 false */ }
-```
+| 阶段 | 行为 |
+| --- | --- |
+| install/remove 成功且**写后回读校验通过** | 信息消息：`已安装/已移除 <source>`（写进 `<agentDir>/settings.json`）＋**`新建会话（或重载窗口）后生效`** |
+| 正在跑（`snapshot().busy`） | 文案一样，只是多说一句"当前这一轮不受影响" |
+| 校验失败 / pi 抛错 | 警告消息（人话）+ Output 里放 pi 的原文与 `drainErrors()` |
 
-命令里的顺序（C3）：
-
-1. `install()` 成功 → 2. 若 `pickers.isBusy() === false` 且 `await pickers.reloadSession() === true`
-   → 文案"已生效（当前会话已重载）"；3. 否则 → 文案"已保存；新建会话或重载窗口后生效"。
-
-- **只在空闲时 reload**：F18 —— reload 会让旧 runner 的 `ctx` 变 stale，而"正在跑"**包含待审批**
-  （那种情况下我们的 fail-closed 会把它 block 掉，不会静默放行，但没必要去撞）。
-- reload 之后**不需要**重新绑定我们自己的订阅：`reload()` 保留同一个 `AgentSession` 对象，
-  我们的 `subscribe` 挂在会话上（`agent-session.d.ts:252` 写明"回调在执行时读 `_extensionRunner`，
-  所以扩展重载会换上新 runner"）。**这条假设由 A7 守**（reload 之后再触发一次事件，断言订阅仍收到）
-  —— 上一版这里引用了 A6，而 A6 只数调用次数、不碰事件（评审 S4 指出的跨节矛盾）。
+**不做 `SessionHost.reloadSession()`、也不给 `PickerCommands` 加忙/重载接缝**（第 1 轮 B3/S6 想要的那套
+随 B2 一起取消）。命令层与 `session.ts` 的接触面因此是**零**（C7 的第 ⑥ 条：没打开过面板也能用）。
+**验证点**：A6（文案 + 源码里不出现 `reload(`）+ A7（新建会话之后工具/主题真的出现）。
+第 1 轮 F15/F16/F17 仍然是**事实**（"`session.reload()` 一步就够"），但它们是**探针层的机制证据**，
+不是我们要走的路径 —— 留着是为了下次有人问"为什么不能原地生效"时有答案。
 
 ### 3.4 自测项 T15（**不用模型**，自带临时 agentDir）
 
@@ -229,14 +262,20 @@ T15：包管理的往返（临时 agentDir + 临时 cwd + 一个临时"包"）
   ② install → <tmp>/settings.json 出现 "packages": ["../pkg"]（相对形态，F9）
   ③ 同一 cwd 下 cwd/.pi/settings.json **一个字节都不动**（F6/F8，C1）
   ④ list() 命中那条：scope=user、installedPath=绝对路径
-  ⑤ session.reload() → 工具表里有 probe_echo、主题列表里有那个主题（F15/F21）
+  ⑤ **新建会话**（`host.runtime.newSession()`，**生产路径**，F36）→ 工具表里有 probe_echo、
+     主题列表里有那个主题（F21）
   ⑥ remove → 返回 true；再 remove → **false**（F11）
-  ⑦ reload → 工具表里 probe_echo 消失（F17）
+  ⑦ **再新建一个会话** → 工具表里 probe_echo 消失
 ```
 
 ⚠️ **①必须在②之前**（评审 B2）：装完之后**任何**新建会话都已经带着那个包了（F29 的机制）——
 按上一版"先装后建会话再断言'装之前没有'"的顺序，①恒假、⑤恒绿，而 T15 是 **gating**，
 那会让 `check:gate` 永远红。探针里的 `rich` 场景就是正确顺序的样板（装包前有前置断言）。
+
+⚠️ **⑤⑦ 必须走生产封装**（评审 S4）：调用 `host.runtime.newSession()`（= 面板里"新建会话"按的那条路），
+**不是**在夹具里直接 `session.reload()`。否则红法变成"删掉夹具里的一步"（证明的是实验步骤变了），
+而不是"生产接线坏了"。**这条的红法**：把 `session.ts` 里那份 `SettingsManager` 从 `createRuntime`
+闭包里提到外面（复用启动时那份）→ 新会话看不见包 → ⑤红（这是一次**真实可能发生**的重构）。
 
 为什么放进 `Pi: Run Self-Test` 而不是只留在 host-check：它是**用户机器上的端到端**（真 pi bundle +
 真文件系统 + 真会话），且不用凭据/网络 ⇒ 在受限机上也会真跑（与 T14 同一个理由）。
@@ -248,15 +287,18 @@ T15：包管理的往返（临时 agentDir + 临时 cwd + 一个临时"包"）
 - 列表不分页（`listConfiguredPackages()` 一般是几条到几十条）；QuickPick 天然可搜索。
 - 不缓存任何东西：每次命令都新建 `SettingsManager` + `DefaultPackageManager`（它们会读盘，成本是几次 `readFileSync`）。
 
-## 4. 决策与默认值（Q1–Q8，等用户拍板）
+## 4. 决策与默认值（Q1–Q10，等用户拍板）
 
 | # | 问题 | 默认值（我的建议） | 备选 |
 | --- | --- | --- | --- |
 | Q1 | 作用域 | **只做 user 作用域**（写 `<agentDir>/settings.json`），与 pi CLI 默认一致；不提供项目作用域 | 加 `{local:true}`（会写进用户仓库），需要单独的确认与撤销 |
 | Q2 | 本地路径怎么输入 | **两个入口**：`Pi: Install Package`（输入框，三种源都能填）+ `Pi: Install Package from Folder…`（原生文件夹选择器，取 `uri.fsPath`）。理由：Windows 上手输 `C:\Users\…\.vscode\extensions\flyjancy.jerrypi-0.1.x\test-fixtures\ext-smoke` 不现实 | 只留输入框（少一条命令，但 Windows 验收要手输长路径） |
-| Q3 | 装完要不要**自动** reload | **空闲时自动 reload**（F15 一步够）；"忙"按 **controller 的那个口径**（`snapshot().busy`，含 `pendingSend` 盲窗），正在跑就不动、并说明"新建会话生效" | 从不自动 reload（更保守，但用户会以为装失败了） |
+| Q3 | 装完要不要**自动** reload | **不自动 reload**（第 2 轮 B2 推翻第 1 轮默认值）：只写盘 + 明说"新建会话（或重载窗口）后生效"。理由 F34（reload 不重裁决信任）/F18/F35 见 §3.3 | 自动 reload（要多担一条"未访问就加载项目扩展"的边界，且要另配忙判断 —— 不推荐） |
 | Q4 | 已经装过的源再装一次 | 报告 **"已经在配置里了（未改动）"**（`changed=false`，F10），**不**当失败 | 静默成功（分不清"装了"和"早就有了"） |
 | Q5 | `Pi: List Packages` 里"配好了但路径没了"的条目 | 照常列出，标注 **"找不到（路径已失效）"**（`installedPath === undefined`，F13）；**不**自动删除（那是用户的数据） | 直接过滤掉（会让用户以为配置丢了） |
+| Q5b | 列表里的**项目作用域**条目 | 照常列出并标注 **"（项目作用域：本版本不管理）"**，但**不进移除候选**（B5：否则会删错同名 user 条目） | 完全不显示（用户会以为配置丢了） |
+| Q9 | 同一模块内并发 install/remove | **串行**（模块级 promise 链，§3.1 第 2 条）；跨进程不保证（写进 §12.4/README） | 不串行（F33：会静默丢一个包） |
+| Q10 | 写盘校验失败怎么办 | **不报成功**：警告消息 + Output 里放 `drainErrors()`（F32 的坏 JSON 形态）；**不回滚**（我们没写任何东西，"回滚"会是谎话） | 只看 `installAndPersist` 没抛就报成功（会让用户以为装上了） |
 | Q6 | 移除时的确认 | **不**再弹一次确认（QuickPick 选中的动作本身就是意图），但移除**后**要说清移除了什么 | 二次确认（多一次点击） |
 | Q7 | `npm:` / git 源在受限机上的文案 | 翻译成"需要 npm"（§3.1 的表），并**保留 pi 的原始消息**在 Output | 只透出 pi 的原文（用户看不懂 `spawn … ENOENT`） |
 | Q8 | README 里那条"扩展升级后路径失效" | 写进**已知限制**（PLAN §6 已承诺），并在 `Pi: List Packages` 里可见化（Q5） | 只在 README 写 |
@@ -265,52 +307,61 @@ T15：包管理的往返（临时 agentDir + 临时 cwd + 一个临时"包"）
 
 | # | 风险 | 触发条件 | 处理 |
 | --- | --- | --- | --- |
-| R1 | **把用户的 settings.json 写脏** | `installAndPersist` 写的是 `packages` 一个字段 | F4（加锁 + 只合并改过的字段）+ A3（"只动 settings.json 的 `packages`，其他字段一个字节不变"）；失败路径天然不写（F23） |
-| R2 | 装完"看起来成功了但没生效" | 用户不知道要 reload | Q3：空闲时自动 reload；否则**明说**怎么生效（C3）。断言 A6/A7 |
-| R3 | 在**忙碌**（尤其待审批）时 reload 造成中断/审批被 block | 用户在 agent 跑着的时候装包（含"已发送、`agent_start` 还没到"那个窗口） | 用 **controller 的 busy**（`snapshot().busy` = `isStreaming \|\| pendingSend`，§3.3）判空闲才 reload；F18 记下"万一撞上会怎样"（fail-closed，不会静默放行）。断言 A6 的第三态专门守这个盲窗 |
+| R1 | **把用户的 settings.json 写脏** | `installAndPersist` 写的是 `packages` 一个字段 | F4（加锁 + 只合并改过的字段）+ A3（**解析后**除 `packages` 以外的字段深相等，见 N2）；失败路径天然不写（F23） |
+| **R7** | 🔴 **未信任的项目配置决定我们执行什么**（B1） | 写路径用默认 `projectTrusted: true` 的 `SettingsManager` 时，项目 `.pi/settings.json` 的 `npmCommand` 会被 spawn（F31） | 写路径**显式** `projectTrusted: false`；读列表那份 manager **永不**传给写函数（A13b 的源码不变式）+ A18（恶意 `npmCommand` 不许被 spawn） |
+| **R8** | **并发安装静默丢一个包**（S3） | 两个命令/两次点击同时改 `packages`（F33） | 模块级串行队列（§3.1 第 2 条）+ A20；跨进程边界写进 §12.4 |
+| **R9** | **"装完就生效"把未信任的项目扩展带进来**（B2） | 用 `session.reload()` 做自动生效（F34） | **不做自动 reload**（Q3），统一走"新建会话"（F36）；A6 的源码不变式 + A7 的生产路径断言 |
+| R2 | 装完"看起来成功了但没生效" | 用户不知道要新建会话 | 文案**明说**"新建会话（或重载窗口）后生效"（A5/A6①）+ A7 用生产路径证明确实能生效 |
+| R3 | ~~忙碌时 reload 造成中断~~ | —— | **不再适用**：Q3 决定不自动 reload（§3.3）。F18/F35 作为"为什么不做"的依据保留（F35 还记着两个忙口径在压缩期间不等价） |
 | R4 | 自测项污染用户配置 | T15 用了真实 agentDir 就会写 `packages` | §3.4：临时 agentDir + 临时 cwd；**实现层**由 A13a（agentDir 必填、为空即抛）与 A13b（源码里不许出现 `getAgentDir(`）守 —— 上一版用"跑完真实文件不变"来守，那条只在夹具写坏时才红（评审 S1） |
 | R5 | 相对路径的包在**扩展升级后失效** | 源在扩展安装目录里（Windows 验收正是这个形态） | README 已知限制（Q8）+ 列表里可见（Q5）；**不自动修**（不替用户改路径） |
 | R6 | 我们翻译错误信息时把"路径不存在"误判成"需要 npm" | 正则过宽 | A11 三态断言（`ENOENT`+npm / `Path does not exist` / 其它），并**只对非本地源**套 npm 分支 |
 
 ## 6. 检查清单（自动断言，先红后绿）
 
-**能红验证是硬要求**：每条断言都要有一条"故意改坏实现"的破法（最后一列），我会逐条实跑并记录到 §11。
+**能红验证是硬要求**：每条都要有一条"故意改坏实现"的破法（最后一列），逐条实跑并记进 §11。
+（第 2 轮 S4 的教训：红法要写"改哪一行**生产代码**"，不能写成"删掉夹具里的一步"。）
 
 | # | 断言（在哪） | 怎么让它红 |
 | --- | --- | --- |
-| A1 | **`isNpmSource()` 只在 `source.startsWith("npm:")` 时为真**；`npm:` 之外的一切（git URL、`./x`、`C:\x`、`/abs/x`）都为假 | 放宽成"含 `:` 就算 npm" → `C:\Users\…` 那条红（顺带守住 Windows 盘符）。**不测"源分类的完整顺序"**：那要复刻 pi 的私有 `parseSource`（F30），见 §3.1 的说明 |
-| A2 | `install()` **只**写 `<agentDir>/settings.json`：装完之后 `cwd/.pi/settings.json` **不存在** | 给 install 传 `{local:true}` → A2 红 |
-| A3 | 写盘只动 `packages` 字段：预置一份带 `theme`/`defaultTools` 的 settings.json，装完这两项**逐字节不变** | 手工把实现改成"整份覆写" → A3 红 |
+| A1 | **`isNpmSource()` 只在 `source.startsWith("npm:")` 时为真**；`npm:` 之外的一切（git URL、`./x`、`C:\x`、`/abs/x`）都为假 | 放宽成"含 `:` 就算 npm" → `C:\Users\…` 那条红。**不测源分类的完整顺序**（那要复刻 pi 的私有 `parseSource`，F2b/§3.1） |
+| A2 | `install()` **只**写 `<agentDir>/settings.json`：装完之后 `cwd/.pi/settings.json` **不存在**（第 2 轮 N2：C7 只承诺"配置只写 user 作用域"，npm/git 的缓存/克隆目录由 pi 自己管，那条不在这条断言里） | 给 install 传 `{local:true}` → A2 红 |
+| A3 | 写盘只动 `packages`：预置一份**带嵌套值与非标准缩进**的 settings.json，装完之后**解析出来的**其它字段**深相等**（不要求逐字节 —— F32/N2：pi 会 `JSON.stringify(…,null,2)` 重写整份） | 把实现改成"整份覆写" → A3 红 |
 | A4 | `changed` 语义：第一次 `true`；同一个源再装一次 `false`（F10） | 恒返回 `true` → A4 红 |
-| A5 | 命令层：输入框给 `"<tmp>/pkg"` → 信息消息里有源名与 `settings.json` 路径 | 把消息里的路径换成 agentDir → A5 红 |
-| A6 | 三态（桩打在 `PickerCommands.isBusy()/reloadSession()` 上）：① `isBusy()===false` → 调了 `reloadSession()`（计数 1）且文案"已生效"；② `isBusy()===true` → **不调**，文案"新建会话生效"；③ **`isStreaming===false` 但 `pendingSend===true`**（"已发送、`agent_start` 还没到"那个盲窗，controller 的 `snapshot().busy` 为真）→ 也**不调** | 把判据改成只看 `session.isStreaming` → 第 ③ 态红（B3 的洞）；去掉整个判断 → 第 ② 态红 |
-| A7 | ① reload 之后**同一个会话**里包的工具真的出现（host-check 用真 pi + 临时包，与探针 `rich` 同一条路径）；② **reload 之后我们自己的订阅仍然收到事件**（再跑一轮脚本化模型流，断言协议消息还在往外发） | 不调 reload（只写文件）→ ①红；在 `reloadSession()` 里丢掉订阅 → ②红 |
-| A8 | `describePackage()`：`filtered` 加 `(filtered)`、`installedPath === undefined` 加"找不到（路径已失效）"、scope 显示 user/project | 去掉"找不到"分支 → A8 红 |
-| A9 | `removePackage()`：`removeAndPersist()` 返回 `false` 时 → `removed=false` **且不当成功** | 恒返回 `removed=true` → A9 红 |
-| A10 | 命名不变式：`list()` 每次读**文件里的真相** —— 两次调用之间手工改 `settings.json`，第二次必须看到新内容（§3.2） | 在构造期缓存一份（"长命 manager"那种退化）→ A10 红。**上一版的红法在本设计下造不出来**（`PackageDeps` 根本拿不到会话，评审 S5） |
-| A11 | `translateSourceError()` 三态（npm 缺失 / 路径不存在 / 其它原样） | 去掉 `ENOENT` 分支 → 第一态红；分支放宽到所有源 → 第二态红 |
-| A12 | 失败**不留脏**：`install("npm:foo")` 在 npm 不可用时抛 → settings.json 与装之前逐字节相同（F23） | 改成"先写 settings 再 install" → A12 红 |
-| A13a | `createPackageManager`/`installPackage` 在 `agentDir` 为空时**抛错**（不许有 `?? pi.getAgentDir()` 这种兜底） | 加一个默认值 → A13a 红 |
-| A13b | **源码不变式**：`src/pi/packages.ts` 里不出现 `getAgentDir(`（静态 grep，本仓有同类先例：`protocol-check.mjs:381-467` 读源码断样式） | 在实现里调一次 → A13b 红。**这条替代了上一版的 A13**：那条是"夹具断言"（只会因夹具写坏而红），而且它的红法要求**真的往用户文件里写一次**（评审 S1，与 `AGENTS.md` §4 冲突） |
-| A14 | `Pi: Install Package` 在**没有会话**时也能成功（`packages.ts` 不依赖 `SessionHost`） | 让 install 走一次 `host.session` → A14 红（桩里 host 为 undefined 时抛） |
-| A15 | 自测 **T15**（gating，不用模型）：§3.4 的七步全过 | 把 `session.reload()` 那一步删掉 → ⑤⑦ 红 |
+| A5 | 命令层：输入框给 `"<tmp>/pkg"` → 信息消息里有源名、`settings.json` 路径、**"新建会话"** | 消息里去掉"新建会话" → A5 红 |
+| A6 | **不热重载**（Q3）：① 信息消息含"新建会话（或重载窗口）后生效"；② **源码不变式**：`src/pi/packages.ts` 与命令层里不出现 `.reload(`（本仓有同类先例：`protocol-check.mjs:418` 读源码断样式） | 在命令里加一次 `session.reload()` → A6② 红（这是 Q3 那次裁决的守卫） |
+| A7 | **生产路径生效**：`host.runtime.newSession()`（面板"新建会话"按的那条路）之后，新会话的工具表里有包里的工具、主题列表里有包里的主题（host-check 用真 pi + 临时包） | 把 `session.ts` 里那份 `SettingsManager` 从 `createRuntime` 闭包里提到外面（复用启动那份）→ A7 红 |
+| A8 | `describePackage()`：`filtered` 加 `(filtered)`、`installedPath === undefined` 加"找不到（路径已失效）"、scope 显示 user/project、**project 行加"（项目作用域：本版本不管理）"** | 去掉"找不到"分支或去掉 project 标注 → A8 红 |
+| A9 | `removePackage()`：`removeAndPersist()` 返回 `false` 时 → `removed=false` **且不当成功**；**真命令**接到 `false` 时不许弹成功文案（第 2 轮 S4：行内写清 UI 断言） | 恒返回 `removed=true` → A9 红；命令层把 false 也报成功 → A9 的第二条红 |
+| A10 | 命名不变式：`list()` 每次读**文件里的真相** —— 两次调用之间手工改 `settings.json`，第二次必须看到新内容 | 在构造期缓存一份（"长命 manager"）→ A10 红 |
+| A11 | `translateSourceError()` **四态**：① `npm:` + `spawn … ENOENT` → "需要 npm"；② **非 `npm:` 源 + `spawn … ENOENT` → 原样透出**（第 2 轮 S4：这才是能红的那条 —— 把第 1 轮的"放宽到所有源"改法驳回）；③ `Path does not exist: …` → 加前缀；④ 其它 → 原样 | 去掉 `ENOENT` 分支 → ①红；把 npm 分支放宽到所有源 → **②红**；把路径分支删掉 → ③红 |
+| A12 | 失败**不留脏**：`install("npm:foo")` 在 npm 不可用时抛 → settings.json 与装之前**解析后相等**（F23） | 改成"先写 settings 再 install" → A12 红 |
+| A13a | `agentDir` 为空/缺失时**抛错**（不许有 `?? pi.getAgentDir()` 这种兜底） | 加一个默认值 → A13a 红 |
+| A13b | **源码不变式**：`src/pi/packages.ts` 里不出现 `getAgentDir(`；**写函数里不出现"读列表那份 manager"**（`projectTrusted: true`）；写路径上必须出现 `projectTrusted: false` | 各去掉/改一处分 → 对应那条红 |
+| A14 | `Pi: Install Package` 在**没有会话**时也能成功（`packages.ts` 不依赖 `SessionHost`；命令层与会话的接触面是零） | 让 install 走一次 `host.session` → A14 红（桩里 host 为 undefined 时抛） |
+| A15 | 自测 **T15**（gating，不用模型）：§3.4 的七步全过（⑤⑦ 走 `runtime.newSession()`） | 见 §3.4：把 `SettingsManager` 提到工厂外 → ⑤红；把 remove 那步删掉 → ⑥红 |
 | A16 | `Pi: List Packages` 的 QuickPick 项数与 `list()` 一致（不是硬编码，也不是"只显示本地源"） | 过滤掉 `filtered` 的条目 → A16 红 |
-| A17 | `Pi: Install Package from Folder…` 把 `uri.fsPath` **原样**交给 `installPackage`（不是 `uri.toString()` 那种 `file:///…`） | 改成 `toString()` → A17 红（桩 `vscode-stub.mjs:150` 的注释就是那次事故）。**桩里要先补 `showOpenDialog`**（评审 S2：现在 0 命中，缺方法会以 `undefined is not a function` 收场 —— 那不算红） |
+| A17 | `Pi: Install Package from Folder…` 把 `uri.fsPath` **原样**交给 `installPackage`（不是 `uri.toString()` 的 `file:///…`） | 改成 `toString()` → A17 红（桩 `vscode-stub.mjs:150` 的注释就是那次事故）。**桩里要先补 `showOpenDialog`**（第 1 轮 S2：现在 0 命中，缺方法会以 `undefined is not a function` 收场 —— 那不算红） |
+| **A18** | 🔴 **未信任的项目配置不许影响写路径**（第 2 轮 B1）：cwd 里放 `.pi/settings.json` = `{"npmCommand":["/nonexistent/evil"]}`，然后 `install("npm:whatever")` → 错误信息里**不许出现 `evil`**（说明用的是 user 配置的 npm） | 去掉写 manager 的 `{projectTrusted:false}` → A18 红（实测：错误会变成 `spawn /nonexistent/evil ENOENT`） |
+| **A19** | **写后回读校验**（第 2 轮 B4）：把 `<agentDir>/settings.json` 预置成坏 JSON `{invalid-json` → `install(...)` 必须 **`ok:false`**（或 `changed` 校验失败）且**文件不被改写**，消息里带 `drainErrors()` 的原文 | 去掉回读校验（只看"没抛"）→ A19 红（会报成功，而文件根本没写） |
+| **A20** | **并发不丢更新**（第 2 轮 S3）：两个 `installPackage` 用受控 barrier 同时发起 → 完成后**两个包都在**文件里 | 去掉模块级串行链 → A20 红（F33 实测只剩后一个） |
+| **A21** | **清除记录的反馈不许撒谎**（第 2 轮 S6，含我第 1 轮那条错的建议）：① 父目录有 `true` + default=ask → 提示里**不许**说"改 ask 就能恢复询问"，且必须说清仍受上层记录影响；② 没有继承记录但 `defaultProjectTrust=never/always` → 不许保证"下次会重新问" | 反馈退回"已清除这里的记录（下次会重新问）"/保留"或把 defaultProjectTrust 设为 ask" → A21 红 |
+| **A22** | **跨进程持久化**（第 2 轮 S5）：装完之后**起一个独立 node 子进程**（同一临时 agentDir、走生产 `packages.ts`）→ 它能列出那个包并建会话看到包里的工具；卸完之后再起一个 → 都没有了 | 让 `packages.ts` 把状态放在进程内存里 → A22 红（这一条顶掉用户"重启后确认"的人工动作） |
 
-以上 A1–A14 进 `host-check`（**无需凭据**），A15 进 `Pi: Run Self-Test`（T15，**gating**），
-A16 与 A5/A9 的"真命令"部分沿用 S8 的做法：**真命令 + 桩 QuickPick/InputBox**
-（S8 的 A14 已经证明这条路可行；`scripts/fixtures/vscode-stub.mjs` 现在有共享状态与 `Uri.fsPath`）。
+以上 A1–A14、A16–A22 进 `host-check`（**无需凭据**；A22 用 `spawnSync` 起子进程复用同一份 esbuild 产物），
+A15 进 `Pi: Run Self-Test`（**gating**）。真命令部分沿用 S8 的做法：**真命令 + 桩 QuickPick/InputBox/OpenDialog**。
 
 ## 7. 人工验收（Mac，**2 个动作**）
 
 夹具由我准备好（`~/Desktop/s9-pkg-demo/`，含 `extensions/demo.ts` 注册工具 `demo_echo` + 一份主题；
 **不放包内任何开发文件**），用户只做：
 
-**M1（1 个动作）**：`Pi: Install Package` → 输入框里选/粘 `~/Desktop/s9-pkg-demo`（或走 Q2 的文件夹选择器）
-→ 核对：① 信息消息说的是这个源 + `settings.json` 的**完整路径**；② **面板没坏**（还能发消息）；
-③ `Pi: List Packages` 里能看到它（作用域 user + 解析后的绝对路径）〔旁证：T15④ 已自动断言〕；
-④ **重启 VS Code** 之后 `Pi: List Packages` 仍然有它；⑤ 让 agent "用 demo_echo 工具说 hi" →
-**卡片上出现这次工具调用**（C3 的可见证据）〔旁证：T15①⑤ 已自动断言〕。
+**M1（1 个动作，含一次真重启）**：`Pi: Install Package` → 输入框里选/粘 `~/Desktop/s9-pkg-demo`
+（或走 Q2 的文件夹选择器）→ 核对：① 信息消息说的是这个源 + `settings.json` 的**完整路径** + **"新建会话后生效"**；
+② **面板没坏**（还能发消息，**当轮不被打断**）；③ `Pi: List Packages` 里能看到它；
+④ **重启 VS Code** → 让 agent "用 demo_echo 工具说 hi" → **卡片上出现这次工具调用**（C3 的可见证据）。
+（列表内容、跨进程持久化、"包里的工具真的被加载"这三件已由 A22/T15 自动断言 —— 第 2 轮 S5：能自动化的不留给用户，
+这里的 ④ 保留是因为它要**真宿主 + 真重启**。）
 
 > **为什么不拿 `../pi-config` 当夹具**（评审 N2）：用户的真实 `~/.pi/agent/settings.json` **已经**有它
 > （F27），装它只会走"已经在配置里了（未改动）"那条分支 —— 验不到"新装一个包"。pi-config 反而是
@@ -319,8 +370,11 @@ A16 与 A5/A9 的"真命令"部分沿用 S8 的做法：**真命令 + 桩 QuickP
 > M1 真正只有人工能验的是 **①（真输入框/真焦点）** 与 **④（真重启）**；③⑤ 标成旁证，
 > 出问题时先看 `T15` 的输出（`AGENTS.md` §1：能自动化的不留给人）。
 
-**M2（1 个动作）**：`Pi: Remove Package` → 选中它 → 核对：① 提示是"已移除"；② `Pi: List Packages` 里没有它了；
-③ 重启 VS Code 后仍然没有（`settings.json` 里也真的没了）。
+**M2（1 个动作，不需要重启）**：`Pi: Remove Package` → 选中它 → 核对：① 提示是"已移除"；
+② `Pi: List Packages` 里没有它了；③ 让 agent 再说一次"用 demo_echo 工具" → 这一次**没有那个工具**
+（新建会话之后才彻底消失这件事由 T15⑦ 自动断言）。
+（第 1 轮那版要求"再重启一次确认 settings.json 里也没了"—— 删掉：文件内容的检查由 A19/A22 与列表本身覆盖，
+第二次重启不增加信息量。）
 
 > 为什么必须人工（`AGENTS.md` §1 的四类）：**①真焦点/真键盘** —— 输入框与 QuickPick 是原生 UI，
 > 自动断言里是桩；**②真进程** —— "重启 VS Code 之后仍然生效"只有真重启能验。
@@ -331,10 +385,11 @@ A16 与 A5/A9 的"真命令"部分沿用 S8 的做法：**真命令 + 桩 QuickP
 
 - **W0**：`Pi: Run Self-Test` 期望变成 **17 项**（新增 T15；T12 仍 SKIP）⇒ `16 PASS / 0 FAIL / 1 SKIP`。
   （核过：当前 `REQUIRED_ITEMS` 13 项含 T14，加 T5c/T12/T13 三条 advisory = 16；加 T15 后 `REQUIRED_ITEMS` 14 项 ⇒ 17 项。评审 N1 独立核过。）
-- **W1**：`Pi: Install Package` → 选/输 `…\extensions\flyjancy.jerrypi-0.1.x\test-fixtures\ext-smoke`
-  （Q2 的文件夹选择器就是为这一步加的）→ `Pi: List Packages` 能看到 → **重启 VS Code** →
-  让 agent 调 `smoke_tool`（那个包注册的工具）→ 出现卡片 ⇒ 证明"重启后包真的被加载"；
-  然后 `Pi: Remove Package` → 列表里没了。输入 `npm:foo` 应得到**"需要 npm"**的人话提示（C6）。
+- **W1**（两次交互，都在真宿主里）：① `Pi: Install Package` → 用**文件夹选择器**选
+  `…\extensions\flyjancy.jerrypi-0.1.x\test-fixtures\ext-smoke`（长 Windows 路径正是为此加的入口）
+  → `Pi: List Packages` 能看到 → **重启 VS Code** → 让 agent 调 `smoke_tool`（包里注册的工具）→ 出现卡片
+  ⇒ "Windows 上重启后包真的被加载"；② 输入框里填 `npm:foo` → 应得到**"需要 npm"**的人话提示（C6，且
+  **git 源不会**被这样翻译 —— 那一条由 A11 的②态在 Mac 上自动覆盖）。
 
 ## 9. 步骤（每步单独提交 + 门禁全绿）
 
@@ -342,10 +397,10 @@ A16 与 A5/A9 的"真命令"部分沿用 S8 的做法：**真命令 + 桩 QuickP
 | --- | --- | --- |
 | 0 | **（已完成，2026-09-15）S8 的回顾补修**：codex 对已关闭的 S8 报了 4 条（`docs/S8-plan.md` §11.2 的 R1–R4），全部复现、修好、各带能红断言 ⇒ host-check 322 → **329**。这四条**随本阶段的 0.1.13 一起发**（不需要新的人工动作），S9 的步骤从 1 开始 | 见 S8-plan §11.2 |
 | 1 | `src/pi/packages.ts`（纯函数 + 依赖注入）+ `translateSourceError` + `describePackage` | A1–A4、A8、A9、A11、A12 |
-| 2 | `SessionHost.reloadSession()`（`src/pi/session.ts`）+ **`controller.reloadSession()`** + **`PickerCommands` 加 `isBusy()` / `reloadSession()`**（`chatView` 转发，与 S8 的 `trustMemo()` 同一条路子）+ `extension.ts` 接线 | A6、A7、A14 |
-| 3 | 三条命令（+ `package.json` 的 `contributes.commands`、i18n 标题）+ 输入框/文件夹选择器 | A5、A10、A16 |
-| 4 | 自测 T15 + host-check 的 A13a/A13b（不碰用户数据） | A13a、A13b、A15 |
-| 5 | 文档：README 中英（三条命令 + Q8 的已知限制）、`pi-traps`（`session.reload()` 才是生效点、`addSourceToSettings` 的返回语义、npm 缺失的错误形态、**"判忙一律用 controller 的 busy，`session.isStreaming` 有 `agent_start` 之前的盲窗"**）、`PLAN.md` §6 的"已知限制"逐字落地 | settings-check 的 16 项仍绿 |
+| 2 | **写路径的信任边界 + 串行化 + 写后回读校验**（§3.1 的三件事）：两个 `SettingsManager` 的工厂（写=false / 读=true）、`withPackageLock`、`verifyPersisted()`；**不动 `session.ts`**（Q3 决定不热重载） | A18、A19、A20、A13b |
+| 3 | **四个 VS Code 命令**（Install / Install-from-Folder / List / Remove —— 第 2 轮 N1：别把"三项能力"记成三条命令）+ `package.json` 的 `contributes.commands` + i18n 标题 + 输入框/文件夹选择器（桩里补 `showOpenDialog`） | A5、A6、A8–A10、A16、A17 |
+| 4 | 自测 T15（**走 `runtime.newSession()` 的生产路径**）+ A13a + **A22（跨进程）** | A13a、A15、A22 |
+| 5 | 文档：README 中英（**四个**命令 + Q8 的已知限制 + §12.4 的"跨进程并发不保证"）、`pi-traps`（**`session.reload()` 才是原地生效点、且它不重裁决项目信任**、`SettingsManager.create` 默认**信任项目**（F31）、写盘失败不抛只进 `drainErrors()`（F32）、`addSourceToSettings` 的返回语义、npm 缺失的错误形态、**两个"忙"口径在压缩期间不等价**（F35））、`PLAN.md` §6 的"已知限制"逐字落地 | settings-check 的 16 项仍绿 |
 | 6 | 版本 0.1.13 + 打包 + Mac M1/M2 → 上传/核验 → Windows W0/W1 → §12 回填 → 关阶段 | — |
 
 ## 10. 评审记录
@@ -366,18 +421,45 @@ A16 与 A5/A9 的"真命令"部分沿用 S8 的做法：**真命令 + 桩 QuickP
 | --- | --- | --- | --- |
 | **B1** | `s9-reload-probe.mjs` 的 7 个场景共用一个进程与 `agentDir`，从第 2 个场景起"全新会话"建好时**已经**带着上一轮的包 ⇒ S2（F15 的**唯一**证据）证明的不是 `session.reload()`；而且它打印的 S4/S5 会让人以为"loader 就够了"，与 F16 相反 | ACCEPT（已复核） | **我自己重写完探针再复跑**：每个场景一个 `mkdtemp` 世界 + **装包前的前置断言**（不干净就 `exit 1`）+ 父进程 `spawnSync` 逐场景起**干净子进程**。新输出：`loader-only: []`、`settings-only: []`（但 `getPackages()` 已更新）、`settings+loader: []`、`session-reload: ["pkg-two"]` ⇒ **F15 对，F16 更强**（两步一起也不够）。新增 **F29** 把这条探针纪律写进计划，F16 的"探针第一版"那句**不存在的引用**已删 |
 | **B2** | §3.4 的 T15 第④步"建会话 → 装之前没有 `probe_echo`"排在 install **之后** ⇒ 恒假；而 T15 是 **gating**，会把 `check:gate` 卡死（⑤也会恒绿） | ACCEPT | T15 改成 **①先建会话做基线 → ②再 install**（探针 `rich` 场景就是正确顺序的样板），并写明"装完之后任何新建会话都已经带着包"（F29 的机制） |
-| **B3** | §3.3/A6 用 `session.isStreaming` 判忙，而它**看不到**"已发送、`agent_start` 还没到"那个窗口 —— 本仓在 D7 就为此专门写了 `controller.isBusy()`（`pendingSend`） | ACCEPT | §3.3 改成用 **controller 的同一个 busy**（`snapshot().busy`）；A6 加**第三态**（`pendingSend` 真、`isStreaming` 假 ⇒ 也不许 reload）；§9 第 5 步把"判忙一律用 controller 的 busy"写进 `pi-traps`。这条同时是"判据主语被换掉"的实例（C3/R3 的主语是"忙"，A6 的主语是"那个字段"） |
+| **B3** | §3.3/A6 用 `session.isStreaming` 判忙，而它**看不到**"已发送、`agent_start` 还没到"那个窗口 —— 本仓在 D7 就为此专门写了 `controller.isBusy()`（`pendingSend`） | ACCEPT（**第 2 轮 B2 之后已不再适用**） | 第 1 轮改成用 controller 的 busy；**第 2 轮 B2 直接取消了"热重载"这件事**，连忙判断一起取消（详见 §10.2 的 B2/B3）。F35 留档：两个忙口径在压缩期间确实不等价 |
 | S1 | A13 是**夹具断言**（只在夹具写坏时红），且它的红法要求**真的往用户 `settings.json` 写一次** | ACCEPT | 换成 **A13a**（`agentDir` 为空必须抛）+ **A13b**（源码不变式：`packages.ts` 里不出现 `getAgentDir(`），§1 的 C7 映射同步改 |
 | S2 | 桩里**没有** `showOpenDialog` ⇒ Q2 的文件夹入口一条断言都没有，而 Windows W1 正靠它 | ACCEPT | 桩补 `showOpenDialog`（返回预置 Uri，复用已有的 `fsPath` 与共享状态）+ 新增 **A17**（必须交 `uri.fsPath`，不许 `toString()`） |
 | S3 | A1 要复刻 pi 的**私有** `parseSource`，顺序还写反了（真顺序是 `npm:` → local → git → 兜底 local），而 §2 的"不做"清单明说不许复刻 pi 的规则；三个 helper 也没导出 | ACCEPT | A1 收窄成 **`isNpmSource(source) = source.startsWith("npm:")`**（保守的否定条件：判错的代价是"退回 pi 原文"，安全方向），并写明**为什么不复刻**（新增 **F30** 记"三项都没导出"）；红法改成"放宽成含 `:` 就算 npm"⇒ `C:\…` 红 |
 | S4 | §3.3 拿 A6 当"reload 之后订阅还活着"的证据，而 A6 只数调用次数、不碰事件（跨节矛盾） | ACCEPT | 担保落到 **A7 的第二步**（reload 之后再触发一次事件，断言订阅仍收到）；§3.3 改成引用 A7 |
 | S5 | A10 的红法在本设计下**造不出来**（`PackageDeps` 拿不到会话，要造红得先改设计） | ACCEPT | A10 换成"构造期缓存一份"这种**真实可能的退化**：两次 `list()` 之间手工改 `settings.json`，第二次必须看到 —— 红法 = 构造期缓存。§3.1 顺带改成**一次性函数**（`listPackages(deps)`），让这个形状天然成立 |
-| S6 | §3.2 说"协议不用改"容易被读成"什么都不用改"：命令够不着会话宿主（`PickerCommands` 现在没有 busy/reload 出口） | ACCEPT | §3.3/§9 第 2 步**点名接缝**：`PickerCommands` 增 `isBusy()` 与 `reloadSession()`（`ChatViewProvider` 转发给 controller，与 `trustMemo()` 同一条路子），A6 的桩就打在这两个方法上 |
+| S6 | §3.2 说"协议不用改"容易被读成"什么都不用改"：命令够不着会话宿主（`PickerCommands` 现在没有 busy/reload 出口） | ACCEPT（**第 2 轮 B2 之后已不再适用**） | 第 1 轮点名了接缝；**第 2 轮 B2 取消热重载后这条接缝不需要了** —— 命令层与会话的接触面变成**零**（A14 就是这条不变式）。第 2 轮 N1 另指出 §3.2 的措辞仍要写清"四个命令" |
 | N1 | §8 的 W0 数字核过是对的（当前 16 项 ⇒ 加 T15 后 17 项 / `16 PASS / 0 FAIL / 1 SKIP`） | ACCEPT | 把"核过"的依据写进 §8（`REQUIRED_ITEMS` 13 项含 T14 + 3 条 advisory） |
 | N2 | F27 属实；建议 §7 里把"为什么不用 pi-config"挑明，免得实施时图省事换回去 | ACCEPT | §7 加一段：pi-config 只在用户配置里**已经**存在（幂等分支），真验"新装"要用新夹具；顺带把它标成 Q4 分支的可选夹具 |
 | N3 | M1 的 ③"列表里能看到"与 ⑤"工具出卡片"已被 T15 覆盖，可标旁证 | ACCEPT | §7 的这两条标注"旁证：T15④/T15①⑤ 已自动断言"，并写明 M1 真正只有人工能验的是①（真输入框）与④（真重启） |
 | N4 | §3.1 的 `InstallOutcome` 写成了非法 TS（`interface` 不能那样写联合类型） | ACCEPT | 改成 `export type InstallOutcome = {…} \| {…}`；`RemoveOutcome` 同 |
 | N5 | F23 的措辞要更准：探针是"把 `npmCommand` 指到不存在的地方"，真实受限机上可能是 `spawn npm ENOENT` | ACCEPT（未实测部分照实说） | F23 补一句"**未实测**：真实受限机上原文可能是 `spawn npm ENOENT`；两者都含 `ENOENT` ⇒ §3.1 的正则仍命中" |
+
+### 第 2 轮（2026-09-16，codex，本仓 `w60:pD` 面板；结论 `VERDICT: BLOCKING`，**5 B / 6 S / 2 N**）
+
+**处置：13 条全部 ACCEPT**（其中 **B2 的采纳让计划变简单**：不做自动 reload ⇒ B3/S6 大半随之消失）。
+
+评审者复跑了两个探针与 host-check（**329/329 通过**，说明当时的断言覆盖不到这些组合），并做了 6 组定向实验
+（独立临时 agentDir/cwd、不发模型请求、不动用户配置）。它的结论：第 1 轮的 B1/B2 改法**确实修好了原问题**
+（探针场景隔离有效、T15 顺序正确），但"命令操作 / pi 信任 / 持久化错误 / 会话重载"这几个**交界处**还有洞。
+
+| # | 意见（摘要） | 处置 | 我怎么处置的 |
+| --- | --- | --- | --- |
+| **B1** | 🔴 `SettingsManager.create` **默认 `projectTrusted: true`** ⇒ 未信任项目的 `.pi/settings.json` 能通过 `npmCommand` 决定我们 **spawn 什么程序**；`{local:false}` 只决定写入作用域，不隔离设置读取 | ACCEPT（已复核） | 核了默认值（`settings-manager.js:169-179`，与 S1-D11 记过的是同一条）+ `getNpmCommand` → `runNpmCommand`。改成**两份 manager**：写 = `{projectTrusted:false}`，读（只列） = `true` 且**永不**传给写函数。断言 **A18**（恶意 `npmCommand` 不许被 spawn）+ **A13b**（源码不变式）+ **F31** 入库 |
+| **B2** | 🔴 **自动 `session.reload()` 会把"空目录后来长出资源"的信任缺口重新打开**（实测 `asked:0` 但 `commands:["unapproved-project"]`）—— S8 R1 修的是**新建会话**那条路，reload 不重裁决 | ACCEPT | **推翻第 1 轮的 Q3：不做自动 reload**（Q3 改为"不自动"），统一走"新建会话"（F36：那条路既重读 settings 又重跑信任钩子）。§3.3 整节重写；F34 入库；A6 的源码不变式（不许出现 `.reload(`）+ A7 改走 `runtime.newSession()` |
+| **B3** | 第 1 轮 B3 的修法仍把两个忙口径混为一谈：`snapshot().busy = pendingSend \|\| isStreaming`，而 `controller.isBusy() = pendingSend \|\| !isIdle`（含 `isCompacting`）⇒ **压缩期间**前者 false、后者 true | ACCEPT | 核了源码（`agent-session.js:616-622`）。**随 B2 一起不再需要**：不 reload 就没有"忙时不许 reload"这条判断，第 1 轮要加的 `isBusy()/reloadSession()` 接缝**取消**。事实留档 **F35**（`pi-traps` 里也记一条：判忙别自造口径） |
+| **B4** | **"API 正常返回"≠ 已保存**：settings.json 是坏 JSON 时 `installAndPersist()` 照样返回、内存里也有，但**文件没写**（错误只在 `drainErrors()` 里）；reload 资源的加载错误同理 | ACCEPT | §3.1 加 **写后回读校验**（用**新** manager 读回来确认）；失败 ⇒ `ok:false` + Output 里放 `drainErrors()` 原文；**不谎称回滚**。断言 **A19**；F32 入库 |
+| **B5** | **移除候选含 project 条目，而删除永远走 user 作用域** ⇒ 同名时删错对象（`removed:true` 但删的是 user 那行）或永远"未匹配" | ACCEPT | **移除候选只列 user**；project 行照常展示但标注"（项目作用域：本版本不管理）"且不可选。断言 **A8** 扩展 + §3.2 写清为什么 |
+| S1 | 新 reload 探针**只打印、没有后置断言**；主题夹具依赖仓库外的 `../pi-config`，缺失时退化成"必然无效"的主题 ⇒ `PROBE OK` 可能是假绿 | ACCEPT | 每个场景加**精确后置断言**（不满足就非零退出）；主题夹具改用 **`pi-runtime/dist/modes/interactive/theme/dark.json`**（仓库内、发布时必在、格式一定合法），缺文件**显式失败**；`finally` 里 dispose 会话 + 带根守卫清理 |
+| S2 | 第 1 轮把 `isNpmSource` 收窄之后，**C6/Q7/R6 还承诺"要 npm 的 git 源也给'需要 npm'"** ⇒ 跨节矛盾（F37：git 缺 git 也会 ENOENT，硬翻译会撒谎） | ACCEPT | C6/Q7 同步收窄为"**`npm:` 源**明确提示；git 源保留原文"（上游 Windows 验收本来只要求 `npm:xxx`）；A11 增加"非 npm 源 + ENOENT → 原样"这一态 |
+| S3 | **每次新建 manager 不防并发**：两个安装各算好数组再写 ⇒ 静默丢一个包（实测只剩后一个），而 F4 的说法会让人以为已经解决 | ACCEPT | §3.1 加**模块级串行链**（`withPackageLock`）；F4 更正（字段锁只防"不同字段"）；断言 **A20**；跨进程边界写进 §12.4/README（**不**假装覆盖） |
+| S4 | A11 的第二种红法**不会红**（放宽 npm 分支时 `Path does not exist` 仍走路径分支）；A15 的红法会退化成"改夹具步骤"，证明不了生产接线 | ACCEPT | A11 改成**四态**并把能红的那态写成"非 npm 源 + ENOENT"；A15/A7 明确走 `runtime.newSession()` 生产路径，红法改成"把 `SettingsManager` 提到 `createRuntime` 外面"（一次真实可能的重构） |
+| S5 | "标旁证"没有真的减少人工：M1 仍要手工做列表/资源检查、M2 又要重启一次 | ACCEPT | 跨进程持久化改成**自动**（**A22**：`spawnSync` 起独立 node 子进程走生产 `packages.ts`）；M1 保留"真宿主安装 + 一次真重启"（真进程 + 真焦点），M2 **去掉第二次重启**（文件与列表由断言覆盖） |
+| S6 | 我给 R3 写的新提示里"或把 `defaultProjectTrust` 设为 ask"**是错的**（resolver 顺序是记录在前、默认在后 ⇒ 父目录有记录时改成 ask 也没用）；且"没有继承记录 + default=never/always"时也不该承诺"下次会重新问" | ACCEPT | 反馈改成按**真实裁决顺序**说：有继承记录 ⇒ 说明是哪个上层目录 + 该在那个目录上处理；无继承记录但默认不是 `ask` ⇒ 说明仍按默认策略；只有"能真的重新问"才说"下次会重新问"。断言 **A21**（三态）。R1/R2/R4 的修复本轮未复发（评审确认） |
+| N1 | 第 1 轮新增项的**转写**没过一遍：F30→F2b 的引用、§9 第 3 步漏 A17、"三条命令"实为**四个** VS Code 命令、`agent-session.d.ts:252` 那条注释讲的是 `_installAgentToolHooks` 而不是宿主的 `subscribe()`、`SessionHost.reloadSession()` 示例里的裸 `session` 不存在 | ACCEPT | 逐条改：引用统一 F2b；§9 第 3 步补 A17 与"四个命令"；§3.3 里那条 d.ts 引用**删掉**（那条订阅结论现在由 A7 的真实事件路径支撑，不再引用注释）；`reloadSession` 这一节整个消失（B2 的后果） |
+| N2 | A3 的"逐字节不变"与 C7 的"只动 settings.json"**强于实际行为**（pi 会 `JSON.stringify(…,null,2)` 重写整份；npm/git 还会写缓存与克隆目录） | ACCEPT | A3 改成"**解析后**无关字段深相等"（夹具带嵌套值与非标准缩进）；C7 改成"**配置**只写 user 作用域、不碰工作区；npm/git 的包存储由 pi 在自己目录里管" |
+
+> 第 2 轮的净效果：**计划变小**（少了"热重载 + 忙判断"那一整块），但**边界更硬**（信任/作用域/落盘/并发各有一条断言）。
+> 第 3 轮按纪律只核转写。
 
 ## 11. 实施期发现
 
@@ -389,4 +471,4 @@ A16 与 A5/A9 的"真命令"部分沿用 S8 的做法：**真命令 + 桩 QuickP
 
 ## 13. 待用户拍板
 
-见 §4 的 **Q1–Q8**。
+见 §4 的 **Q1–Q10**（第 2 轮把 Q3 改成"不自动 reload"、加了 Q5b/Q9/Q10，并新增 B1 那条信任边界）。
