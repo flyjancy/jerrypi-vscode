@@ -776,6 +776,37 @@ R14–R16）无错位；F40–F45、Q12–Q17 与本次改动无新增冲突；�
   | A13b① | 同上 | 红 |
   | A13b② | 在 `installPackage` 里插一句 `void readManagerFor(deps)` | 红 |
 
+### 11.3 步骤 3（2026-09-17）：四个 VS Code 命令（A5/A6/A9/A10/A14/A16/A17）
+
+- **落盘**：`src/commands.ts` 四条命令 —— `jerrypi.installPackage`（输入框）、
+  `jerrypi.installPackageFromFolder`（文件夹选择器，取 `uri.fsPath`）、`jerrypi.listPackages`（只读 QuickPick）、
+  `jerrypi.removePackage`（只列 user 作用域候选）；`package.json` 的 `contributes.commands` 同步加四条；
+  桩补 `showOpenDialog` + `queueOpenDialogResponse`。host-check 再加 **9 条**（**357 → 366**）。
+- **实施期发现（两条都是"计划写的红法不成立"，与 §11.1 的 A2 同类）**：
+  1. 🔴 **A17 的计划红法不成立**：计划写"把 `uri.fsPath` 改成 `uri.toString()` → A17 红"。
+     实测：pi 的 `resolvePath()` 会 `fileURLToPath()` 把 `file:///…` 解码回真实路径
+     （`chunk-JVUZYM.js` 的 `resolvePath`；还处理了 `%20`）⇒ **装仍然成功**，甚至落盘的相对形态也一样，
+     所以"断言装成功了"抓不到这个退化。改后的 A17 追加一条可观测差异：**消息里的源串不出现 `file:`**
+     （命令把下游拿到的源串回显出来了，这是唯一区分两种写法的地方）。红法已重跑确认。
+  2. **A6②（源码不变式）要先去注释**：第一版直接对整份源码 `includes(".reload(")`，结果被我自己的
+     一句注释（“`session.reload()` 不重裁决项目信任”）判红。改为**去行注释/块注释**后再查 ——
+     否则注释里提一下就会假红，而"真的加一行 `session.reload()`"照样能红（已重跑确认）。
+- **能红验证（实跑）**：
+
+  | 断言 | 改坏方式 | 结果 |
+  | --- | --- | --- |
+  | A5 / A6① | 消息里去掉“新建会话（或重载窗口）后生效” | 两条红 |
+  | A9② | `!outcome.removed` 分支改成弹“已移除”（信息消息） | 红 |
+  | A14 | 安装命令开头加 `if (pickers === undefined) return;` | 红（没有会话宿主时不再装） |
+  | A6② | 在安装命令里加一句真调用 `(module as …).reload()` | 红 |
+  | A10 | `readManagerFor` 改成按 cwd\|agentDir 缓存 | 红（`before:1 / after:1`） |
+  | A16 | `listPackages` 过滤掉 `filtered` 条目 | 红（项数 1 ≠ 3） |
+  | A17 | 换成 `folder.toString()` | 红（消息里出现 `file:///…`） |
+
+- **A9② 的夹具**：让 QuickPick 返回一个**改了源串**的条目（`…/not-in-config`）—— 模拟“用户选了一个已经不在配置里的条目”，
+  这样 `removeAndPersist()` 真的返回 `false`，断言读的是**生产返回值**而不是把状态改坏。
+  候选列表故意用 `picked.find(label === "../pkg-input")` 精确取本地条目，避开 npm 条目（删除 npm 源会 spawn `npm uninstall`）。
+
 ## 12. 实施与验收结果
 
 （待实施）

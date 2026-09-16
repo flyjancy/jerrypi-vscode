@@ -7,6 +7,8 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import { loadPi } from "./pi/loader";
+import type { PiModule } from "./pi/loader";
+import { describePackage, installPackage, listPackages, removePackage, settingsPathOf } from "./pi/packages";
 import { clearStoredApiKeys, createApiKeyStore, DEFAULT_PROVIDER, getModelRuntime, injectApiKey, refreshModelCatalog } from "./pi/runtime";
 import { describeAuthSource } from "./shared/format";
 import { runSelfTest } from "./pi/selftest";
@@ -21,6 +23,39 @@ import {
 import type { TrustMemoLike } from "./pi/trust";
 
 const CUSTOM_PROVIDER = "其他（手动输入 provider id）";
+
+/** 包管理命令共用的依赖（`agentDir` 一律取自生效的 pi 目录，与「打开设置文件」同一套）。 */
+function packageDeps(module: PiModule, cwd: string) {
+  return { pi: module, cwd, agentDir: module.getAgentDir() };
+}
+
+/** 装完之后的话术：**必须**告诉用户怎么让它生效（C2/R2）—— 我们不热重载（Q3）。 */
+function installedMessage(source: string, settingsPath: string): string {
+  return `已安装 ${source}（写进 ${settingsPath}）—— 新建会话（或重载窗口）后生效`;
+}
+
+async function runInstall(
+  module: PiModule,
+  source: string,
+  output: vscode.OutputChannel,
+): Promise<void> {
+  const { cwd } = workspaceCwd();
+  const deps = packageDeps(module, cwd);
+  const outcome = await installPackage(deps, source);
+  if (!outcome.ok) {
+    output.appendLine(`[packages] 安装失败 ${source}：${outcome.message}`);
+    void vscode.window.showWarningMessage(
+      `jerrypi: 安装 ${source} 失败 —— ${outcome.message.split("\n")[0]}（细节见 Output）`,
+    );
+    return;
+  }
+  const settingsPath = settingsPathOf(deps);
+  const message = outcome.changed
+    ? installedMessage(source, settingsPath)
+    : `${source} 已经在配置里了（未改动；${settingsPath}）`;
+  output.appendLine(`[packages] ${message}`);
+  void vscode.window.showInformationMessage(`jerrypi: ${message}`);
+}
 
 /** 选择器入口（由 ChatViewProvider 提供；命令面板与面板点击共用同一套逻辑）。 */
 export interface PickerCommands {
@@ -293,6 +328,122 @@ export function registerCommands(
       });
       output.appendLine(`[trust] trust.json=${join(agentDir, "trust.json")}｜cwd=${cwd}`);
       void vscode.window.showInformationMessage(`jerrypi: ${message}`);
+    }),
+
+    // S9：pi 包管理（装 / 装（文件夹）/ 列 / 卸）。
+    //
+    // 输入框与 QuickPick 都由宿主侧弹（与 `Pi: Project Trust…` 一致），**不经过 webview**
+    // ⇒ 协议不用改（S9-plan §3.2）。装/卸之后**不热重载**（Q3）：`session.reload()` 不重裁决
+    // 项目信任（F34），统一走“新建会话”（F36）—— 所以这几条命令与会话宿主的接触面是**零**。
+    vscode.commands.registerCommand("jerrypi.installPackage", async () => {
+      try {
+        const module = await pi();
+        const source = await vscode.window.showInputBox({
+          title: "jerrypi: 安装 pi 包",
+          prompt: "本地文件夹（绝对路径）、npm: 包名，或 git URL",
+          placeHolder: "/path/to/my-pi-package ｜ npm:@scope/pkg ｜ https://github.com/user/repo",
+          ignoreFocusOut: true,
+        });
+        if (source === undefined || source.trim().length === 0) return;
+        await runInstall(module, source.trim(), output);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        output.appendLine(`[packages] 安装失败：${message}`);
+        void vscode.window.showErrorMessage(`jerrypi: 安装包失败：${message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand("jerrypi.installPackageFromFolder", async () => {
+      try {
+        const module = await pi();
+        const picked = await vscode.window.showOpenDialog({
+          title: "jerrypi: 选择包文件夹",
+          openLabel: "安装这个文件夹里的 pi 包",
+          canSelectFiles: false,
+          canSelectFolders: true,
+          canSelectMany: false,
+        });
+        const folder = picked?.[0];
+        if (folder === undefined) return;
+        // `uri.fsPath`（**不是** `uri.toString()` —— 那会给出 `file:///…`，pi 认不出来）
+        await runInstall(module, folder.fsPath, output);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        output.appendLine(`[packages] 安装失败：${message}`);
+        void vscode.window.showErrorMessage(`jerrypi: 安装包失败：${message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand("jerrypi.listPackages", async () => {
+      try {
+        const module = await pi();
+        const deps = packageDeps(module, workspaceCwd().cwd);
+        const entries = listPackages(deps);
+        if (entries.length === 0) {
+          void vscode.window.showInformationMessage(
+            `jerrypi: 没有配置任何包（${settingsPathOf(deps)} 里没有 packages 条目）。`,
+          );
+          return;
+        }
+        // 只读：选中不做事（每一项已经把源 / 作用域 / 解析后的路径写在行里了）
+        await vscode.window.showQuickPick(entries.map(describePackage), {
+          title: `jerrypi: 已配置 ${entries.length} 个包（新建会话后生效）`,
+          matchOnDetail: true,
+          ignoreFocusOut: true,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        output.appendLine(`[packages] 列出包失败：${message}`);
+        void vscode.window.showErrorMessage(`jerrypi: 列出包失败：${message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand("jerrypi.removePackage", async () => {
+      try {
+        const module = await pi();
+        const deps = packageDeps(module, workspaceCwd().cwd);
+        // 候选只列 **user 作用域**：删除固定写 user，若两边都有同名源，选 project 那行
+        // 会删错对象（B5）。
+        const candidates = listPackages(deps)
+          .filter((entry) => entry.scope === "user")
+          .map((entry) => ({ ...describePackage(entry), source: entry.source }));
+        if (candidates.length === 0) {
+          void vscode.window.showInformationMessage(
+            "jerrypi: 没有可移除的包（本版本只管理 user 作用域的条目；项目作用域的请在 .pi/settings.json 里改）。",
+          );
+          return;
+        }
+        const picked = await vscode.window.showQuickPick(candidates, {
+          title: `jerrypi: 移除哪个包（${candidates.length} 个 user 作用域条目）`,
+          matchOnDetail: true,
+          ignoreFocusOut: true,
+        });
+        if (picked === undefined) return;
+
+        const outcome = await removePackage(deps, picked.source);
+        if (!outcome.ok) {
+          output.appendLine(`[packages] 移除失败 ${picked.source}：${outcome.message}`);
+          void vscode.window.showWarningMessage(
+            `jerrypi: 移除 ${picked.source} 失败 —— ${outcome.message.split("\n")[0]}（细节见 Output）`,
+          );
+          return;
+        }
+        if (!outcome.removed) {
+          // `removeAndPersist()` 返回 false = “没匹配到”（F11）—— **不许**当成功报（C5）。
+          const message = `未移除 ${picked.source}：配置里的 user 作用域没有匹配的条目（可能它已不在 user 配置里）。`;
+          output.appendLine(`[packages] ${message}`);
+          void vscode.window.showWarningMessage(`jerrypi: ${message}`);
+          return;
+        }
+        const settingsPath = settingsPathOf(deps);
+        const message = `已移除 ${picked.source}（配置：${settingsPath}）—— 新建会话（或重载窗口）后生效`;
+        output.appendLine(`[packages] ${message}`);
+        void vscode.window.showInformationMessage(`jerrypi: ${message}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        output.appendLine(`[packages] 移除包失败：${message}`);
+        void vscode.window.showErrorMessage(`jerrypi: 移除包失败：${message}`);
+      }
     }),
 
     vscode.commands.registerCommand("jerrypi.openSettingsFile", async () => {

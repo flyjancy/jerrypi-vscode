@@ -120,6 +120,26 @@
         "command": "jerrypi.selectThinkingLevel",
         "title": "Select Thinking Level",
         "category": "Pi"
+      },
+      {
+        "command": "jerrypi.installPackage",
+        "title": "Install Package",
+        "category": "Pi"
+      },
+      {
+        "command": "jerrypi.installPackageFromFolder",
+        "title": "Install Package from Folder…",
+        "category": "Pi"
+      },
+      {
+        "command": "jerrypi.listPackages",
+        "title": "List Packages",
+        "category": "Pi"
+      },
+      {
+        "command": "jerrypi.removePackage",
+        "title": "Remove Package",
+        "category": "Pi"
       }
     ],
     "viewsContainers": {

@@ -23,6 +23,7 @@ function state() {
     statusBars: [],
     quickPickQueue: [],
     inputBoxAnswers: [],
+    openDialogQueue: [],
     warningQueue: [],
     informationQueue: [],
     configuration: new Map(),
@@ -69,6 +70,14 @@ export function queueQuickPickResponse(response) {
 /** 预置下一次 `showInputBox` 的返回值。 */
 export function queueInputBoxAnswer(answer) {
   state().inputBoxAnswers.push(answer);
+}
+
+/**
+ * 预置下一次 `showOpenDialog` 的返回值（S9 的文件夹选择器）。
+ * 未预置时返回 `undefined`（= 真 vscode 里用户按了 Esc）。
+ */
+export function queueOpenDialogResponse(response) {
+  state().openDialogQueue.push(response);
 }
 
 /**
@@ -291,6 +300,14 @@ export const window = {
   showInputBox(options) {
     record("showInputBox", { options });
     return Promise.resolve(state().inputBoxAnswers.shift());
+  },
+  showOpenDialog(options) {
+    // 真 vscode 的形状：`showOpenDialog(options?) → Promise<Uri[] | undefined>`；
+    // `undefined` = 取消。返回值必须由调用方取 `uri.fsPath`（S9 A17：
+    // `uri.toString()` 会给出 `file:///…`，pi 认不出来 —— `vscode-stub.mjs:150` 那次事故的形态）。
+    record("showOpenDialog", { options });
+    const next = state().openDialogQueue.shift();
+    return Promise.resolve(typeof next === "function" ? next(options) : next);
   },
   showTextDocument(uri, options) {
     // 两种调用形都有：`showTextDocument(Uri)`（chatView 打开工具写的文件）与

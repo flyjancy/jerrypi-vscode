@@ -11,9 +11,9 @@
 
 ## 1. 现在
 
-**进行中**：**S9 实施期 · 步骤 2 完成**（`src/pi/packages.ts`：写路径信任边界 + 模块内串行化
-（`withPackageLock`）+ 写后回读校验（`persistedSnapshot`/`drainErrors`）+ A18/A19/A20/A13b；host-check **357**）。
-下一步：步骤 3（四个 VS Code 命令 + `package.json`，A5/A6/A8–A10/A16/A17）。
+**进行中**：**S9 实施期 · 步骤 3 完成**（四条命令：`Pi: Install Package` / `Install Package from Folder…` /
+`List Packages` / `Remove Package` + `package.json` 贡献点 + 桩补 `showOpenDialog`；host-check **366**）。
+下一步：步骤 4（自测 T15，走 `runtime.newSession()` 生产路径 + A22 跨进程）。
 
 **计划与评审**（细节全在 `docs/S9-plan.md`）：§0 有 **46 条**带证据的事实（F1–F46）+ 两个可重跑探针
 （`scripts/probes/s9-package-probe.mjs`、`scripts/probes/s9-reload-probe.mjs`）；§4 的 Q1–Q17 是决策与默认值。
@@ -50,12 +50,12 @@
 | 命令 | 现在 |
 | --- | --- |
 | `npm run typecheck`（2 套 tsconfig） | ✅ |
-| `npm run self-test` | **9/9**（其中 host-check **357**、webview-dom 91、render 128、protocol 112、settings 16/16） |
+| `npm run self-test` | **9/9**（其中 host-check **366**、webview-dom 91、render 128、protocol 112、settings 16/16） |
 | `npm run check:protocol` | 112 |
 | `npm run check:render` | **128** |
 | `node scripts/tool-text-check.mjs` | **91** |
 | `node scripts/webview-dom-check.mjs` | **91** |
-| `node scripts/host-check.mjs` | **357** |
+| `node scripts/host-check.mjs` | **366** |
 | `npm run check:controller`（真模型，**不进 CI**） | **110/110**（S8 加了 A15：`approvalMode:all` 下拒绝→副作用没发生→允许→真的执行；另含 S7 的 A7 与一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **16 项（13 gating + T5c/T12/T13 advisory）GATE PASS**（本机 T12 也 PASS ⇒ 16 PASS / 0 FAIL / 0 SKIP；**T14 是 S8 新增的工具审批项，不用模型**；T13：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[…]；PI_OFFLINE=未设`） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **16 项（13 gating + T5c/T12/T13 advisory）GATE PASS**（0.1.8 时是 15 项；**S8 加了 T14 之后是 16 项**。上次 Windows W0 真宿主跑的是 15 项版：14 PASS / 0 FAIL / 1 SKIP = T12 —— 那台机器没有 `pi`） |
@@ -86,8 +86,8 @@
 | 0 | S8 的回顾补修（codex 的 R1–R4） | ✅（已随 S8-plan §11.2 落盘） |
 | 1 | `src/pi/packages.ts` + A1–A4/A8/A9/A11/A12/A13a | ✅ |
 | 2 | 写路径的信任边界 + 串行化 + 写后回读校验（A18/A19/A20/A13b） | ✅ |
-| 3 | 四个 VS Code 命令 + `package.json`（A5/A6/A8–A10/A16/A17） | ⏳ 下一个 |
-| 4 | 自测 T15（走 `runtime.newSession()`）+ A22（跨进程） | |
+| 3 | 四个 VS Code 命令 + `package.json`（A5/A6/A8–A10/A16/A17） | ✅ |
+| 4 | 自测 T15（走 `runtime.newSession()`）+ A22（跨进程） | ⏳ 下一个 |
 | 5 | 文档：README 中英 / `pi-traps` / `PLAN.md` §6 | |
 | 6 | （追加③）manifest 移 `secondarySidebar` + A23 | |
 | 7 | （追加④）`src/pi/shell.ts` + `Pi: Set Shell Path` + T16 + A24/A25/A26 | |

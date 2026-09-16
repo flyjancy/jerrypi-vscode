@@ -27,7 +27,7 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const STUB_PATH = path.join(SCRIPT_DIR, "fixtures", "vscode-stub.mjs");
 
 const stub = await import(pathToFileURL(STUB_PATH).href);
-const { resetStub, callsOf, stubCalls, queueQuickPickResponse, queueWarningResponse, queueInformationResponse, queueInputBoxAnswer, queueConfiguration, fireConfigurationChange, setWorkspaceFolders } = stub;
+const { resetStub, callsOf, stubCalls, queueQuickPickResponse, queueWarningResponse, queueInformationResponse, queueInputBoxAnswer, queueOpenDialogResponse, queueConfiguration, fireConfigurationChange, setWorkspaceFolders } = stub;
 
 const results = [];
 const check = (name, ok, detail = "") => results.push([name, ok, detail]);
@@ -3129,6 +3129,152 @@ check(
         !/readManagerFor|projectTrusted:\s*true/.test(writeRegion),
       writeRegion.slice(0, 200),
     );
+  }
+}
+
+// ------------------------------------- S9 第 3 步：四个 VS Code 命令（A5/A6/A9/A10/A14/A16/A17）
+//
+// 驱动：真命令（`registerCommands` + `executeCommand`）+ 真 pi + 真文件系统；
+// 桩只出现在两端：输入框 / QuickPick / OpenDialog 的**返回值**（断言端）。
+{
+  const makeExtensionContext = (extensionPath) => {
+    const secrets = new Map();
+    const globalState = new Map();
+    return {
+      extensionUri: vscode.Uri.file(extensionPath),
+      extension: { packageJSON: { version: "0.0.0-check" } },
+      subscriptions: [],
+      secrets: {
+        get: (key) => Promise.resolve(secrets.get(key)),
+        store: (key, value) => { secrets.set(key, value); return Promise.resolve(); },
+        delete: (key) => { secrets.delete(key); return Promise.resolve(); },
+      },
+      globalState: {
+        get: (key, fallback) => (globalState.has(key) ? globalState.get(key) : fallback),
+        update: (key, value) => { globalState.set(key, value); return Promise.resolve(); },
+      },
+    };
+  };
+  const makePackage = (dir) => {
+    fs.mkdirSync(path.join(dir, "extensions"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "extensions", "probe.ts"), "export default function () {}\n", "utf8");
+    return dir;
+  };
+
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "s9-cmd-"));
+  const agentDir = path.join(root, "agent");
+  const cwd = path.join(root, "ws");
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(cwd, { recursive: true });
+  const pkgInput = fs.realpathSync(makePackage(path.join(root, "pkg-input")));
+  const pkgFolder = fs.realpathSync(makePackage(path.join(root, "pkg-folder")));
+  const settingsPath = path.join(agentDir, "settings.json");
+  const readPackages = () => JSON.parse(fs.readFileSync(settingsPath, "utf8")).packages;
+  const messagesOf = (kind) => callsOf(kind).map((call) => String(call.message));
+  const savedEnv = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  const context = makeExtensionContext(REPO_ROOT);
+  const commandOutput = makeOutput();
+  try {
+    // ---- A14/A5/A6：输入框入口（没有会话宿主：`registerCommands` 只给两个参数）
+    resetStub();
+    setWorkspaceFolders([{ uri: vscode.Uri.file(cwd), name: "ws", index: 0 }]);
+    registerCommands(context, commandOutput);
+    queueInputBoxAnswer(pkgInput);
+    await vscode.commands.executeCommand("jerrypi.installPackage");
+    check(
+      "A14：没有会话宿主时装包仍然成功（命令层与会话的接触面为零）",
+      messagesOf("showInformationMessage").some((m) => m.includes("已安装")) && readPackages().includes("../pkg-input"),
+      JSON.stringify({ info: messagesOf("showInformationMessage"), packages: fs.existsSync(settingsPath) ? readPackages() : null }),
+    );
+    check(
+      "A5：信息消息里带源名 + settings.json 路径 + 「新建会话」",
+      messagesOf("showInformationMessage").some((m) => m.includes(pkgInput) && m.includes(settingsPath) && m.includes("新建会话")),
+      JSON.stringify(messagesOf("showInformationMessage")),
+    );
+    check(
+      "A6①：消息明说「新建会话（或重载窗口）后生效」",
+      messagesOf("showInformationMessage").some((m) => m.includes("新建会话（或重载窗口）后生效")),
+      JSON.stringify(messagesOf("showInformationMessage")),
+    );
+    check(
+      "A6②：包管理与命令层里不出现 `.reload(`（Q3：不热重载；注释里的引用不算）",
+      [path.join(REPO_ROOT, "src/pi/packages.ts"), path.join(REPO_ROOT, "src/commands.ts")].every(
+        (file) => !fs.readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "").includes(".reload("),
+      ),
+      "",
+    );
+
+    // ---- A17：文件夹选择器必须用 uri.fsPath（不是 toString()）
+    queueOpenDialogResponse([vscode.Uri.file(pkgFolder)]);
+    await vscode.commands.executeCommand("jerrypi.installPackageFromFolder");
+    check(
+      "A17：文件夹入口交下去的是 uri.fsPath（消息里是个纯 fs 路径、不是 file:///）",
+      messagesOf("showInformationMessage").some(
+        (m) => m.includes(pkgFolder) && m.includes("已安装") && !m.includes("file:"),
+      ) && readPackages().includes("../pkg-folder"),
+      JSON.stringify({ info: messagesOf("showInformationMessage"), packages: readPackages() }),
+    );
+
+    // ---- A10：list() 每次读的是文件里的真相（构造期缓存会红）
+    {
+      const deps = { pi: await loadPi(REPO_ROOT), cwd, agentDir };
+      const before = listPackages(deps).length;
+      const raw = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      raw.packages = [...raw.packages, "../pkg-manual"];
+      fs.writeFileSync(settingsPath, JSON.stringify(raw, null, 2), "utf8");
+      const after = listPackages(deps).length;
+      check(
+        "A10：两次 list() 之间手工改 settings.json → 第二次必须看到（绝不缓存）",
+        after === before + 1,
+        JSON.stringify({ before, after }),
+      );
+    }
+
+    // ---- A16：列表 QuickPick 的项数与 list() 一致（含 filtered 与项目条目）
+    resetStub();
+    setWorkspaceFolders([{ uri: vscode.Uri.file(cwd), name: "ws", index: 0 }]);
+    registerCommands(context, commandOutput);
+    fs.writeFileSync(settingsPath, JSON.stringify({ packages: ["../pkg-input", { source: "npm:foo", extensions: ["ext"] }] }, null, 2), "utf8");
+    fs.mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, ".pi", "settings.json"), JSON.stringify({ packages: ["/proj/pkg"] }), "utf8");
+    const expected = listPackages({ pi: await loadPi(REPO_ROOT), cwd, agentDir });
+    queueQuickPickResponse(undefined);
+    await vscode.commands.executeCommand("jerrypi.listPackages");
+    const items = callsOf("showQuickPick").at(-1)?.items ?? [];
+    check(
+      "A16：列表项数与 list() 一致、含 filtered 与项目 scope（不硬编码、不只显示本地源）",
+      items.length === expected.length &&
+        expected.length === 3 &&
+        items.some((item) => String(item.label).includes("(filtered)")) &&
+        items.some((item) => String(item.description).includes("项目作用域")),
+      JSON.stringify({ count: items.length, expected: expected.length, labels: items.map((item) => item.label) }),
+    );
+
+    // ---- A9②③：remove 的 false 分支不许当成功；成功分支要说「已移除」
+    resetStub();
+    setWorkspaceFolders([{ uri: vscode.Uri.file(cwd), name: "ws", index: 0 }]);
+    registerCommands(context, commandOutput);
+    queueQuickPickResponse((picked) => ({ ...picked[0], source: path.join(root, "not-in-config") }));
+    await vscode.commands.executeCommand("jerrypi.removePackage");
+    check(
+      "A9②：真命令接到 removed=false → 警告「未移除」，不许弹「已移除」",
+      messagesOf("showWarningMessage").some((m) => m.includes("未移除")) &&
+        !messagesOf("showInformationMessage").some((m) => m.includes("已移除")),
+      JSON.stringify({ warns: messagesOf("showWarningMessage"), info: messagesOf("showInformationMessage") }),
+    );
+    queueQuickPickResponse((picked) => picked.find((item) => item.label === "../pkg-input"));
+    await vscode.commands.executeCommand("jerrypi.removePackage");
+    check(
+      "A9③：成功移除 → 信息消息说「已移除」且配置里真的没了",
+      messagesOf("showInformationMessage").some((m) => m.includes("已移除")) && !readPackages().includes("../pkg-input"),
+      JSON.stringify({ info: messagesOf("showInformationMessage"), packages: readPackages() }),
+    );
+  } finally {
+    setWorkspaceFolders([]);
+    if (savedEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedEnv;
+    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
