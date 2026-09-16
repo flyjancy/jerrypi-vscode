@@ -187,6 +187,7 @@ async function buildModules(tempDir) {
       `export { createSelfTestUIContext } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/selftest-ui"))};`,
       `export { createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/trust"))};`,
       `export { createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/trustPrompt"))};`,
+      `export { isNpmSource, translateSourceError, describePackage, settingsPathOf, listPackages, installPackage, removePackage } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/packages"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -204,7 +205,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES, createSessionHost, SessionHostController, createSelfTestUIContext, createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS, createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES, createSessionHost, SessionHostController, createSelfTestUIContext, createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS, createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM, isNpmSource, translateSourceError, describePackage, settingsPathOf, listPackages, installPackage, removePackage } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 const vscodeStub = await import(pathToFileURL(STUB_PATH).href);
@@ -2846,6 +2847,179 @@ check(
     await controller.dispose();
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(marker, { force: true });
+  }
+}
+
+// ------------------------------------- S9 第 1 步：包管理（A1–A4 / A8 / A9 / A11 / A12 / A13a）
+//
+// 夹具：真 pi（`loadPi`）+ 临时 agentDir / cwd / 一个临时本地包；**不碰用户配置**（AGENTS.md §4）。
+// A1/A8/A11 是纯函数（构造对象当输入）；A2/A3/A4/A9/A12 走真文件系统与真 `DefaultPackageManager`。
+{
+  const s9Root = () => fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "s9-host-"));
+  /** 一个 pi 认的本地包：`extensions/` + `themes/` 子目录就够（F20）。 */
+  const makePackage = (dir) => {
+    fs.mkdirSync(path.join(dir, "extensions"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "themes"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "extensions", "probe.ts"), "export default function () {}\n", "utf8");
+    fs.writeFileSync(path.join(dir, "themes", "probe-theme.json"), "{}\n", "utf8");
+    return dir;
+  };
+  const piModule = await loadPi(REPO_ROOT);
+
+  // ---- A1：保守的 npm 判定（不许复刻 pi 的 parseSource）
+  {
+    const yes = ["npm:foo", "npm:@scope/x"];
+    const no = ["git@github.com:a/b.git", "https://github.com/a/b", "./x", "../x", "C:\\Users\\me\\pkg", "/abs/x", "x", "path:./x"];
+    const wrong = [...yes.filter((s) => !isNpmSource(s)), ...no.filter((s) => isNpmSource(s))];
+    check("A1：只有 npm: 前缀算 npm 源（C:\\… 这种 Windows 路径不许被误判）", wrong.length === 0, JSON.stringify(wrong));
+  }
+
+  // ---- A11：失败形态的四态（纯函数）
+  {
+    const spawnNpm = translateSourceError(new Error("spawn /nonexistent/npm-binary ENOENT"), "npm:whatever");
+    const spawnGit = "spawn git ENOENT";
+    const gitRaw = translateSourceError(new Error(spawnGit), "https://github.com/a/b");
+    const missing = translateSourceError(new Error("Path does not exist: /nope/here"), "/nope/here");
+    const other = translateSourceError(new Error("boom"), "npm:whatever");
+    check("A11①：npm: 源 + spawn ENOENT → 翻译成「需要 npm」并保留原文", spawnNpm.includes("需要 npm") && spawnNpm.includes("ENOENT"), spawnNpm);
+    check("A11②：非 npm 源的 spawn ENOENT → 原样透出（F37：缺 git 也一样是 ENOENT，硬翻译会撒谎）", gitRaw === spawnGit, gitRaw);
+    check("A11③：Path does not exist → 加前缀「找不到这个路径：」并带路径", missing.startsWith("找不到这个路径：/nope/here") && missing.includes("Path does not exist: /nope/here"), missing);
+    check("A11④：其它错误 → 原样", other === "boom", other);
+  }
+
+  // ---- A8：列表行的三段（纯函数）
+  {
+    const user = describePackage({ source: "../my-pkg", scope: "user", filtered: false, installedPath: "/x/my-pkg" });
+    const filtered = describePackage({ source: "npm:foo", scope: "user", filtered: true, installedPath: "/x/foo" });
+    const broken = describePackage({ source: "/gone", scope: "user", filtered: false });
+    const project = describePackage({ source: "/p", scope: "project", filtered: false, installedPath: "/p" });
+    check("A8①：user 行 = 源 + user + 解析后的绝对路径", user.label === "../my-pkg" && user.description === "user" && user.detail === "/x/my-pkg", JSON.stringify(user));
+    check("A8②：filtered 的加 (filtered) 后缀（与 CLI 一致，F24）", filtered.label === "npm:foo (filtered)", JSON.stringify(filtered));
+    check("A8③：installedPath 缺失 → 「找不到（路径已失效）」（不许静默过滤，Q5）", broken.detail === "找不到（路径已失效）", JSON.stringify(broken));
+    check("A8④：project 行标注「（项目作用域：本版本不管理）」（Q5b/B5）", project.description.includes("项目作用域：本版本不管理"), JSON.stringify(project));
+  }
+
+  // ---- A13a：agentDir 缺失/为空直接抛（不许回退 pi 的默认目录）
+  {
+    const throws = (fn) => {
+      try {
+        fn();
+        return false;
+      } catch {
+        return true;
+      }
+    };
+    check(
+      "A13a：agentDir 为空/缺失时包管理直接抛（C7：不写用户真实配置）",
+      throws(() => listPackages({ pi: piModule, cwd: os.tmpdir(), agentDir: "" })) &&
+        throws(() => listPackages({ pi: piModule, cwd: os.tmpdir(), agentDir: undefined })),
+      "",
+    );
+  }
+
+  // ---- A2/A3/A4：真装（临时 agentDir + 临时 cwd + 临时包）
+  {
+    const root = s9Root();
+    const agentDir = path.join(root, "agent");
+    const cwd = path.join(root, "ws");
+    const pkg = fs.realpathSync(makePackage(path.join(root, "my-pkg")));
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(cwd, { recursive: true });
+    const deps = { pi: piModule, cwd, agentDir };
+    const settingsPath = settingsPathOf(deps);
+    const seeded = {
+      theme: "catppuccin-mocha",
+      retry: { enabled: true, maxRetries: 7, provider: { timeoutMs: 1234 } },
+      packages: [],
+    };
+    // 非标准缩进 + 嵌套值：pi 落盘时会 `JSON.stringify(…,null,2)` 重写整份，
+    // 所以 A3 判的是「解析后无关字段深相等」，不是逐字节（N2）。
+    fs.writeFileSync(
+      settingsPath,
+      '{\n    "theme": "catppuccin-mocha",\n  "retry": {\n      "enabled": true,\n    "maxRetries": 7,\n    "provider": { "timeoutMs": 1234 }\n  },\n  "packages": []\n}\n',
+      "utf8",
+    );
+    try {
+      const first = await installPackage(deps, pkg);
+      check("A4①：第一次装 → ok 且 changed=true", first.ok === true && first.changed === true, JSON.stringify(first));
+      check(
+        "A2：装完之后工作区里没有 .pi/settings.json（配置只写 user 作用域）",
+        fs.existsSync(path.join(cwd, ".pi", "settings.json")) === false,
+        path.join(cwd, ".pi", "settings.json"),
+      );
+      const after = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      const { packages, ...rest } = after;
+      check(
+        "A3①：除 packages 外其它字段解析后深相等（嵌套值与非标准缩进都活下来）",
+        JSON.stringify(rest) === JSON.stringify({ theme: seeded.theme, retry: seeded.retry }),
+        JSON.stringify(rest),
+      );
+      check(
+        "A3②：写进去的是相对 agentDir 的形态（F9：绝对路径被规范化）",
+        Array.isArray(packages) && packages.length === 1 && packages[0] === "../my-pkg",
+        JSON.stringify(packages),
+      );
+      const second = await installPackage(deps, pkg);
+      check("A4②：同一个源再装一次 → changed=false（F10 的幂等分支）", second.ok === true && second.changed === false, JSON.stringify(second));
+      const listed = listPackages(deps);
+      check(
+        "A8 前置：list() 看到那条（scope=user、installedPath=解析后的绝对路径）",
+        listed.length === 1 && listed[0].scope === "user" && fs.realpathSync(listed[0].installedPath) === pkg,
+        JSON.stringify(listed),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // ---- A9：remove 的返回值原样透出（false 不许当成功）
+  {
+    const root = s9Root();
+    const agentDir = path.join(root, "agent");
+    const cwd = path.join(root, "ws");
+    const pkg = fs.realpathSync(makePackage(path.join(root, "my-pkg")));
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(cwd, { recursive: true });
+    const deps = { pi: piModule, cwd, agentDir };
+    try {
+      await installPackage(deps, pkg);
+      const removed = await removePackage(deps, pkg);
+      const again = await removePackage(deps, pkg);
+      check(
+        "A9①：第一次 remove → removed=true；再 remove → removed=false（F11）",
+        removed.ok === true && removed.removed === true && again.ok === true && again.removed === false,
+        JSON.stringify({ removed, again }),
+      );
+      const raw = JSON.parse(fs.readFileSync(settingsPathOf(deps), "utf8"));
+      check("A9②：移除只在 packages 里动手（空数组保留，不删键 —— F11）", Array.isArray(raw.packages) && raw.packages.length === 0, JSON.stringify(raw.packages));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // ---- A12：失败不留脏（npm 不可用 = 把 npmCommand 指到不存在的路径，F23）
+  {
+    const root = s9Root();
+    const agentDir = path.join(root, "agent");
+    const cwd = path.join(root, "ws");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(cwd, { recursive: true });
+    const deps = { pi: piModule, cwd, agentDir };
+    const settingsPath = settingsPathOf(deps);
+    const seed = { npmCommand: ["/nonexistent/npm-binary"], packages: [] };
+    fs.writeFileSync(settingsPath, JSON.stringify(seed, null, 2), "utf8");
+    try {
+      const outcome = await installPackage(deps, "npm:whatever");
+      const after = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      check(
+        "A12①：npm 不可用时 install 报失败（翻译成「需要 npm」）",
+        outcome.ok === false && outcome.message.includes("需要 npm"),
+        JSON.stringify(outcome),
+      );
+      check("A12②：失败之后 settings.json 解析后不变（F23：先 install 再写）", JSON.stringify(after) === JSON.stringify(seed), JSON.stringify(after));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   }
 }
 

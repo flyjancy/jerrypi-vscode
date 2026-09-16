@@ -32,6 +32,8 @@ export const REQUIRED_PI_EXPORTS = [
   "ModelRuntime",
   "SessionManager",
   "SettingsManager",
+  // S9：包管理（F1）。`SettingsManager` 上面已经有了。
+  "DefaultPackageManager",
   "createAgentSessionServices",
   "createAgentSessionFromServices",
   "createAgentSessionRuntime",

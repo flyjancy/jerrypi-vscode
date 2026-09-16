@@ -713,7 +713,42 @@ R14–R16）无错位；F40–F45、Q12–Q17 与本次改动无新增冲突；�
 
 ## 11. 实施期发现
 
-（待实施）
+### 11.1 步骤 1（2026-09-17）：`src/pi/packages.ts` + A1–A4/A8/A9/A11/A12/A13a
+
+- **落盘**：`src/pi/packages.ts`（`isNpmSource` / `translateSourceError` / `describePackage` /
+  `settingsPathOf` / `listPackages` / `installPackage` / `removePackage`）+ host-check **20 条**新断言
+  （**329 → 349**）。顺带把 `DefaultPackageManager` 加进 `loader.ts` 的 `REQUIRED_PI_EXPORTS`
+  （依赖它就得配漂移守卫；F1 已证 bundle 里有它）。
+- **与计划的两处差异（都是"提前"，不是改口径）**：
+  1. `requireAgentDir` 与 **A13a** 从步骤 4 提前到步骤 1 —— 它是接口契约（`agentDir` 必填）的一部分，
+     而"先写一条没人守的守卫、三步后再补断言"违反先红后绿。步骤 4 只剩 T15 与 A22。
+  2. `writeManagerFor` 的 `{ projectTrusted: false }` 在步骤 1 就写上了（计划把它记在步骤 2）：
+     没有理由先提交一版"知道不安全"的写路径；步骤 2 补的是**串行化 + 写后回读校验**及
+     A18/A19/A20/A13b 的断言。
+- **能红验证（每条都实跑过：改坏 `src/pi/packages.ts` → 重跑 host-check → 看红 → 恢复）**：
+
+  | 断言 | 改坏方式 | 结果 |
+  | --- | --- | --- |
+  | A1 | `isNpmSource` 改成 `source.includes(":")` | 红（`git@…`/`https://…`/`C:\…`/`path:./x` 四条被误判） |
+  | A11① / A12① | npm 分支的 `if` 改成 `if (false)` | 两条红（A12① 退回裸 spawn 原文） |
+  | A11② | npm 分支条件去掉 `isNpmSource(source)` | 红（git 源被翻译成"需要 npm" = F37 的撒谎形态） |
+  | A11③ | 路径分支的 regex 换成 `null` | 红 |
+  | A8②③④ | 分别去掉 `(filtered)` / "找不到"分支 / project 标注 | 三条分别红 |
+  | A13a | `requireAgentDir` 只拦 `undefined`、放过 `""` | 红 |
+  | A4② | `changed` 恒 `true` | 红 |
+  | A9① | `removed` 恒 `true` | 红 |
+  | A12② | install **之前**手动 `setPackages(...)+flush()`（= "先写 settings 再 install"） | 红（settings 被写脏） |
+  | A2 | 写 manager 改回默认信任 **且** `installAndPersist(source,{local:true})` | 红（`cwd/.pi/settings.json` 出现） |
+  | A3① | 装完改成整份覆写（丢 `theme`/`retry`） | 红 |
+
+- **计划里 A2 的红法要修正**（计划写的"只加 `{local:true}` → A2 红"在本设计下**不会红**）：
+  写 manager 是 `{ projectTrusted: false }`，项目作用域会先被 `assertProjectTrustedForScope` 拦下抛错，
+  根本没写工作区 —— 实测只改 `{local:true}` 时 A2 仍然绿。真实红法 = **两处一起改**（信任口径 + 作用域）。
+  这不是放松验收：A2 的判据（"装完之后工作区里没有 `.pi/settings.json`"）不变，只是红法要跟着设计写。
+- A1/A8/A11 是纯函数（构造对象当输入）；A2/A3/A4/A9/A12 走真 pi + 真文件系统（临时 agentDir/cwd，
+  `fs.rmSync` 带 `mkdtempSync` 前缀的自然边界，不碰 `~/.pi/agent`）。
+
+（步骤 2 起继续往下记。）
 
 ## 12. 实施与验收结果
 

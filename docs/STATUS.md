@@ -11,28 +11,16 @@
 
 ## 1. 现在
 
-**进行中**：**S9 计划期**（pi 包管理：`Pi: Install Package` / `Pi: List Packages` / `Pi: Remove Package`）。
-计划已写完：`docs/S9-plan.md`（§0 有 **46 条**带证据的事实（F1–F46，含 2026-09-17 追加范围的 F38–F46）+ 两个**可重跑探针** —— `scripts/probes/s9-package-probe.mjs`、`scripts/probes/s9-reload-probe.mjs`；§4 是 Q1–Q17 待你拍板）。
-**第 1 轮评审已吸收完**（`VERDICT: BLOCKING`，3 B / 6 S / 5 N，14 条全部 ACCEPT —— §10.1）。
-其中 **B1 我先自己复现再改**：探针第 1 版 7 个场景共用一个进程与 agentDir ⇒ S2（F15 的唯一证据）是假绿；
-已重写成"每场景独立进程 + 独立 agentDir + 装包前前置断言"，重跑得到 `loader-only: []`、
-`settings+loader: []`（两步都不够）、`session-reload: ["pkg-two"]`（一步够，**F16 比原计划更强**）。
-**第 2 轮评审已吸收完**（codex，`w60:pD`；`VERDICT: BLOCKING`，**5 B / 6 S / 2 N**，13 条全部 ACCEPT —— §10.2）。
-这轮把计划**改小也改硬**了：采纳 B2 ⇒ **不做热重载**（`session.reload()` 不重裁决项目信任，实测"空目录后来
-长出 `.pi/extensions/` 会被未经询问加载"），于是第 1 轮那套"忙判断 + 重载接缝"整块取消；同时新增四条边界断言
-（写路径必须 `projectTrusted:false`、写后回读校验、并发串行化、跨进程持久化）。§0 新增 **F31–F37**。
-**按用户要求暂不启动第 3 轮（主线部分）**；**追加范围的 Astra 评审第 1 轮已吸收完**（2026-09-17，codex/gpt-6-astra，
-`w60:pD`；`VERDICT: BLOCKING`，**5 B / 3 S / 2 N**，8 条实质意见全部 ACCEPT —— §10.3）：消掉 1 个初始化期
-对话框死锁窗口（ready 先 `dialogHost.replay()` 再 `await ensure()`）、补 `dialog/close` 撤卡协议与结算表、
-`resolveCurrentShell` 改为按已保存用户配置预检（`getShellConfig` 无参不读 settings.json，实测）、**Q15 版本号改回
-0.1.13**（0.2.0 是 S10 首个正式版语义，S9 抢跳 = 正式版跳过 Windows 预发布验证门槛）、键盘断言分两层
-（handler 逻辑可无头测，新增 A32–A35）。**Astra 第 2 轮也已吸收完**（同机同模型；`VERDICT: BLOCKING`，**2 B / 3 S / 2 N**，5 条实质意见全部 ACCEPT —— §10.4）：
-三个重点问题有了明确结论 —— A32① 死锁探测**能红**（夹具须走真实初始化链，清理带超时）；结算表**销毁边界自洽但整体
-有洞**（补 `answered` reason、**晚到的加载结果先查 pending**防孤儿卡复活）；Q15 引文**对齐**。另把它抓的
-"预检的信任口径"定死：manager 必须 `{projectTrusted:false}`（实测默认信任会把用户已拒绝的项目 shellPath
-报出来），口径改为"已保存的用户配置（global）预检"；A32⑤ 的 oracle 改写实（副作用证据，不依赖 Promise 二次
-结算语义）。**Astra 两轮设计 + 末轮转写核对均已完成**（末轮 VERDICT: OK，0 BLOCKING/2S/2N，转写漏同步已修）；
-下一步：Q1–Q17（含改过的 Q15）摆给用户拍板。
+**进行中**：**S9 实施期 · 步骤 1 完成**（`src/pi/packages.ts`：`isNpmSource` / `translateSourceError` /
+`describePackage` / `settingsPathOf` / `listPackages` / `installPackage` / `removePackage`）+ host-check 的
+A1–A4/A8/A9/A11/A12/A13a（**329 → 349**）。下一步：步骤 2（写路径的串行化 + 写后回读校验，A18/A19/A20/A13b）。
+
+**计划与评审**（细节全在 `docs/S9-plan.md`）：§0 有 **46 条**带证据的事实（F1–F46）+ 两个可重跑探针
+（`scripts/probes/s9-package-probe.mjs`、`scripts/probes/s9-reload-probe.mjs`）；§4 的 Q1–Q17 是决策与默认值。
+评审窗**全部走完**并已吸收：Claude 第 1 轮（3B/6S/5N）+ codex 第 2 轮（5B/6S/2N，把"热重载"整块取消）
++ 追加范围的 Astra 两轮设计（5B/3S/2N 与 2B/3S/2N）+ 末轮转写核对（`VERDICT: OK`）。
+**用户 2026-09-17 说"开始执行" ⇒ 按 §4 的默认值执行**（其中 Q15 = 0.1.13：0.2.0 是 S10 首个正式版的语义；
+打包前改都来得及）。
 
 > **2026-09-17 用户拍板追加（并入 S9）**：四项体验修复 —— ③面板默认移右侧（`viewsContainers.secondarySidebar`，
 > VS Code 1.104+）、④`Pi: Set Shell Path` + T16（Windows **按用户安装** Git、bash 不在 PATH 的盲区，用户真机踩中）、
@@ -51,7 +39,7 @@
 
 | | |
 | --- | --- |
-| 阶段 | **S5、S6、S7、S8 均已关闭**；**S9 计划期**（pi 包管理 + 2026-09-17 追加的四项体验修复；评审窗全部走完：Claude/codex 两轮主线 + Astra 两轮设计 + 末轮转写 OK，待用户拍板 Q1–Q17） |
+| 阶段 | **S5、S6、S7、S8 均已关闭**；**S9 实施中**（pi 包管理 + 2026-09-17 追加的四项体验修复；步骤 1 已完成，见上） |
 | 最新发布 | **0.1.12**（2026-09-15，预发布；S8 的全部内容；上一个 0.1.11 —— 两者只差 T14 夹具的路径写法） |
 | 发布核验 | **0.1.12**：`NODE_USE_ENV_PROXY=1 node scripts/compare-vsix.mjs 0.1.12` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,050,314 字节 / `3ffd7adc…`）；tag `v0.1.12`；留档 `~/jerrypi-releases/jerrypi-0.1.12.vsix`（0.1.11：338 文件 / `bd3cdcde…`；0.1.9：338 文件 / `85db1434…`）。⚠️ 本机跑这个脚本必须带 `NODE_USE_ENV_PROXY=1`（代理只在环境变量里，Node 的 fetch 默认不看，见 S8-plan §11 的 P-1） |
 | 真机验收 | S4 ✅／✅ · S5 ✅／✅ · S6 ✅／✅ · S7 ✅／✅（各自的 §12.3）｜ **S8：Mac ✅ ／ Windows ✅**（M1 六项 + M2 三项；**W0 `GATE PASS` 15 PASS / 0 FAIL / 1 SKIP = T12，含 T14**；W1 正常 —— S8-plan §12.3） |
@@ -62,12 +50,12 @@
 | 命令 | 现在 |
 | --- | --- |
 | `npm run typecheck`（2 套 tsconfig） | ✅ |
-| `npm run self-test` | **9/9**（其中 host-check **329**、webview-dom 91、render 128、protocol 112、settings 16/16） |
+| `npm run self-test` | **9/9**（其中 host-check **349**、webview-dom 91、render 128、protocol 112、settings 16/16） |
 | `npm run check:protocol` | 112 |
 | `npm run check:render` | **128** |
 | `node scripts/tool-text-check.mjs` | **91** |
 | `node scripts/webview-dom-check.mjs` | **91** |
-| `node scripts/host-check.mjs` | **329** |
+| `node scripts/host-check.mjs` | **349** |
 | `npm run check:controller`（真模型，**不进 CI**） | **110/110**（S8 加了 A15：`approvalMode:all` 下拒绝→副作用没发生→允许→真的执行；另含 S7 的 A7 与一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **16 项（13 gating + T5c/T12/T13 advisory）GATE PASS**（本机 T12 也 PASS ⇒ 16 PASS / 0 FAIL / 0 SKIP；**T14 是 S8 新增的工具审批项，不用模型**；T13：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[…]；PI_OFFLINE=未设`） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **16 项（13 gating + T5c/T12/T13 advisory）GATE PASS**（0.1.8 时是 15 项；**S8 加了 T14 之后是 16 项**。上次 Windows W0 真宿主跑的是 15 项版：14 PASS / 0 FAIL / 1 SKIP = T12 —— 那台机器没有 `pi`） |
@@ -89,13 +77,24 @@
 | `ctx.ui.custom()` 类扩展命令 | 设计上不支持（终端 TUI 专有），会给明确错误 | README 已知限制 |
 | 模型目录**不会自动联网**刷新 | 我们显式写死 `allowModelNetwork: false`（刻意：不替用户往外发请求），所以新模型名（如 `deepseek-flash`）不会自己出现。现在有显式入口 `Pi: Refresh Model Catalog`（点才联网，A12 守住“自动路径不碰 pi.dev”） | README 已知限制 · S6-plan §3.5 / §6
 
-## 3. 下一步（S9：pi 包管理）
+## 3. 下一步（S9 的步骤，`docs/S9-plan.md` §9）
 
 **S5、S6、S7、S8 均已关闭**（S8 的完整过程：`docs/S8-plan.md` §11 实施期发现 / §12 实施与验收结果；发布 0.1.12）。
 
-S9 的范围（`docs/PLAN.md` §6）：`packages.ts` —— `Pi: Install Package` / `Pi: List Packages` / `Pi: Remove Package`，走 pi 自己的 `DefaultPackageManager`（`installAndPersist` / `listConfiguredPackages` / `removeAndPersist`），输入接受 pi 原生格式（裸路径 / git URL / `npm:name`）。
-下一步：写 `docs/S9-plan.md` → 送评审（≤3 轮）→ 把默认值摆给用户 → 用户说“可以”才动代码。
-（S8 的流程可照抄：`docs/S8-plan.md` 是这一整套纪律的最新样例。）
+| 步 | 内容 | 状态 |
+| --- | --- | --- |
+| 0 | S8 的回顾补修（codex 的 R1–R4） | ✅（已随 S8-plan §11.2 落盘） |
+| 1 | `src/pi/packages.ts` + A1–A4/A8/A9/A11/A12/A13a | ✅ |
+| 2 | 写路径的信任边界 + 串行化 + 写后回读校验（A18/A19/A20/A13b） | ⏳ 下一个 |
+| 3 | 四个 VS Code 命令 + `package.json`（A5/A6/A8–A10/A16/A17） | |
+| 4 | 自测 T15（走 `runtime.newSession()`）+ A22（跨进程） | |
+| 5 | 文档：README 中英 / `pi-traps` / `PLAN.md` §6 | |
+| 6 | （追加③）manifest 移 `secondarySidebar` + A23 | |
+| 7 | （追加④）`src/pi/shell.ts` + `Pi: Set Shell Path` + T16 + A24/A25/A26 | |
+| 8 | （追加①②宿主侧）协议三消息 + `DialogHost` + `uiContext` 三件接卡片（A27/A28/A30/A32） | |
+| 9 | （追加①②面板侧）webview 三卡片 + password 卡 + 面板入口 + 键盘 handler（A29/A31/A33–A35） | |
+| 10 | 文档收尾（README 面板位置 / shell 指引 / 面板内交互；`settings-check` 扩容） | |
+| 11 | 版本 0.1.13 + 打包 + Mac M1/M2 → 上传/核验 → Windows W0/W1（+W2）→ §12 回填 → 关阶段 | |
 
 ## 4. 发布流程（每次都一样）
 
