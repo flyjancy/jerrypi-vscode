@@ -22,6 +22,9 @@ import {
   PROTOCOL_VERSION,
   type ChatItem,
   type ClientMessage,
+  type DialogCloseReason,
+  type DialogItem,
+  type DialogKind,
   type ServerMessage,
   type SessionMeta,
 } from "../shared/protocol";
@@ -43,6 +46,14 @@ const queueButton = document.getElementById("queue-button") as HTMLButtonElement
 const hint = document.getElementById("composer-hint") as HTMLSpanElement;
 const errorBox = document.getElementById("composer-error") as HTMLDivElement;
 const metaBar = document.getElementById("meta") as HTMLDivElement;
+/**
+ * S9 ①②：面板内对话框的卡片容器。
+ *
+ * 它是 `#transcript` 的**最后一个子元素**（卡片在消息流末尾，与审批卡同级），
+ * 而 `applyState` 清转写时**不碰它** —— state 重放不能把一张还在等的卡片抹掉，
+ * 否则用户再也没机会作答（对话框的 post 通道与 ensure 是解耦的，重放时才不会被 state 覆盖）。
+ */
+const dialogsBar = document.getElementById("dialogs") as HTMLDivElement;
 
 interface LiveRegion {
   thinking: HTMLDivElement;
@@ -123,10 +134,15 @@ function ensureNode(id: string, className: string): HTMLElement {
   if (existing !== undefined) return existing;
   const node = element("div", `msg ${className}`);
   node.dataset.id = id;
-  transcript.appendChild(node);
+  appendTranscript(node);
   nodes.set(id, node);
   order.push(id);
   return node;
+}
+
+/** 把消息节点插在对话框卡片**之前**（卡片始终在消息流末尾）。 */
+function appendTranscript(node: HTMLElement): void {
+  transcript.insertBefore(node, dialogsBar);
 }
 
 /** 只有 render.ts 的返回值可以进 innerHTML。 */
@@ -226,12 +242,16 @@ function renderStatus(): void {
   // S8（Q8）：有待审批项时状态行要说话 —— 否则卡片滚出视口后用户只看到"生成中…"，
   // 属于静默卡住。提示可点：跳到最后一张待审批的卡片。
   const waiting = pendingApprovalIds();
+  const dialogCount = pendingDialogCount();
   if (waiting.length > 0) {
     const suffix = busy ? " · " : "";
     setHtml(
       statusBar,
       `${suffix}<a class="status-approval" data-goto-approval="${escapeForStatus(waiting.at(-1) ?? "")}" role="button" tabindex="0">⚠ 有 ${waiting.length} 个工具调用等待确认（点击跳转）</a>`,
     );
+  } else if (dialogCount > 0) {
+    // S9 ①②：有对话框在等 —— 列表卡/输入卡就在转录末尾，但可能被滚出去了。
+    statusBar.textContent = `${busy ? "生成中… · " : ""}有 ${dialogCount} 个对话框等待作答`;
   } else {
     statusBar.textContent = busy ? "生成中…" : "";
   }
@@ -417,6 +437,256 @@ function onUserItem(_text: string): void {
   pendingText = undefined;
 }
 
+// ------------------------------------------------------------------ 对话框（S9 ①②）
+
+interface DialogView {
+  dialogId: string;
+  kind: DialogKind;
+  title: string;
+  node: HTMLDivElement;
+  items: DialogItem[];
+  highlight: number;
+  loading: boolean;
+  /** 已发过回答（防止回车/点击重复发）。 */
+  submitted: boolean;
+  /** 已结算（收到 `dialog/close`）：卡片不再接受交互。 */
+  done: boolean;
+}
+
+const dialogs = new Map<string, DialogView>();
+
+function pendingDialogCount(): number {
+  let count = 0;
+  for (const view of dialogs.values()) if (!view.done) count += 1;
+  return count;
+}
+
+/** 结算 reason → 终态文案（`answered` 必须与“已取消”不同 —— A34）。 */
+function dialogTerminalText(reason: DialogCloseReason): string {
+  switch (reason) {
+    case "answered":
+      return "已作答";
+    case "timeout":
+      return "已超时";
+    case "replaced":
+      return "已失效（会话已切换）";
+    case "load-failed":
+      return "加载失败";
+    case "cancelled":
+    default:
+      return "已取消";
+  }
+}
+
+function postDialogAnswer(view: DialogView, value: string | undefined): void {
+  if (view.submitted || view.done) return;
+  view.submitted = true;
+  if (value === undefined) vscode.postMessage({ type: "dialog/answer", dialogId: view.dialogId, cancelled: true });
+  else vscode.postMessage({ type: "dialog/answer", dialogId: view.dialogId, value });
+}
+
+function dialogInputElement(view: DialogView): HTMLInputElement | null {
+  return view.node.querySelector("input");
+}
+
+function submitDialogInput(view: DialogView): void {
+  const field = dialogInputElement(view);
+  const value = field?.value ?? "";
+  // password/输入卡作答后立刻清空：卡片迟早被 `dialog/close` 换成终态，
+  // 不能在 DOM 里留旧值（A34；也是 A29 的泄漏面）。
+  if (field !== null) field.value = "";
+  postDialogAnswer(view, value);
+}
+
+function paintDialogHighlight(view: DialogView): void {
+  const rows = view.node.querySelectorAll(".dialog-item");
+  rows.forEach((row, index) => {
+    row.setAttribute("aria-selected", index === view.highlight ? "true" : "false");
+    row.classList.toggle("selected", index === view.highlight);
+  });
+  (rows[view.highlight] as HTMLElement | undefined)?.scrollIntoView?.({ block: "nearest" });
+}
+
+function moveDialogHighlight(view: DialogView, delta: number): void {
+  if (view.items.length === 0) return;
+  view.highlight = (view.highlight + delta + view.items.length) % view.items.length;
+  paintDialogHighlight(view);
+}
+
+function onDialogKeydown(event: KeyboardEvent, view: DialogView): void {
+  if (view.done) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    postDialogAnswer(view, undefined);
+    return;
+  }
+  // 输入法守卫（与输入框发送同款）：组合中的回车是“上屏”，不是提交。
+  const composing = event.isComposing || event.keyCode === 229;
+  if (view.kind === "select") {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveDialogHighlight(view, 1);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      moveDialogHighlight(view, -1);
+      return;
+    }
+    if (event.key === "Enter") {
+      if (composing) return;
+      event.preventDefault();
+      const item = view.items[view.highlight];
+      if (item !== undefined) postDialogAnswer(view, item.label);
+    }
+    return;
+  }
+  if (event.key === "Enter" && (view.kind === "input" || view.kind === "password")) {
+    if (composing) return;
+    event.preventDefault();
+    submitDialogInput(view);
+  }
+}
+
+function buildDialogContent(view: DialogView, open: Extract<ServerMessage, { type: "dialog/open" }>): void {
+  view.node.textContent = "";
+  const title = element("div", "dialog-title");
+  title.textContent = open.title;
+  view.node.appendChild(title);
+  if (open.message !== undefined && open.message !== "") {
+    const message = element("div", "dialog-message");
+    message.textContent = open.message;
+    view.node.appendChild(message);
+  }
+
+  if (view.loading) {
+    // 加载态：点下去**立即**有反馈，而不是等到列表回来才弹（Astra S8/R16）。
+    const loading = element("div", "dialog-loading");
+    loading.textContent = "加载中…";
+    view.node.appendChild(loading);
+    return;
+  }
+
+  if (view.kind === "select") {
+    const list = element("div", "dialog-items");
+    list.setAttribute("role", "listbox");
+    view.items.forEach((item, index) => {
+      const row = element("div", "dialog-item");
+      row.setAttribute("role", "option");
+      row.setAttribute("tabindex", "-1");
+      row.dataset.dialogValue = item.label;
+      const isCurrent = open.current !== undefined && item.label === open.current;
+      const label = element("span", "dialog-item-label");
+      // 当前项用 `✓` 前缀（平移 S4 的第 2 条硬要求；`picked` 那套只在多选生效）。
+      label.textContent = isCurrent ? `✓ ${item.label}` : item.label;
+      row.appendChild(label);
+      if (item.description !== undefined) {
+        const description = element("span", "dialog-item-description");
+        description.textContent = item.description;
+        row.appendChild(description);
+      }
+      if (item.detail !== undefined) {
+        const detail = element("span", "dialog-item-detail");
+        detail.textContent = item.detail;
+        row.appendChild(detail);
+      }
+      if (isCurrent) view.highlight = index;
+      row.addEventListener("click", () => postDialogAnswer(view, item.label));
+      list.appendChild(row);
+    });
+    if (view.items.length === 0) {
+      const empty = element("div", "dialog-empty");
+      empty.textContent = "没有可选项";
+      list.appendChild(empty);
+    }
+    view.node.appendChild(list);
+    paintDialogHighlight(view);
+    return;
+  }
+
+  if (view.kind === "input" || view.kind === "password") {
+    const field = document.createElement("input");
+    field.className = "dialog-input";
+    field.type = view.kind === "password" ? "password" : "text";
+    if (open.placeholder !== undefined) field.placeholder = open.placeholder;
+    // 重放一律清空：这里**从不**回填任何旧值（A29）。
+    field.value = "";
+    const submit = element("button", "button primary dialog-submit") as HTMLButtonElement;
+    submit.type = "button";
+    submit.textContent = "确定";
+    submit.addEventListener("click", () => submitDialogInput(view));
+    view.node.append(field, submit);
+    if (view.kind === "password") field.setAttribute("autocomplete", "off");
+    return;
+  }
+
+  const confirm = element("button", "button primary dialog-confirm") as HTMLButtonElement;
+  confirm.type = "button";
+  confirm.textContent = "确认";
+  confirm.addEventListener("click", () => postDialogAnswer(view, "确认"));
+  const cancel = element("button", "button secondary dialog-cancel") as HTMLButtonElement;
+  cancel.type = "button";
+  cancel.textContent = "取消";
+  cancel.addEventListener("click", () => postDialogAnswer(view, undefined));
+  view.node.append(confirm, cancel);
+}
+
+function renderDialog(open: Extract<ServerMessage, { type: "dialog/open" }>): void {
+  let view = dialogs.get(open.dialogId);
+  if (view === undefined) {
+    const node = element("div", "msg dialog") as HTMLDivElement;
+    node.dataset.dialogId = open.dialogId;
+    node.setAttribute("role", "dialog");
+    node.tabIndex = -1;
+    appendTranscript(node);
+    view = {
+      dialogId: open.dialogId,
+      kind: open.kind,
+      title: open.title,
+      node,
+      items: [],
+      highlight: 0,
+      loading: false,
+      submitted: false,
+      done: false,
+    };
+    dialogs.set(open.dialogId, view);
+    const current = view;
+    node.addEventListener("keydown", (event) => onDialogKeydown(event as KeyboardEvent, current));
+  }
+  // 已结算的卡片**不再更新** —— 晚到的加载结果不能把撤掉的卡片“复活”成孤儿卡（R2-B1）。
+  if (view.done) return;
+  view.kind = open.kind;
+  view.title = open.title;
+  view.items = open.items ?? [];
+  view.loading = open.loading === true;
+  view.highlight = 0;
+  view.node.setAttribute("aria-label", open.title);
+  view.node.dataset.kind = open.kind;
+  buildDialogContent(view, open);
+  // 把焦点移到卡片：列表要能 ↑↓、输入卡要能直接打字。真焦点由真机验收（M1⑥）。
+  try {
+    view.node.focus();
+  } catch {
+    /* happy-dom / 无焦点环境忽略 */
+  }
+  renderStatus();
+}
+
+function closeDialog(message: Extract<ServerMessage, { type: "dialog/close" }>): void {
+  const view = dialogs.get(message.dialogId);
+  if (view === undefined) return;
+  view.done = true;
+  view.loading = false;
+  view.node.classList.add("done");
+  view.node.dataset.closeReason = message.reason;
+  view.node.textContent = "";
+  const terminal = element("div", "dialog-terminal");
+  terminal.textContent = `${view.title} —— ${dialogTerminalText(message.reason)}`;
+  view.node.appendChild(terminal);
+  renderStatus();
+}
+
 // ------------------------------------------------------------------ 消息
 
 function renderMetaBar(): void {
@@ -425,14 +695,18 @@ function renderMetaBar(): void {
 
 function applyState(message: Extract<ServerMessage, { type: "state" }>): void {
   for (const id of [...order]) removeNode(id);
-  transcript.textContent = "";
+  // ⚠️ 不能 `transcript.textContent = ""`：那会把对话框卡片一起抹掉（卡片不在 `order`/`nodes`
+  // 里，它另有一张表）。只清掉除 `dialogsBar` 以外的子节点。
+  for (const child of [...transcript.children]) {
+    if (child !== dialogsBar) child.remove();
+  }
   busy = message.busy;
   // 协议 v4（S5）起 `state` 里没有 `model` 了 —— 模型只说在 `meta` 里。
   meta = message.meta;
   if (message.truncated) {
     const node = element("div", "msg msg-notice");
     node.textContent = "（更早的消息已省略）";
-    transcript.appendChild(node);
+    appendTranscript(node);
   }
   for (const item of message.items) renderItem(item);
   renderQueue(message.queue);
@@ -521,6 +795,12 @@ window.addEventListener("message", (event: MessageEvent<ServerMessage>) => {
       input.focus();
       return;
     }
+    case "dialog/open":
+      renderDialog(message);
+      return;
+    case "dialog/close":
+      closeDialog(message);
+      return;
     default:
       return;
   }

@@ -44,6 +44,19 @@ export default function extSmoke(pi: ExtensionAPI): void {
     },
   });
 
+  // S9 ①②：面板内对话框的**手工验收夹具**（M1⑥/W1④）——不用模型，依次弹 select / confirm / input。
+  // 三个都答完（或按 Esc 取消）之后用 notify 回报结果，便于肉眼核对"答案真的回到了扩展"。
+  pi.registerCommand("smoke-ask", {
+    description: "jerrypi packaging smoke test (in-panel dialogs)",
+    handler: async (_args, ctx) => {
+      appendMarker(process.env.JERRYPI_SMOKE_COMMAND_MARKER, "smoke-ask");
+      const picked = await ctx.ui.select("smoke-ask：选一个", ["第一个", "第二个"]);
+      const ok = await ctx.ui.confirm("smoke-ask：确认吗", `你选了 ${picked ?? "(取消)"}`);
+      const text = await ctx.ui.input("smoke-ask：输入点什么", "随便写");
+      ctx.ui.notify(`smoke-ask：select=${picked ?? "(取消)"} confirm=${String(ok)} input=${text ?? "(取消)"}`, "info");
+    },
+  });
+
   pi.registerTool(
     defineTool({
       name: "smoke_tool",

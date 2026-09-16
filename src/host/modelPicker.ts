@@ -19,6 +19,9 @@
 //      另：**不要**用 `webviewView.show()` / `focusChat` 来"确保焦点"，那会抢用户焦点。
 import * as vscode from "vscode";
 import { formatCost, formatTokens } from "../shared/format";
+import type { DialogPanel } from "./dialogHost";
+
+export type { DialogPanel };
 
 /** 选择器需要宿主提供的能力（由 controller 实现；选择器本身不认识 session）。 */
 export interface PickerBridge {
@@ -36,6 +39,8 @@ export interface PickerBridge {
   notify(text: string, level: "info" | "warn" | "error"): void;
   /** 把焦点还给输入框（`fromPanel` 时由调用方真的发消息）。 */
   focusInput(): void;
+  /** 面板内“配置 API Key”入口（可选：没给就只提示去跑命令）。 */
+  configureApiKey?: () => Promise<void>;
 }
 
 /** 模型目录里的字段（只取我们要显示的那几个，避免依赖 pi 的完整类型）。 */
@@ -74,6 +79,110 @@ export function modelToItem(raw: unknown, currentId: string): vscode.QuickPickIt
     description: model.provider ?? "",
     detail: details.join(" · "),
   };
+}
+
+/**
+ * 把模型对象映射成**面板卡片**的一项。
+ *
+ * 与 `modelToItem` 的差别：`✓` 前缀不在这里加 —— 宿主只发 `current`，由渲染层加
+ * （单一真相；否则“哪一项是当前”会同时活在协议载荷与字符串里，两边会分叉）。
+ */
+export function modelToDialogItem(raw: unknown, currentId: string): { label: string; description?: string; detail?: string } {
+  const model = raw as ModelLike;
+  const id = `${model.provider ?? ""}/${model.id ?? "(未知模型)"}`;
+  const details: string[] = [];
+  const cost = formatCost(model.cost?.input, model.cost?.output);
+  if (cost !== "") details.push(cost);
+  if (typeof model.contextWindow === "number" && model.contextWindow > 0) {
+    details.push(`上下文 ${formatTokens(model.contextWindow)}`);
+  }
+  if (model.input?.includes("image") === true) details.push("支持图片");
+  if (model.reasoning === true) details.push("支持思考");
+  const item: { label: string; description?: string; detail?: string } = { label: id };
+  if (id !== currentId && typeof model.provider === "string" && model.provider !== "") item.description = model.provider;
+  if (details.length > 0) item.detail = details.join(" · ");
+  return item;
+}
+
+const NO_MODELS_DIALOG_ITEM = { label: "没有可用模型", description: "先配置一个 provider 的 API key" };
+
+/**
+ * 在**面板内**选模型（S9 ①②）。
+ *
+ * 四条 S4 硬要求全部平移（modelPicker 文件头）：当前项标记（这里是 `current` + 渲染层的
+ * `✓`）、加载态、焦点归还**三条**退出路径、fromPanel 分流。再加一条 R2-B1：
+ * **发送加载结果（成功或失败）之前先查 pending** —— 已结算就丢弃结果，否则晚到的列表
+ * 会把已撤的卡片“复活”成孤儿卡。
+ */
+export async function pickModelInPanel(bridge: PickerBridge, dialogs: DialogPanel): Promise<void> {
+  const currentId = bridge.currentModelId();
+  const handle = dialogs.start({
+    kind: "select",
+    title: "jerrypi: 选择模型",
+    ...(currentId === "" ? {} : { current: currentId }),
+    loading: true,
+    items: [],
+  });
+  let models: readonly unknown[];
+  try {
+    models = await bridge.listModels();
+  } catch (error) {
+    if (dialogs.isPending(handle.dialogId)) dialogs.fail(handle.dialogId);
+    // 第三条退出路径（加载失败）也要把焦点还给输入框（S4 的硬要求 4 扩到三条）。
+    bridge.focusInput();
+    bridge.notify(`读取模型列表失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    return;
+  }
+  // 晚到的加载结果：用户已经 Esc / 会话已替换 ⇒ **丢弃**（不发 open、不发 close、不抢焦点）。
+  if (!dialogs.isPending(handle.dialogId)) return;
+  dialogs.update(handle.dialogId, {
+    loading: false,
+    items: models.length === 0 ? [NO_MODELS_DIALOG_ITEM] : models.map((raw) => modelToDialogItem(raw, currentId)),
+  });
+
+  const picked = await handle.result;
+  if (picked === undefined) {
+    // 取消/超时/替换：三条退出路径都要把焦点还给输入框。
+    bridge.focusInput();
+    return;
+  }
+  if (models.length === 0) {
+    // 空态那条“去配置”的下一步（与原生路径对齐）。
+    if (bridge.configureApiKey !== undefined) await bridge.configureApiKey();
+    else bridge.notify("没有可用模型：先用 Pi: Set API Key 配置一个 provider", "warn");
+    bridge.focusInput();
+    return;
+  }
+  const model = models.find((raw) => modelToDialogItem(raw, currentId).label === picked);
+  if (model !== undefined) {
+    try {
+      await bridge.applyModel(model);
+    } catch (error) {
+      bridge.notify(`切换模型失败（${picked}）：${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+  }
+  bridge.focusInput();
+}
+
+/** 在**面板内**选思考等级（S9 ①②）。 */
+export async function pickThinkingLevelInPanel(bridge: PickerBridge, dialogs: DialogPanel): Promise<void> {
+  const current = bridge.currentLevel();
+  const supports = bridge.supportsThinking();
+  const items = supports
+    ? bridge.levels().map((level) => ({
+        label: level,
+        ...(level === current ? { description: "当前" } : {}),
+      }))
+    : [{ label: "当前模型不支持思考等级", description: current, detail: "换一个支持思考的模型后再试" }];
+  const picked = await dialogs.open({ kind: "select", title: "jerrypi: 思考等级", current, items });
+  if (picked !== undefined && supports && bridge.levels().includes(picked)) {
+    try {
+      bridge.applyLevel(picked);
+    } catch (error) {
+      bridge.notify(`切换思考等级失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+  }
+  bridge.focusInput();
 }
 
 /** 打开模型选择器。 */

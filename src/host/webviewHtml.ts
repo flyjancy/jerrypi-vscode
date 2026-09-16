@@ -56,7 +56,7 @@ export function buildWebviewHtml(options: WebviewHtmlOptions): string {
 <title>Pi</title>
 </head>
 <body>
-<div id="transcript" class="transcript"></div>
+<div id="transcript" class="transcript"><div id="dialogs" class="dialogs"></div></div>
 <div id="queue" class="queue" hidden></div>
 <!--
   状态行与元信息行的位置**照 pi TUI 的装配顺序**（interactive-mode.js:634-642）：

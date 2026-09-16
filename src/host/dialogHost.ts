@@ -30,6 +30,20 @@ export interface DialogOpenOptions {
   timeout?: number;
 }
 
+/**
+ * 面板内对话框的**窄接口**（`DialogHost` 天然满足它）。
+ *
+ * 取窄接口是为了让选择器能单测（host-check 给一个真 `DialogHost` + 桩 webview），
+ * 也为了让 `modelPicker` / `sessionPicker` 不认识 vscode / webview。
+ */
+export interface DialogPanel {
+  start(options: DialogOpenOptions): { dialogId: string; result: Promise<string | undefined> };
+  update(dialogId: string, patch: Partial<DialogOpenOptions>): boolean;
+  fail(dialogId: string): boolean;
+  isPending(dialogId: string): boolean;
+  open(options: DialogOpenOptions): Promise<string | undefined>;
+}
+
 export interface DialogHostOptions {
   /** 把消息发给**当前**可见的 webview（没有视图时应为空操作 —— 不抛）。 */
   post: (message: ServerMessage) => void;
@@ -66,18 +80,18 @@ export class DialogHost {
   }
 
   /**
-   * 打开一个对话框并等回答。
+   * 打开一个对话框，拿到 `{dialogId, result}`。
    *
-   * 返回 `undefined` 表示"被取消 / 超时 / 会话切换"—— 调用方各自取自己的 fallback
-   * （`uiContext` 的 select/input 取 undefined、confirm 取 false）。
+   * 需要 `dialogId` 的调用方（模型列表要 `update`、加载失败要 `fail`）用这个；
+   * 只等答案的用 `open()`。
    */
-  open(options: DialogOpenOptions): Promise<string | undefined> {
+  start(options: DialogOpenOptions): { dialogId: string; result: Promise<string | undefined> } {
     // 进来时已经 abort：直接取消，**连 post 都不发**（S8 审批同款口径）。
     if (options.signal?.aborted === true) {
-      return Promise.resolve(undefined);
+      return { dialogId: "", result: Promise.resolve(undefined) };
     }
     const dialogId = `dialog-${++this.seq}`;
-    return new Promise<string | undefined>((resolve) => {
+    const result = new Promise<string | undefined>((resolve) => {
       const pending: PendingDialog = { dialogId, options, resolve, settled: false, cleanup: () => {} };
       let timer: ReturnType<typeof setTimeout> | undefined;
       let onAbort: (() => void) | undefined;
@@ -99,6 +113,17 @@ export class DialogHost {
       this.post(dialogId, options);
       this.options.announce?.({ dialogId, title: options.title });
     });
+    return { dialogId, result };
+  }
+
+  /**
+   * 打开一个对话框并等回答。
+   *
+   * 返回 `undefined` 表示"被取消 / 超时 / 会话切换"—— 调用方各自取自己的 fallback
+   * （`uiContext` 的 select/input 取 undefined、confirm 取 false）。
+   */
+  open(options: DialogOpenOptions): Promise<string | undefined> {
+    return this.start(options).result;
   }
 
   /** 同 `dialogId` 二次 open = 内容更新（加载态 → 有 items）；已结算就丢弃（A35④）。 */

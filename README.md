@@ -132,7 +132,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 | `npm run check:render` | **128** 条渲染与 XSS 断言（12 个载荷 + 图片策略 + CSP） |
 | `npm run check:controller` | **110** 条面板控制器断言；**需要凭据与网络**（没有凭据时打印 SKIPPED 并跳过；总数随模型是否发起工具调用略有浮动） |
 | `npm run check:gate` | 把 `Pi: Run Self-Test` 这条闸门（T1–T16）搬到终端里跑；**需要凭据与网络** |
-| `node scripts/host-check.mjs` | **404** 条宿主接线断言（vscode 桩 + 真命令） |
+| `node scripts/host-check.mjs` | **418** 条宿主接线断言（vscode 桩 + 真命令） |
 | `node scripts/settings-check.mjs` | **16** 条设置声明与 README 一致性断言 |
 | `npm run check:manifest` | **6** 条 `contributes` 不变式（容器在 `secondarySidebar`、视图仍挂 `jerrypi`、命令贡献齐全） |
 | `npm run package` | 构建 + 打包 `.vsix`；vsce 打包前会自动执行 `vscode:prepublish`（唯一构建入口） |
@@ -345,7 +345,7 @@ Common scripts:
 | `npm run check:render` | 128 rendering and XSS assertions (12 payloads, image policy, CSP) |
 | `npm run check:controller` | 110 panel-controller assertions; **needs credentials and network** (prints SKIPPED without them; the total drifts slightly with whether the model calls tools) |
 | `npm run check:gate` | Runs the `Pi: Run Self-Test` gate (T1–T16) in a terminal; **needs credentials and network** |
-| `node scripts/host-check.mjs` | 404 host-side wiring assertions (vscode stub + real commands) |
+| `node scripts/host-check.mjs` | 418 host-side wiring assertions (vscode stub + real commands) |
 | `node scripts/settings-check.mjs` | 16 settings-declaration vs README consistency assertions |
 | `npm run check:manifest` | 6 `contributes` invariants (container in `secondarySidebar`, view still under `jerrypi`, all command contributions present) |
 | `npm run package` | Build + package the `.vsix`; vsce runs `vscode:prepublish` first (the single build entry point) |

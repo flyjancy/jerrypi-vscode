@@ -91,6 +91,8 @@ export function activate(context: vscode.ExtensionContext): void {
     // 虚拟文档与 `vscode.diff`。
     diff: createDiffPresenter(context, { store: controller.diffStore, log: channel }),
     dialogHost,
+    // S9 ①②：面板内「设置 API key」入口要用的密钥存储（与命令层同一份）。
+    keys,
   });
 
   registerCommands(context, channel, provider);

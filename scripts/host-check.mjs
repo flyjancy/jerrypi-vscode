@@ -194,6 +194,9 @@ async function buildModules(tempDir) {
       `export { isNpmSource, translateSourceError, describePackage, settingsPathOf, listPackages, installPackage, removePackage } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/packages"))};`,
       `export { shellCandidates, pathBashCandidates, resolveCurrentShell, setShellPathWrite, shellSettingsPathOf, describeShellResolution } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/shell"))};`,
       `export { DialogHost } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/dialogHost"))};`,
+      `export { pickModelInPanel, pickThinkingLevelInPanel, modelToDialogItem, pickModel } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/modelPicker"))};`,
+      `export { pickSessionInPanel, sessionToDialogItem } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/sessionPicker"))};`,
+      `export { pickApiKeyInPanel } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/apiKeyPanel"))};`,
       `export { createVSCodeUIContext } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/uiContext"))};`,
     ].join("\n"),
   );
@@ -212,7 +215,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES, createSessionHost, SessionHostController, createSelfTestUIContext, createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS, createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM, isNpmSource, translateSourceError, describePackage, settingsPathOf, listPackages, installPackage, removePackage, shellCandidates, pathBashCandidates, resolveCurrentShell, setShellPathWrite, shellSettingsPathOf, describeShellResolution, DialogHost, createVSCodeUIContext } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES, createSessionHost, SessionHostController, createSelfTestUIContext, createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS, createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM, isNpmSource, translateSourceError, describePackage, settingsPathOf, listPackages, installPackage, removePackage, shellCandidates, pathBashCandidates, resolveCurrentShell, setShellPathWrite, shellSettingsPathOf, describeShellResolution, DialogHost, createVSCodeUIContext, pickModelInPanel, pickThinkingLevelInPanel, modelToDialogItem, pickModel, pickSessionInPanel, sessionToDialogItem, pickApiKeyInPanel } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 const vscodeStub = await import(pathToFileURL(STUB_PATH).href);
@@ -437,7 +440,7 @@ function pickerProvider(overrides = {}) {
 
 resetStub();
 const p1 = pickerProvider();
-await p1.view.send({ type: "openModelPicker" });
+await p1.provider.runModelPicker(false);
 const quickPicks = callsOf("showQuickPick");
 check("openModelPicker → 弹一次 QuickPick（不再算未知消息）", quickPicks.length === 1, String(quickPicks.length));
 check(
@@ -455,15 +458,15 @@ check(
   quickPicks[0]?.items[0].detail,
 );
 check(
-  "面发起的选择器关闭后把焦点还给输入框",
-  p1.view.posted.some((m) => m.type === "focusInput"),
+  "命令面板入口不抢焦点（面板入口走卡片，焦点归还在 A32③/A35 里断言）",
+  p1.view.posted.every((m) => m.type !== "focusInput"),
 );
 
 // ③ 选中第 2 项：`setModel` 必须收到**那个 Model 对象**（不是字符串、不是 "provider/id"）
 resetStub();
 const p2 = pickerProvider();
 queueQuickPickResponse((items) => items[1]);
-await p2.view.send({ type: "openModelPicker" });
+await p2.provider.runModelPicker(false);
 check(
   "选中的是列表里那个 Model 对象本身（防止传成 id 字符串）",
   p2.controller.calls.appliedModels.length === 1 &&
@@ -474,14 +477,14 @@ check(
 // Esc 取消：什么都不改，但**焦点照样要还**
 resetStub();
 const p3 = pickerProvider();
-await p3.view.send({ type: "openModelPicker" });
+await p3.provider.runModelPicker(false);
 check(
   "Esc 取消不改模型",
   p3.controller.calls.appliedModels.length === 0,
 );
 check(
-  "Esc 取消也要还焦点（只写在 if (picked) 里就会丢光标）",
-  p3.view.posted.some((m) => m.type === "focusInput"),
+  "原生路径的 Esc 取消同样不抢焦点（命令入口不该动用户焦点）",
+  p3.view.posted.every((m) => m.type !== "focusInput"),
 );
 
 // 命令面板发起：不还焦点
@@ -497,7 +500,7 @@ check(
 resetStub();
 const p5 = pickerProvider({ listAvailableModels: async () => [] });
 queueQuickPickResponse((items) => items[0]);
-await p5.view.send({ type: "openModelPicker" });
+await p5.provider.runModelPicker(false);
 check(
   "没有可用模型时给一条可操作的说明项",
   callsOf("showQuickPick")[0]?.items.length === 1 &&
@@ -517,7 +520,7 @@ const p6 = pickerProvider({
   },
 });
 queueQuickPickResponse((items) => items[2]);
-await p6.view.send({ type: "openModelPicker" });
+await p6.provider.runModelPicker(false);
 check(
   "切换失败 → 提示里带 provider/id 与原因",
   p6.controller.calls.notices.some(
@@ -529,7 +532,7 @@ check(
 // ------------------------------------------------- 思考等级选择器（S4 的 D8）
 resetStub();
 const t1 = pickerProvider();
-await t1.view.send({ type: "openThinkingPicker" });
+await t1.provider.runThinkingPicker(false);
 const levelItems = callsOf("showQuickPick")[0]?.items ?? [];
 check(
   "等级列表**原样**带空洞（off/low/high/max，中间没有 medium）",
@@ -543,7 +546,7 @@ resetStub();
 const t2 = pickerProvider({
   pickerContext: () => ({ model: "other/some-pro", thinkingLevel: "off", supportsThinking: false, levels: [] }),
 });
-await t2.view.send({ type: "openThinkingPicker" });
+await t2.provider.runThinkingPicker(false);
 check(
   "不支持思考的模型给一条明确说明（不是空列表）",
   (callsOf("showQuickPick")[0]?.items ?? []).length === 1 &&
@@ -704,9 +707,9 @@ check(
   });
   provider.resolveWebviewView(view);
   queueQuickPickResponse(undefined); // 用户按 Esc
-  await view.send({ type: "openSessionPicker" });
+  await provider.runSessionPicker(false);
   const pickers = callsOf("showQuickPick");
-  check("面板点会话段 → 宿主弹一次会话列表（不是自己画）", pickers.length === 1, String(pickers.length));
+  check("命令面板入口 → 宿主弹一次会话列表（面板入口走卡片，由 pickSessionInPanel 覆盖）", pickers.length === 1, String(pickers.length));
   const items = pickers[0]?.items ?? [];
   check(
     "列表第一项**永远**是「新建会话」（D10：刚建的会话不会出现在列表里）",
@@ -3772,6 +3775,218 @@ check(
     );
     check("A32⑤④：没被结算的那条仍能正常作答", dialogHost.answer(opened.dialogId, { value: "正常" }) === true && (await pending) === "正常" && effects.includes("正常"), JSON.stringify(effects));
     check("A32⑤⑤：超时那条的 promise 已以 undefined 收口", (await timed) === undefined);
+  }
+}
+
+// ------------------------------------- S9 第 9 步：①② 面板侧入口（A29/A31/A32③④/A35）
+{
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const settleTicks = async () => {
+    for (let i = 0; i < 4; i += 1) await tick();
+  };
+  const lastOpen = (posted) => posted.filter((m) => m.type === "dialog/open").at(-1);
+
+  // ---- A32③/A35①②④：模型卡的加载态、同 id 更新、晚到结果丢弃
+  {
+    const posted = [];
+    const applied = [];
+    const dialogs = new DialogHost({ post: (m) => posted.push(m), log: makeOutput() });
+    const bridge = {
+      currentModelId: () => "p/current",
+      supportsThinking: () => true,
+      currentLevel: () => "off",
+      levels: () => ["off", "high"],
+      listModels: async () => [
+        { provider: "p", id: "current", name: "current" },
+        { provider: "p", id: "other", name: "other" },
+      ],
+      applyModel: async (model) => applied.push(model),
+      applyLevel: () => {},
+      notify: () => {},
+      focusInput: () => posted.push({ type: "focusInput" }),
+    };
+    const done = pickModelInPanel(bridge, dialogs);
+    await tick();
+    // 第一条就是 loading 卡（列表返回后会在**同 id** 上更新，所以不能取最后一条）。
+    const loadingCard = posted.find((m) => m.type === "dialog/open");
+    check(
+      "A32③①：点模型芯片立即拿到 loading 卡（不是点击后无响应）",
+      loadingCard !== undefined && loadingCard.kind === "select" && loadingCard.loading === true && loadingCard.current === "p/current",
+      JSON.stringify(loadingCard),
+    );
+    await settleTicks();
+    const loaded = lastOpen(posted);
+    check(
+      "A32③②：列表回来后**同 id** 更新（loading=false、两项、current 不变）",
+      loaded !== undefined &&
+        loaded.dialogId === loadingCard.dialogId &&
+        loaded.loading === false &&
+        loaded.items.length === 2 &&
+        loaded.current === "p/current",
+      JSON.stringify(loaded),
+    );
+    dialogs.answer(loadingCard.dialogId, { value: "p/other" });
+    await done;
+    check("A32③③：answer → applyModel 拿到那个模型", applied.length === 1 && applied[0].id === "other", JSON.stringify(applied));
+    check("A32③④：选中后焦点还给输入框", posted.some((m) => m.type === "focusInput"), JSON.stringify(posted.slice(-3)));
+    check("A35⑤：模型卡的 `current` 已交给渲染层（✓ 由 webview 画）", modelToDialogItem({ provider: "p", id: "current" }, "p/current").label === "p/current");
+  }
+
+  // ---- A35④：先 Esc（结算）再 resolve 受控 promise → 丢弃结果
+  {
+    const posted = [];
+    let resolveModels;
+    const controlled = new Promise((resolve) => {
+      resolveModels = resolve;
+    });
+    const dialogs = new DialogHost({ post: (m) => posted.push(m), log: makeOutput() });
+    const bridge = {
+      currentModelId: () => "",
+      supportsThinking: () => false,
+      currentLevel: () => "off",
+      levels: () => [],
+      listModels: () => controlled,
+      applyModel: async () => {},
+      applyLevel: () => {},
+      notify: () => {},
+      focusInput: () => posted.push({ type: "focusInput" }),
+    };
+    const done = pickModelInPanel(bridge, dialogs);
+    await tick();
+    const card = lastOpen(posted);
+    check("A35①：受控 pending → loading 卡已发出（第一态）", card?.loading === true, JSON.stringify(card));
+    // 用户 Esc：卡片结算（close(cancelled)）。但调用方还挂在 `listModels()` 上，
+    // 所以**不能**在这里 `await done` —— 那会等到列表返回，测试就自己把自己锁死了。
+    dialogs.answer(card.dialogId, { cancelled: true });
+    await tick();
+    const before = posted.length;
+    resolveModels([{ provider: "p", id: "late" }]);
+    await settleTicks();
+    await done;
+    check(
+      "A35④：Esc 之后晚到的列表结果被丢弃（不再发任何 open/close/focus）",
+      posted.length === before,
+      JSON.stringify(posted.slice(before)),
+    );
+  }
+
+  // ---- A35③：reject → load-failed + 焦点归还
+  {
+    const posted = [];
+    const dialogs = new DialogHost({ post: (m) => posted.push(m), log: makeOutput() });
+    const bridge = {
+      currentModelId: () => "",
+      supportsThinking: () => false,
+      currentLevel: () => "off",
+      levels: () => [],
+      listModels: async () => {
+        throw new Error("catalog exploded");
+      },
+      applyModel: async () => {},
+      applyLevel: () => {},
+      notify: () => {},
+      focusInput: () => posted.push({ type: "focusInput" }),
+    };
+    await pickModelInPanel(bridge, dialogs);
+    await settleTicks();
+    check(
+      "A35③：列表加载失败 → dialog/close(load-failed) + 焦点归还",
+      posted.some((m) => m.type === "dialog/close" && m.reason === "load-failed") && posted.some((m) => m.type === "focusInput"),
+      JSON.stringify(posted),
+    );
+  }
+
+  // ---- A31：命令面板入口仍走原生（A28 的对偶）
+  //
+  // ⚠️ 驱动的是**真命令路径**（`runModelPicker(false)`，命令层调的就是它），
+  // 不是直接调 `pickModel` —— 否则“有人把 chatView 的分流改成一律卡片”就抓不到。
+  {
+    resetStub();
+    const cardMessages = [];
+    const cardHost = new DialogHost({ post: (m) => cardMessages.push(m), log: makeOutput() });
+    const controller = makeController({
+      pickerContext: () => ({ model: "", thinkingLevel: "off", supportsThinking: false, levels: [] }),
+      listAvailableModels: async () => [{ provider: "p", id: "a" }],
+    });
+    const provider = new ChatViewProvider({
+      controller,
+      extensionUri: vscode.Uri.file("/ext"),
+      output: makeOutput(),
+      diff: { open: () => {} },
+      dialogHost: cardHost,
+    });
+    const view = makeView();
+    provider.resolveWebviewView(view);
+    queueQuickPickResponse(undefined);
+    await provider.runModelPicker(false);
+    check(
+      "A31：命令面板入口（fromPanel:false）仍弹原生 QuickPick、**不弹卡片**",
+      callsOf("showQuickPick").length >= 1 && !cardMessages.some((m) => m.type === "dialog/open"),
+      JSON.stringify({ quickPicks: callsOf("showQuickPick").length, cards: cardMessages.filter((m) => m.type === "dialog/open").length }),
+    );
+  }
+
+  // ---- A32④ / A29：面板内 API key（password 卡）—— 值进 SecretStorage，不进重放/Output
+  {
+    resetStub();
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "s9-apikey-"));
+    const agentDir = path.join(root, "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const posted = [];
+    const output = makeOutput();
+    const dialogs = new DialogHost({ post: (m) => posted.push(m), log: output });
+    const stored = new Map();
+    const keys = {
+      listProviders: () => [...stored.keys()],
+      getApiKey: async (id) => stored.get(id),
+      saveApiKey: async (id, value) => {
+        stored.set(id, value);
+      },
+      removeApiKey: async (id) => {
+        stored.delete(id);
+      },
+    };
+    const notices = [];
+    try {
+      const piModule = await loadPi(REPO_ROOT);
+      const done = pickApiKeyInPanel({
+        pi: piModule,
+        agentDir,
+        keys,
+        dialogs,
+        notify: (text, level) => notices.push({ text, level }),
+      });
+      await settleTicks();
+      const providerCard = posted.find((m) => m.type === "dialog/open" && m.kind === "select");
+      check(
+        "A32④①：面板内 API key 第一步是 provider **卡片**（不是原生 QuickPick）",
+        providerCard !== undefined && providerCard.items.length > 1 && providerCard.current !== undefined,
+        JSON.stringify(providerCard),
+      );
+      dialogs.answer(providerCard.dialogId, { value: providerCard.items[0].label });
+      await settleTicks();
+      const passwordCard = posted.find((m) => m.type === "dialog/open" && m.kind === "password");
+      check("A32④②：第二步是 password 卡", passwordCard !== undefined && String(passwordCard.title).includes("API key"), JSON.stringify(passwordCard));
+      dialogs.answer(passwordCard.dialogId, { value: "sk-TESTMARKER" });
+      await done;
+      check(
+        "A32④③：作答后密钥真的进了 SecretStorage（桩存到了那个值）",
+        stored.get(providerCard.items[0].label) === "sk-TESTMARKER",
+        JSON.stringify([...stored.keys()]),
+      );
+      check(
+        "A29①：宿主→webview 的消息里没有明文（重放载荷从不携带值）",
+        !JSON.stringify(posted).includes("sk-TESTMARKER"),
+        JSON.stringify(posted).slice(0, 300),
+      );
+      check(
+        "A29②：Output 与通知文案里也没有明文",
+        !JSON.stringify(output.lines).includes("sk-TESTMARKER") && !JSON.stringify(notices).includes("sk-TESTMARKER"),
+        JSON.stringify({ lines: output.lines.slice(-2), notices }),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   }
 }
 

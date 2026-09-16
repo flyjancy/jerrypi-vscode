@@ -138,7 +138,7 @@ async function main() {
     window.eval(bundle);
 
     const doc = window.document;
-    const ids = ["transcript", "queue", "status", "input", "send-button", "abort-button", "queue-button", "composer-hint", "composer-error"];
+    const ids = ["transcript", "dialogs", "queue", "status", "input", "send-button", "abort-button", "queue-button", "composer-hint", "composer-error"];
     check("真 HTML 提供了 main.ts 需要的全部元素", ids.every((id) => doc.getElementById(id) !== null),
       ids.filter((id) => doc.getElementById(id) === null).join(", "));
     check("启动后发 ready（含协议版本）",
@@ -673,6 +673,117 @@ async function main() {
     check("收尾后换成渲染结果且只有一个节点",
       doc.querySelectorAll('[data-id="live-1"]').length === 1 &&
         (doc.querySelector('[data-id="live-1"]').textContent ?? "").includes("第一段第二段"));
+
+    // ---------------------------------------------------------------- S9 ①② 对话框
+    console.log("[webview-dom-check] S9 ①② 对话框卡片");
+    {
+      const answers = () => posted.filter((m) => m.type === "dialog/answer");
+      const key = (node, k, extra = {}) =>
+        node.dispatchEvent(new window.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...extra }));
+      const cardOf = (id) => doc.querySelector(`[data-dialog-id="${id}"]`);
+
+      // ---- A34：列表卡结构 + 当前项 ✓
+      send({ type: "dialog/open", dialogId: "d-select", kind: "select", title: "选一个", current: "b", items: [{ label: "a" }, { label: "b" }, { label: "c" }] });
+      const listCard = cardOf("d-select");
+      check(
+        "A34①：列表卡渲染出三项、当前项带 ✓ 前缀",
+        listCard !== null && listCard.querySelectorAll(".dialog-item").length === 3 && listCard.textContent.includes("✓ b"),
+        listCard?.textContent,
+      );
+
+      // ---- A33：↑↓ 与 Enter / Esc / IME
+      const beforeArrow = answers().length;
+      // 当前项是 b（index 1）⇒ 一次 ↓ 到 c。
+      key(listCard, "ArrowDown");
+      key(listCard, "Enter");
+      check(
+        "A33①：↑↓ 移动高亮、Enter 交出的是高亮项（b → ↓ → c）",
+        answers().length === beforeArrow + 1 && answers().at(-1)?.value === "c",
+        JSON.stringify(answers().slice(beforeArrow)),
+      );
+      // 再 ↓ 一次应该**回绕**到 a（高亮是环形的，到末尾之后回到开头）。
+      key(listCard, "ArrowDown");
+      check(
+        "A33①b：高亮到底之后回绕到第一项（且 `.selected` 始终唯一）",
+        listCard.querySelector(".dialog-item.selected")?.getAttribute("data-dialog-value") === "a" &&
+          listCard.querySelectorAll(".dialog-item.selected").length === 1,
+        listCard.querySelector(".dialog-item.selected")?.getAttribute("data-dialog-value"),
+      );
+      key(listCard, "ArrowUp");
+      check(
+        "A33①c：↑ 反向回绕到末尾（a → c）",
+        listCard.querySelector(".dialog-item.selected")?.getAttribute("data-dialog-value") === "c",
+        listCard.querySelector(".dialog-item.selected")?.getAttribute("data-dialog-value"),
+      );
+
+      send({ type: "dialog/open", dialogId: "d-ime", kind: "select", title: "IME", items: [{ label: "x" }] });
+      const imeCard = cardOf("d-ime");
+      const beforeIme = answers().length;
+      imeCard.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, isComposing: true }));
+      check("A33②：IME 组合中的 Enter 不提交（同输入框发送的守卫）", answers().length === beforeIme, JSON.stringify(answers().slice(beforeIme)));
+      key(imeCard, "Escape");
+      check("A33③：Esc 发的是 cancelled（不是 value）", answers().at(-1)?.cancelled === true, JSON.stringify(answers().at(-1)));
+
+      // ---- A33：输入卡
+      send({ type: "dialog/open", dialogId: "d-input", kind: "input", title: "输入", placeholder: "占位" });
+      const inputCard = cardOf("d-input");
+      const field = inputCard.querySelector("input");
+      check("A33④：输入卡渲染了带 placeholder 的输入框", field?.getAttribute("placeholder") === "占位", field?.outerHTML);
+      field.value = "hello";
+      key(field, "Enter");
+      check("A33⑤：输入卡 Enter 交出输入框里的值", answers().at(-1)?.value === "hello", JSON.stringify(answers().at(-1)));
+      send({ type: "dialog/open", dialogId: "d-input2", kind: "input", title: "输入2" });
+      const inputCard2 = cardOf("d-input2");
+      const beforeEsc = answers().length;
+      key(inputCard2.querySelector("input"), "Escape");
+      check("A33⑥：输入卡 Esc 取消", answers().length === beforeEsc + 1 && answers().at(-1)?.cancelled === true);
+
+      // ---- A34：撤卡渲染 / loading / 同 id 更新 / password 清理
+      send({ type: "dialog/open", dialogId: "d-close", kind: "confirm", title: "确认卡", message: "细节" });
+      const confirmCard = cardOf("d-close");
+      check("A34②：确认卡渲染了「确认 / 取消」两个按钮", confirmCard.querySelectorAll(".dialog-confirm, .dialog-cancel").length === 2);
+      send({ type: "dialog/close", dialogId: "d-close", reason: "answered" });
+      check(
+        "A34③：close(answered) → 终态「已作答」，且**不是**「已取消」",
+        confirmCard.classList.contains("done") && confirmCard.textContent.includes("已作答") && !confirmCard.textContent.includes("已取消"),
+        confirmCard.textContent,
+      );
+      send({ type: "dialog/open", dialogId: "d-timeout", kind: "confirm", title: "超时卡" });
+      send({ type: "dialog/close", dialogId: "d-timeout", reason: "timeout" });
+      check("A34③b：close(timeout) → 「已超时」", cardOf("d-timeout").textContent.includes("已超时"), cardOf("d-timeout").textContent);
+
+      send({ type: "dialog/open", dialogId: "d-load", kind: "select", title: "加载卡", loading: true, items: [] });
+      const loadCard = cardOf("d-load");
+      check(
+        "A34④：loading 态能渲染（有加载提示、没有选项）",
+        loadCard.querySelector(".dialog-loading") !== null && loadCard.querySelectorAll(".dialog-item").length === 0,
+        loadCard.outerHTML,
+      );
+      send({ type: "dialog/open", dialogId: "d-load", kind: "select", title: "加载卡", current: "b", items: [{ label: "a" }, { label: "b" }] });
+      check(
+        "A34⑤：同 id 二次 open 更新内容（加载态 → 列表，且保留同一个卡片节点）",
+        cardOf("d-load") === loadCard && loadCard.querySelector(".dialog-loading") === null && loadCard.querySelectorAll(".dialog-item").length === 2 && loadCard.textContent.includes("✓ b"),
+        loadCard.outerHTML,
+      );
+      send({ type: "dialog/close", dialogId: "d-load", reason: "cancelled" });
+      send({ type: "dialog/open", dialogId: "d-load", kind: "select", title: "迟到", items: [{ label: "z" }] });
+      check(
+        "A34⑥：已结算的卡片不会被晚到的 open 复活（防孤儿卡）",
+        loadCard.classList.contains("done") && loadCard.querySelectorAll(".dialog-item").length === 0 && loadCard.textContent.includes("已取消"),
+        loadCard.textContent,
+      );
+
+      send({ type: "dialog/open", dialogId: "d-pw", kind: "password", title: "密钥卡" });
+      const pwCard = cardOf("d-pw");
+      const pwField = pwCard.querySelector("input");
+      check("A34⑦：password 卡的输入框 type=password", pwField?.type === "password", pwField?.outerHTML);
+      pwField.value = "sk-TESTMARKER";
+      key(pwField, "Enter");
+      check("A34⑧：password Enter 提交（值经 postMessage 交给宿主）", answers().at(-1)?.value === "sk-TESTMARKER", JSON.stringify(answers().at(-1)));
+      check("A34⑨：作答后输入框的值立刻被清除（真 DOM，宿主桩验不了）", pwField.value === "", JSON.stringify(pwField.value));
+      send({ type: "dialog/close", dialogId: "d-pw", reason: "answered" });
+      check("A34⑩：answered 之后卡片撤除交互（input 不在 DOM 里了）", pwCard.querySelector("input") === null && pwCard.textContent.includes("已作答"), pwCard.textContent);
+    }
 
     // ---------------------------------------------------------------- 反向控制
     console.log("[webview-dom-check] 检查检查本身");

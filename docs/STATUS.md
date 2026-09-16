@@ -11,9 +11,9 @@
 
 ## 1. 现在
 
-**进行中**：**S9 实施期 · 步骤 8 完成**（①② 宿主侧：协议 `dialog/open`/`dialog/answer`/`dialog/close`（v7）+ `src/host/dialogHost.ts`
-+ `uiContext` 三件接卡片 + `chatView` 的 ready **先重放再 ensure**；host-check **404**、protocol-check **124**）。
-下一步：步骤 9（追加①②面板侧：三张卡片 + password 卡 + loading/撤卡渲染 + 面板入口 + 键盘 handler + 夹具 `/smoke-ask`）。
+**进行中**：**S9 实施期 · 步骤 9 完成**（①② 面板侧：webview 三卡片 + password 卡 + loading/撤卡渲染 + 键盘 handler；
+面板版模型/等级/会话/API-key 入口（命令面板仍原生）；夹具 `/smoke-ask`。
+host-check **418**、webview-dom **110**）。下一步：步骤 10（文档收尾：README 中英面板内交互说明 + `settings-check` 扩容）。
 
 **计划与评审**（细节全在 `docs/S9-plan.md`）：§0 有 **46 条**带证据的事实（F1–F46）+ 两个可重跑探针
 （`scripts/probes/s9-package-probe.mjs`、`scripts/probes/s9-reload-probe.mjs`）；§4 的 Q1–Q17 是决策与默认值。
@@ -50,12 +50,12 @@
 | 命令 | 现在 |
 | --- | --- |
 | `npm run typecheck`（2 套 tsconfig） | ✅ |
-| `npm run self-test` | **9/9**（其中 host-check **404**、webview-dom 91、render 128、protocol **124**、settings 16/16、manifest 6/6） |
+| `npm run self-test` | **9/9**（其中 host-check **418**、webview-dom **110**、render 128、protocol **124**、settings 16/16、manifest 6/6） |
 | `npm run check:protocol` | **124** |
 | `npm run check:render` | **128** |
 | `node scripts/tool-text-check.mjs` | **91** |
-| `node scripts/webview-dom-check.mjs` | **91** |
-| `node scripts/host-check.mjs` | **404** |
+| `node scripts/webview-dom-check.mjs` | **110** |
+| `node scripts/host-check.mjs` | **418** |
 | `npm run check:controller`（真模型，**不进 CI**） | **110/110**（S8 加了 A15：`approvalMode:all` 下拒绝→副作用没发生→允许→真的执行；另含 S7 的 A7 与一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **18 项（14 gating + T5c/T12/T13/T16 advisory）GATE PASS**（本机 T12 也 PASS ⇒ 18 PASS / 0 FAIL / 0 SKIP；**T14（S8）/T15、T16（S9）不用模型**；T13：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[…]；PI_OFFLINE=未设`） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **18 项（14 gating + T5c/T12/T13/T16 advisory）GATE PASS**（0.1.8 时是 15 项；S8 加 T14、S9 加 T15/T16 ⇒ **18 项**。上次 Windows W0 真宿主跑的是 15 项版：14 PASS / 0 FAIL / 1 SKIP = T12 —— 那台机器没有 `pi`；**下一次 W0 期望 18 项**） |
@@ -92,8 +92,8 @@
 | 6 | （追加③）manifest 移 `secondarySidebar` + A23 | ✅ |
 | 7 | （追加④）`src/pi/shell.ts` + `Pi: Set Shell Path` + T16 + A24/A25/A26 | ✅ |
 | 8 | （追加①②宿主侧）协议三消息 + `DialogHost` + `uiContext` 三件接卡片（A27/A28/A30/A32） | ✅ |
-| 9 | （追加①②面板侧）webview 三卡片 + password 卡 + 面板入口 + 键盘 handler（A29/A31/A33–A35） | ⏳ 下一个 |
-| 10 | 文档收尾（README 面板位置 / shell 指引 / 面板内交互；`settings-check` 扩容） | |
+| 9 | （追加①②面板侧）webview 三卡片 + password 卡 + 面板入口 + 键盘 handler（A29/A31/A33–A35） | ✅ |
+| 10 | 文档收尾（README 面板位置 / shell 指引 / 面板内交互；`settings-check` 扩容） | ⏳ 下一个 |
 | 11 | 版本 0.1.13 + 打包 + Mac M1/M2 → 上传/核验 → Windows W0/W1（+W2）→ §12 回填 → 关阶段 | |
 
 ## 4. 发布流程（每次都一样）

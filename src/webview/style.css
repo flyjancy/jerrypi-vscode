@@ -476,3 +476,91 @@ body {
 .meta-usage-error {
   color: var(--vscode-errorForeground);
 }
+
+/* ---------------- S9 ①②：面板内对话框卡片 ---------------- */
+
+.dialogs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 8px;
+}
+
+.dialog {
+  border: 1px solid var(--vscode-focusBorder, #007fd4);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--vscode-editorWidget-background, #252526);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dialog.done {
+  border-color: var(--vscode-panel-border, #3c3c3c);
+  opacity: 0.85;
+}
+
+.dialog-title {
+  font-weight: 600;
+}
+
+.dialog-message {
+  color: var(--vscode-descriptionForeground, #999);
+  white-space: pre-wrap;
+}
+
+.dialog-loading,
+.dialog-empty,
+.dialog-terminal {
+  color: var(--vscode-descriptionForeground, #999);
+}
+
+.dialog-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.dialog-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.dialog-item:hover,
+.dialog-item.selected {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.dialog-item[aria-selected="true"] {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+}
+
+.dialog-item-description,
+.dialog-item-detail {
+  color: var(--vscode-descriptionForeground, #999);
+  font-size: 0.9em;
+}
+
+.dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--vscode-input-background, #3c3c3c);
+  color: var(--vscode-input-foreground, #ccc);
+  border: 1px solid var(--vscode-input-border, #3c3c3c);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+.dialog-confirm,
+.dialog-cancel,
+.dialog-submit {
+  align-self: flex-start;
+}

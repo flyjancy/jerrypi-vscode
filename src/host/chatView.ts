@@ -16,8 +16,11 @@ import type { SessionHostController, SessionReplaceOutcome } from "../pi/control
 import { PROTOCOL_VERSION, type ClientMessage, type ServerMessage } from "../shared/protocol";
 import { isExternalUrlAllowed } from "../shared/urlPolicy";
 import { buildWebviewHtml, createNonce } from "./webviewHtml";
-import { pickModel, pickThinkingLevel, type PickerBridge } from "./modelPicker";
-import { pickSession, type SessionPickerBridge } from "./sessionPicker";
+import { pickModel, pickModelInPanel, pickThinkingLevel, pickThinkingLevelInPanel, type PickerBridge } from "./modelPicker";
+import { pickSession, pickSessionInPanel, type SessionPickerBridge } from "./sessionPicker";
+import { pickApiKeyInPanel } from "./apiKeyPanel";
+import { loadPi } from "../pi/loader";
+import type { ApiKeyStore } from "../pi/runtime";
 import { replaceSessionWithConfirm, reportReplaceOutcome } from "./sessionActions";
 import { DialogHost } from "./dialogHost";
 import { MetaStatusBar } from "./statusBar";
@@ -47,6 +50,8 @@ export interface ChatViewOptions {
    * 那种情况下 `uiContext` 也没接它，所以不会有“两张表”的问题。
    */
   dialogHost?: DialogHost;
+  /** S9 ①②：面板内“设置 API key”入口要用的密钥存储（与命令层同一个 `createApiKeyStore`）。 */
+  keys?: ApiKeyStore;
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -94,7 +99,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       applyLevel: (level) => controller.applyThinkingLevel(level),
       notify: (text, level) => controller.notifyUser(level, text),
       focusInput: () => this.post({ type: "focusInput" }),
+      configureApiKey: () => this.runApiKeyPanel(),
     };
+  }
+
+  /**
+   * S9 ①②：面板内的 API key 流程（provider 卡 + password 卡）。
+   *
+   * 入口是**模型卡的“没有可用模型”那一项**（与原生路径的 `NO_MODELS_ITEM` 对齐）：
+   * 点模型芯片 → 卡片说“先配置一个 provider” → 选中它就走这里。
+   */
+  private async runApiKeyPanel(): Promise<void> {
+    const { keys } = this.options;
+    if (keys === undefined) {
+      this.options.controller.notifyUser("error", "面板没有拿到密钥存储，无法在面板内配置 API key（改用命令 Pi: Set API Key）");
+      return;
+    }
+    const module = await loadPi(this.options.extensionUri.fsPath);
+    await pickApiKeyInPanel({
+      pi: module,
+      agentDir: module.getAgentDir(),
+      keys,
+      dialogs: this.dialogHost,
+      notify: (text, level) => this.options.controller.notifyUser(level, text),
+    });
   }
 
   /** 命令面板入口（`fromPanel: false` —— 那时不抢用户焦点）。 */
@@ -332,15 +360,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           return;
         }
         case "openModelPicker": {
-          await pickModel(this.pickerBridge(), { fromPanel: true });
+          // Q11：面板发起走卡片；命令面板入口（`jerrypi.selectModel`）仍走原生。
+          await pickModelInPanel(this.pickerBridge(), this.dialogHost);
           return;
         }
         case "openThinkingPicker": {
-          await pickThinkingLevel(this.pickerBridge(), { fromPanel: true });
+          await pickThinkingLevelInPanel(this.pickerBridge(), this.dialogHost);
           return;
         }
         case "openSessionPicker": {
-          await this.runSessionPicker(true);
+          await pickSessionInPanel(this.sessionBridge(), this.dialogHost);
           return;
         }
         case "openFile": {

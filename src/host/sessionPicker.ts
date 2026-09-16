@@ -12,6 +12,7 @@
 import * as vscode from "vscode";
 import { homedir } from "node:os";
 import { formatSessionTime, sessionDisplayName } from "../shared/format";
+import type { DialogPanel } from "./dialogHost";
 
 /** 选择器需要宿主提供的能力（选择器本身不认识 controller/session）。 */
 export interface SessionPickerBridge {
@@ -68,6 +69,81 @@ export function sessionToItem(raw: unknown, currentPath: string, now: Date): vsc
     description: parts.join(" · "),
     detail: shortenPath(path),
   };
+}
+
+/**
+ * `SessionInfo` → **面板卡片**的一项（`label` 用缩短后的路径：它是唯一键；名字放 description）。
+ * 与 `sessionToItem` 的差别同样在于：`✓` 由渲染层根据 `current` 加。
+ */
+export function sessionToDialogItem(
+  raw: unknown,
+  now: Date,
+): { label: string; description?: string; detail?: string } {
+  const info = raw as SessionInfoLike;
+  const path = info.path ?? "";
+  const name = sessionDisplayName(info.name, info.firstMessage ?? "");
+  const parts: string[] = [];
+  if (info.modified instanceof Date) parts.push(formatSessionTime(info.modified, now));
+  if (typeof info.messageCount === "number") parts.push(`${info.messageCount} 条消息`);
+  return {
+    label: path === "" ? name : shortenPath(path),
+    description: name,
+    ...(parts.length === 0 ? {} : { detail: parts.join(" · ") }),
+  };
+}
+
+/** 面板内“新建会话”那一项（不用 `$(add)` codicon：卡片是自绘的，渲染不出图标）。 */
+const NEW_SESSION_DIALOG_ITEM = { label: "＋ 新建会话", description: "开一个空白会话" };
+const EMPTY_DIALOG_ITEM = {
+  label: "当前项目还没有已保存的会话",
+  description: "聊满一轮之后它才会出现在这里",
+};
+
+/**
+ * 在**面板内**选会话（S9 ①②）—— 与 `pickSession` 同一套硬要求：
+ * 列表里永远有“新建”；当前项标记（`current` + 渲染层的 `✓`）；两条退出路径都还焦点。
+ */
+export async function pickSessionInPanel(bridge: SessionPickerBridge, dialogs: DialogPanel): Promise<void> {
+  const handle = dialogs.start({ kind: "select", title: "jerrypi: 会话", loading: true, items: [] });
+  let sessions: readonly unknown[];
+  try {
+    sessions = await bridge.listSessions();
+  } catch (error) {
+    if (dialogs.isPending(handle.dialogId)) dialogs.fail(handle.dialogId);
+    bridge.focusInput();
+    bridge.notify("error", `读取会话列表失败：${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  // 晚到的加载结果先查 pending（R2-B1）。
+  if (!dialogs.isPending(handle.dialogId)) return;
+  const currentPath = bridge.currentSessionPath();
+  const now = new Date();
+  const items: { label: string; description?: string; detail?: string }[] = [
+    NEW_SESSION_DIALOG_ITEM,
+    ...sessions.map((session) => sessionToDialogItem(session, now)),
+  ];
+  if (sessions.length === 0) items.push(EMPTY_DIALOG_ITEM);
+  dialogs.update(handle.dialogId, {
+    loading: false,
+    items,
+    ...(currentPath === "" ? {} : { current: shortenPath(currentPath) }),
+  });
+
+  const picked = await handle.result;
+  if (picked === undefined) {
+    bridge.focusInput();
+    return;
+  }
+  if (picked === NEW_SESSION_DIALOG_ITEM.label) {
+    await bridge.startNewSession();
+  } else {
+    const target = sessions.find((session) => {
+      const info = session as SessionInfoLike;
+      return typeof info.path === "string" && shortenPath(info.path) === picked;
+    }) as SessionInfoLike | undefined;
+    if (typeof target?.path === "string" && target.path !== "") await bridge.switchToSession(target.path);
+  }
+  bridge.focusInput();
 }
 
 /** 打开会话选择器。 */

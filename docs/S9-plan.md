@@ -918,6 +918,43 @@ R14–R16）无错位；F40–F45、Q12–Q17 与本次改动无新增冲突；�
 - **未做（属步骤 9）**：webview 侧的三张卡片与 `dialog/close` 渲染、password 卡、loading 态；
   以及“有 N 个待答”的**状态行**（webview 侧从 `dialog/open` 自己算）—— 详见步骤 9。
 
+### 11.9 步骤 9（2026-09-17）：①② 面板侧（卡片 / 键盘 / 面板入口 / 夹具）
+
+- **落盘**：
+  - webview：`#dialogs` 容器（`#transcript` 的最后一个子元素，`applyState` **不**清它——state 重放不能抹掉还在等的卡）；
+    三种卡片（列表 / 输入·密码 / 确认）+ loading 态 + 同 id 更新 + `dialog/close` 终态；
+    键盘 handler（↑↓ 回绕 / Enter / Esc / IME 守卫）；password 作答后**立即清空**输入框；
+    状态行加一行“有 N 个对话框等待作答”。
+  - 宿主：`DialogHost.start()`（拿到 `dialogId` 才能 `update`/`fail`）；`modelPicker` / `sessionPicker` / `apiKeyPanel`
+    的面板版（`pickModelInPanel` / `pickThinkingLevelInPanel` / `pickSessionInPanel` / `pickApiKeyInPanel`），
+    当前项只发 `current`、`✓` 由渲染层加（单一真相）；`chatView` 的面板入口改走卡片，**命令面板入口保持原生**（Q11）。
+  - 夹具：`test-fixtures/ext-smoke` 加 `/smoke-ask`（select → confirm → input，不用模型，供 M1⑥/W1④）。
+  - 断言：host-check **+14**（404 → 418，A29/A31/A32③④/A35）、webview-dom-check **+19**（91 → 110，A33/A34）。
+- **实施期发现 / 与计划的小偏离**：
+  1. **A31 的形状改了**：计划的红法是“把 `fromPanel:false` 也接卡片”。第一版 A31 直接调 `pickModel()`——
+     那只能证明“这个函数里的分支对”，证明不了“命令层接对了”（把 `chatView.runModelPicker` 改成一律卡片照样绿）。
+     现在 A31 驱动**真命令路径** `provider.runModelPicker(false)`，断言“弹了原生、**没弹卡片**”。
+  2. **`✓` 不走协议字符串**：计划写“`dialog/open` 带 ✓ 当前项”。实现改为发 `current` + 渲染层加 `✓`
+     （否则“哪一项是当前”同时活在协议载荷与 label 里，两边会分叉）。A32③①/② 断言 `current`，
+     A34① 断言渲染出来的 `✓`，A35⑤ 钉住 label 不变。
+  3. **面板内 API key 的入口是“模型卡的空态那一项”**（点模型芯片 → “没有可用模型” → 选中它 → provider 卡 + password 卡），
+     没有另加芯片；命令 `Pi: Set API Key` 仍是原生的那条。
+  4. S4 的模型/等级/会话选择器夹具原本驱动 `view.send({openModelPicker})` 并断言原生 QuickPick ——
+     按 Q11 它们现在应走卡片，所以那批改走 `runModelPicker(false)`（**命令**路径）；焦点归还的断言移到卡片路径
+     （A32③④ / A35），原生侧反过来断言“**不**抢焦点”。
+- **能红验证（实跑）**：
+
+  | 断言 | 改坏方式 | 结果 |
+  | --- | --- | --- |
+  | A29② / A32④③ | 密钥写进 notify 文案 / 删掉 `keys.saveApiKey` | 两条红 |
+  | A31 | `pickModel` 在 `fromPanel:false` 时直接 `return` | 红（连 S4 的几条原生断言一起红） |
+  | A32③③ | 删掉 `bridge.applyModel` | 红 |
+  | A32③① / A35① | 去掉 `loading: true` | 两条红 |
+  | A35③ | 去掉 `dialogs.fail` | 红 |
+  | A35④ | 去掉“发送前查 pending” | 红（晚到的结果又发了一条 `focusInput`） |
+  | A33①②③ | 删 ArrowDown 分支 / 把 IME 守卫改成 `false` | 三条红 |
+  | A34③/③b/④/⑥/⑨/⑩ | 忽略 `dialog/close` / 不实现 loading / 允许晚到 open 复活 / 不清输入框 | 六条红 |
+
 ## 12. 实施与验收结果
 
 （待实施）
