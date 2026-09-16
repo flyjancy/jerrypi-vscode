@@ -955,6 +955,18 @@ R14–R16）无错位；F40–F45、Q12–Q17 与本次改动无新增冲突；�
   | A33①②③ | 删 ArrowDown 分支 / 把 IME 守卫改成 `false` | 三条红 |
   | A34③/③b/④/⑥/⑨/⑩ | 忽略 `dialog/close` / 不实现 loading / 允许晚到 open 复活 / 不清输入框 | 六条红 |
 
+### 11.10 步骤 10（2026-09-17）：文档收尾
+
+- **README 中英**：各新增一节「面板内的对话框 / In-panel dialogs」（卡片位置、键盘、password 不进重放/Output、
+  loading 与失败退卡、Esc/超时/切会话撤卡、**关面板不取消**、命令面板仍原生）。
+- **`settings-check` 扩容**（**16 → 33**）：新增 **A11** —— 把 S9 新增的 5 条命令
+  （`Pi: Install Package` / `Install Package from Folder…` / `List Packages` / `Remove Package` / `Set Shell Path`）
+  在 manifest 与 README 中英两侧各钉一遍，再加两条“面板内对话框停在面板里”的文案存在性检查。
+  先断言“manifest 里真有这条命令”，否则那只是在查一个拼错的字符串。
+- **`docs/pi-traps.md`**：新增第 **37** 条 —— `ExtensionUIContext.select(title, options: string[])` 的选项是字符串数组（不是对象）。
+- **与计划的小偏离**：面板位置（步骤 6）与 shell 指引（步骤 7）的 README 段落已经跟着那两步写完了，
+  所以本步只补“面板内交互”这一段 —— 计划把它们列在一起，实际按“代码落地时同步写文档”执行。
+
 ## 12. 实施与验收结果
 
 （待实施）

@@ -94,6 +94,17 @@
 - 已经装过的源再装一次会走幂等分支，提示「已经在配置里了（未改动）」，**不是**失败。
 - 列表里看到的是**文件里的真相**（每次都新读 `<agentDir>/settings.json`），与终端 `pi` / 新建会话看到的一致。
 
+### 面板内的对话框
+
+聊天里的选择/确认/输入（包括 pi 扩展通过 `ctx.ui.select/confirm/input` 发起的），以及**面板发起**的模型 / 思考等级 / 会话切换 / API key 输入，都停在**面板里**（卡片出现在消息流末尾），**不再弹窗口顶部**的原生控件（原生 QuickPick / 输入框的位置是 VS Code 硬编码的，移不了）。要点：
+
+- 列表卡：`↑`/`↓` 移动高亮、`Enter` 选中、`Esc` 取消；输入卡/密码卡：`Enter` 提交、`Esc` 取消；确认卡：两枚按钮（`Esc` = 取消）。
+- 密码卡（API key）的值**只经面板消息进宿主**，存进 VS Code SecretStorage —— 不进重放、不进 Output、不进 webview 状态。
+- 模型列表加载时卡片显示「加载中…」（不是点击后无响应）；加载失败会撤卡并给出提示，焦点回到输入框。
+- Esc / 超时 / 切换会话都会**撤卡**；切换会话时旧会话上等着的对话框会标成「已失效」。
+- 关掉面板**不**取消待答的对话框（重开后面板会把卡片重放出来，可以继续答）。
+- 从**命令面板**发起的选择器（`Pi: Select Model` 等）仍用原生 QuickPick —— 那时你的焦点不在面板里。
+
 ### 面板在哪个位置
 
 - **新装用户**：面板默认开在**辅助边栏（右侧）**，与资源管理器并排；`Pi: Focus Chat` 仍然可用（容器 id 没变）。
@@ -306,6 +317,17 @@ Four commands, powered by pi's own package manager (they edit the **same config*
 - **Install/remove does not take effect immediately**: the message says "takes effect in a new session (or after reloading the window)". Not hot-reloading is **deliberate** — pi's reload does not re-adjudicate project trust, so it would load extensions from a `.pi/extensions/` folder that appeared after the session was created without asking; a new session re-reads settings and re-runs the trust flow every time.
 - Installing a source that is already configured takes the idempotent branch and reports "already configured (unchanged)" — that is **not** a failure.
 - The list always shows **the truth from the file** (it re-reads `<agentDir>/settings.json` on every call), matching what the terminal `pi` and new sessions see.
+
+### In-panel dialogs
+
+Select / confirm / input dialogs — whether from the chat flow (including a pi extension calling `ctx.ui.select/confirm/input`) or started **from the panel** (model, thinking level, session switch, API key) — stay **inside the panel** as cards at the end of the transcript, instead of the native controls that appear at the **top of the window** (VS Code hardcodes that position; it cannot be moved). Notes:
+
+- List card: `↑`/`↓` to move, `Enter` to pick, `Esc` to cancel; input/password card: `Enter` submits, `Esc` cancels; confirm card: two buttons (`Esc` cancels).
+- The password card (API key) value goes host-side through the panel message and into VS Code SecretStorage — it never enters the replay stream, the Output channel, or webview state.
+- The model list shows "loading…" on the card (instead of an unresponsive click); a failed load removes the card and returns focus to the composer.
+- `Esc`, timeout and session switches all remove the card; dialogs pending on the old session are marked as expired when you switch.
+- Closing the panel does **not** cancel a pending dialog — reopening replays the card so you can still answer it.
+- Pickers started from the **Command Palette** (`Pi: Select Model`, …) still use the native QuickPick — your focus is not in the panel then.
 
 ### Where the panel lives
 

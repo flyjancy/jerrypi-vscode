@@ -46,6 +46,7 @@
 | 34 | 两个“忙”的口径在**压缩期间**不等价：`snapshot().busy`（`pendingSend \|\| isStreaming`）为 false 而 `controller.isBusy()`（`pendingSend \|\| !isIdle`）为 true（`isIdle` 含 `isCompacting`） | S9-plan §0.7 F35 |
 | 35 | `isLocalPath` / `parseGitUrl` / `parseSource` / `getExtensionTempFolder` **都没从 bundle 导出** ⇒ 源分类只能靠我们自己的保守判定（只有 `npm:` 前缀算 npm），复刻 pi 的规则一定分叉 | S9-plan §0.1 F2b · §3.1（A1 的红法就是“含 `:` 就算 npm”误伤 `C:\…`） |
 | 36 | `DefaultResourceLoader.reload()` 内部**总是先** `await settingsManager.reload()` 再从盘上重读 ⇒ 一个“陈旧的” `SettingsManager` 在加载资源前会被刷新（想用“把 manager 提到外面”来证伪“新会话看见新包”是**不红**的） | S9-plan §11.4（实施期实测；`chunk-JVUZSMYM.js` 里三处 `settingsManager.reload()` 的第三处） |
+| 37 | `ExtensionUIContext.select(title, options: **string[]**)` —— 选项是**字符串数组**（pi 内部自己就是 `options.map((o) => o.label)` 传进来的），不是 `{label, description}` 对象；把这个接口接成自绘控件时按 `option.label` 读，真机上每一项都会是 `undefined` | S9-plan §11.8（实施期抓到的潜伏 bug；这个接口在本仓从未被真跑过，所以一直没暴露） |
 
 **怎么区分"我踩到新坑了"和"我读错了"**：先写一个**最小探针**（临时目录 + 我们发布的那份 bundle），
 把"我以为的行为"和"实际行为"并排打出来 —— S5 的 §3.1、§3.5、§3.8 都是这么定案的。

@@ -128,6 +128,36 @@ for (const half of halves) {
   }
 }
 
+// ------------------------------------------------- A11：S9 新命令与面板内交互的文档一致性
+//
+// 为什么扩到这里：S9 新增了 5 条命令 + 一整套面板内对话框。命令/交互都是“用户看不见就会
+// 以为没做”的东西，而 README 是唯一入口 —— 所以把“该提的名字”钉成可枚举的集合
+// （只钉**新增的**，不逼着 README 把每一条命令都列全）。
+{
+  const S9_COMMANDS = [
+    "Pi: Install Package",
+    "Pi: Install Package from Folder…",
+    "Pi: List Packages",
+    "Pi: Remove Package",
+    "Pi: Set Shell Path",
+  ];
+  const commandTitles = new Set((pkg?.contributes?.commands ?? []).map((entry) => entry.title));
+  for (const command of S9_COMMANDS) {
+    // 先保证这个名字真的存在于 manifest 里（否则下面只是在查一个拼错的字符串）。
+    check(`package.json 里有 ${command} 这条命令`, commandTitles.has(command.replace(/^Pi: /, "")), [...commandTitles].join(", "));
+  }
+  for (const half of halves) {
+    for (const command of S9_COMMANDS) {
+      check(`${command}（${half.label}）出现在 README 里`, half.text.includes(command), "");
+    }
+  }
+  // 面板内对话框：中英文各自要有一节能找到的说明（不比对文案细节，只比对“有没有说”）。
+  const zh = readme.slice(0, englishAt < 0 ? readme.length : englishAt);
+  const en = readme.slice(englishAt < 0 ? readme.length : englishAt);
+  check("README（中文）说明面板内的对话框停在面板里", zh.includes("面板内") && zh.includes("不再弹窗口顶部"), "");
+  check("README（英文）说明面板内的对话框停在面板里", en.toLowerCase().includes("inside the panel") && en.toLowerCase().includes("top of the window"), "");
+}
+
 // ------------------------------------------------------------------- 收尾
 let failed = 0;
 for (const [name, ok, detail] of results) {

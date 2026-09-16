@@ -39,7 +39,7 @@ host-check **418**、webview-dom **110**）。下一步：步骤 10（文档收�
 
 | | |
 | --- | --- |
-| 阶段 | **S5、S6、S7、S8 均已关闭**；**S9 实施中**（pi 包管理 + 2026-09-17 追加的四项体验修复；步骤 1 已完成，见上） |
+| 阶段 | **S5、S6、S7、S8 均已关闭**；**S9 实施中**（编码十步已完成，见上；只剩步骤 11：版本/打包/人工验收） |
 | 最新发布 | **0.1.12**（2026-09-15，预发布；S8 的全部内容；上一个 0.1.11 —— 两者只差 T14 夹具的路径写法） |
 | 发布核验 | **0.1.12**：`NODE_USE_ENV_PROXY=1 node scripts/compare-vsix.mjs 0.1.12` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,050,314 字节 / `3ffd7adc…`）；tag `v0.1.12`；留档 `~/jerrypi-releases/jerrypi-0.1.12.vsix`（0.1.11：338 文件 / `bd3cdcde…`；0.1.9：338 文件 / `85db1434…`）。⚠️ 本机跑这个脚本必须带 `NODE_USE_ENV_PROXY=1`（代理只在环境变量里，Node 的 fetch 默认不看，见 S8-plan §11 的 P-1） |
 | 真机验收 | S4 ✅／✅ · S5 ✅／✅ · S6 ✅／✅ · S7 ✅／✅（各自的 §12.3）｜ **S8：Mac ✅ ／ Windows ✅**（M1 六项 + M2 三项；**W0 `GATE PASS` 15 PASS / 0 FAIL / 1 SKIP = T12，含 T14**；W1 正常 —— S8-plan §12.3） |
@@ -50,7 +50,7 @@ host-check **418**、webview-dom **110**）。下一步：步骤 10（文档收�
 | 命令 | 现在 |
 | --- | --- |
 | `npm run typecheck`（2 套 tsconfig） | ✅ |
-| `npm run self-test` | **9/9**（其中 host-check **418**、webview-dom **110**、render 128、protocol **124**、settings 16/16、manifest 6/6） |
+| `npm run self-test` | **9/9**（其中 host-check **418**、webview-dom **110**、render 128、protocol **124**、settings **33/33**、manifest 6/6） |
 | `npm run check:protocol` | **124** |
 | `npm run check:render` | **128** |
 | `node scripts/tool-text-check.mjs` | **91** |
@@ -93,7 +93,7 @@ host-check **418**、webview-dom **110**）。下一步：步骤 10（文档收�
 | 7 | （追加④）`src/pi/shell.ts` + `Pi: Set Shell Path` + T16 + A24/A25/A26 | ✅ |
 | 8 | （追加①②宿主侧）协议三消息 + `DialogHost` + `uiContext` 三件接卡片（A27/A28/A30/A32） | ✅ |
 | 9 | （追加①②面板侧）webview 三卡片 + password 卡 + 面板入口 + 键盘 handler（A29/A31/A33–A35） | ✅ |
-| 10 | 文档收尾（README 面板位置 / shell 指引 / 面板内交互；`settings-check` 扩容） | ⏳ 下一个 |
+| 10 | 文档收尾（README 面板位置 / shell 指引 / 面板内交互；`settings-check` 扩容） | ✅ |
 | 11 | 版本 0.1.13 + 打包 + Mac M1/M2 → 上传/核验 → Windows W0/W1（+W2）→ §12 回填 → 关阶段 | |
 
 ## 4. 发布流程（每次都一样）
