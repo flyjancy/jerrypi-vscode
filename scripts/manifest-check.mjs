@@ -29,6 +29,8 @@ const EXPECTED_COMMANDS = [
   "jerrypi.installPackageFromFolder",
   "jerrypi.listPackages",
   "jerrypi.removePackage",
+  // S9（追加④）：bash 路径入口
+  "jerrypi.setShellPath",
 ];
 
 /** 旧位置（0.1.12）：一旦这里又出现 `jerrypi`，说明那段配置被复制回来了。 */

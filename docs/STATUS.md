@@ -11,9 +11,9 @@
 
 ## 1. 现在
 
-**进行中**：**S9 实施期 · 步骤 6 完成**（③ 面板默认移右侧：`viewsContainers` → `secondarySidebar`；新增 `scripts/manifest-check.mjs`
-（6 条，接进 self-test 第 6 个用例）+ `npm run check:manifest`；README 中英加“面板在哪个位置”节）。
-下一步：步骤 7（追加④ `src/pi/shell.ts` + `Pi: Set Shell Path` + T16 + A24/A25/A26）。
+**进行中**：**S9 实施期 · 步骤 7 完成**（④ `src/pi/shell.ts` + 命令 `Pi: Set Shell Path` + 自测 **T16**（advisory）
++ A24/A25/A26（host-check **383**）；`check:gate` **18 项（14 gating + 4 advisory）**；README 中英收敛 shellPath 指引）。
+下一步：步骤 8（追加①②宿主侧：协议三消息 + `DialogHost` + `uiContext` 三件接卡片）。
 
 **计划与评审**（细节全在 `docs/S9-plan.md`）：§0 有 **46 条**带证据的事实（F1–F46）+ 两个可重跑探针
 （`scripts/probes/s9-package-probe.mjs`、`scripts/probes/s9-reload-probe.mjs`）；§4 的 Q1–Q17 是决策与默认值。
@@ -50,15 +50,15 @@
 | 命令 | 现在 |
 | --- | --- |
 | `npm run typecheck`（2 套 tsconfig） | ✅ |
-| `npm run self-test` | **9/9**（其中 host-check **368**、webview-dom 91、render 128、protocol 112、settings 16/16） |
+| `npm run self-test` | **9/9**（其中 host-check **383**、webview-dom 91、render 128、protocol 112、settings 16/16、manifest 6/6） |
 | `npm run check:protocol` | 112 |
 | `npm run check:render` | **128** |
 | `node scripts/tool-text-check.mjs` | **91** |
 | `node scripts/webview-dom-check.mjs` | **91** |
-| `node scripts/host-check.mjs` | **368** |
+| `node scripts/host-check.mjs` | **383** |
 | `npm run check:controller`（真模型，**不进 CI**） | **110/110**（S8 加了 A15：`approvalMode:all` 下拒绝→副作用没发生→允许→真的执行；另含 S7 的 A7 与一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
-| `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **17 项（14 gating + T5c/T12/T13 advisory）GATE PASS**（本机 T12 也 PASS ⇒ 17 PASS / 0 FAIL / 0 SKIP；**T14（S8）与 T15（S9）不用模型**；T13：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[…]；PI_OFFLINE=未设`） |
-| `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **17 项（14 gating + T5c/T12/T13 advisory）GATE PASS**（0.1.8 时是 15 项；S8 加 T14、S9 加 T15 ⇒ **17 项**。上次 Windows W0 真宿主跑的是 15 项版：14 PASS / 0 FAIL / 1 SKIP = T12 —— 那台机器没有 `pi`） |
+| `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **18 项（14 gating + T5c/T12/T13/T16 advisory）GATE PASS**（本机 T12 也 PASS ⇒ 18 PASS / 0 FAIL / 0 SKIP；**T14（S8）/T15、T16（S9）不用模型**；T13：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[…]；PI_OFFLINE=未设`） |
+| `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **18 项（14 gating + T5c/T12/T13/T16 advisory）GATE PASS**（0.1.8 时是 15 项；S8 加 T14、S9 加 T15/T16 ⇒ **18 项**。上次 Windows W0 真宿主跑的是 15 项版：14 PASS / 0 FAIL / 1 SKIP = T12 —— 那台机器没有 `pi`；**下一次 W0 期望 18 项**） |
 | `npm run package` + `node scripts/check-vsix.mjs <vsix>` | **0.1.9：338 文件 / 5.76 MB**（门禁 30 MB；文件数自 0.1.7 起一直是 338）。两个 logo 候选已排除出包（它们暂时没人引用，见 S5-plan §11 的 6-2） |
 
 ## 2. 欠着的事（已知、刻意未做或暂时做不到）
@@ -90,8 +90,8 @@
 | 4 | 自测 T15（走 `runtime.newSession()`）+ A22（跨进程） | ✅ |
 | 5 | 文档：README 中英 / `pi-traps` / `PLAN.md` §6 | ✅ |
 | 6 | （追加③）manifest 移 `secondarySidebar` + A23 | ✅ |
-| 7 | （追加④）`src/pi/shell.ts` + `Pi: Set Shell Path` + T16 + A24/A25/A26 | ⏳ 下一个 |
-| 8 | （追加①②宿主侧）协议三消息 + `DialogHost` + `uiContext` 三件接卡片（A27/A28/A30/A32） | |
+| 7 | （追加④）`src/pi/shell.ts` + `Pi: Set Shell Path` + T16 + A24/A25/A26 | ✅ |
+| 8 | （追加①②宿主侧）协议三消息 + `DialogHost` + `uiContext` 三件接卡片（A27/A28/A30/A32） | ⏳ 下一个 |
 | 9 | （追加①②面板侧）webview 三卡片 + password 卡 + 面板入口 + 键盘 handler（A29/A31/A33–A35） | |
 | 10 | 文档收尾（README 面板位置 / shell 指引 / 面板内交互；`settings-check` 扩容） | |
 | 11 | 版本 0.1.13 + 打包 + Mac M1/M2 → 上传/核验 → Windows W0/W1（+W2）→ §12 回填 → 关阶段 | |

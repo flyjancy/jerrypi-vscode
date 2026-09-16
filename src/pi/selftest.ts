@@ -1,4 +1,4 @@
-// S1 可行性闸门：T1–T15 + GATE 判定（T5c、T12 与 T13 是 advisory，不参与判定）。
+// S1 可行性闸门：T1–T16 + GATE 判定（T5c、T12、T13 与 T16 是 advisory，不参与判定）。
 //
 // 输出契约（PLAN.md 第 6 节 S1）：
 //   flyjancy.jerrypi <扩展版本> selftest-v1 <平台> node=<版本>
@@ -39,6 +39,7 @@ import { createApprovals } from "./approval";
 import { createSessionHost, type SessionHost } from "./session";
 import { resolveSessionDir, sessionsRootOf } from "./sessions";
 import { installPackage, listPackages, removePackage, settingsPathOf } from "./packages";
+import { describeShellResolution, resolveCurrentShell } from "./shell";
 import { createSelfTestUIContext } from "./selftest-ui";
 
 export const SELFTEST_TAG = "selftest-v1";
@@ -104,6 +105,8 @@ const TIMEOUTS: Record<string, number> = {
   T14: 30_000,
   // T15（S9）：同上（装/列/卸 + 两次 newSession），不用模型
   T15: 30_000,
+  // T16（S9 追加④）：只读一次 settings.json + 调一次 getShellConfig
+  T16: 10_000,
 };
 
 class SelfTestFailure extends Error {
@@ -543,6 +546,9 @@ class SelfTestRun {
       // T15（S9，**gating**）：pi 包管理的往返（装/列/卸 + 新建会话真的看到包里的资源）。
       // **不用模型**（只建会话、不发 prompt），但真 pi + 真文件系统 + 临时 agentDir。
       await this.item("T15", () => this.testPackageRoundTrip());
+      // T16（S9 追加④，**advisory**）：报告“现在会解析到哪个 bash”。
+      // 自身不挡 GATE；但无 bash 的机器上 T5a/T5b（gating）本来就会红 —— 那正是 W2 要修的东西。
+      await this.item("T16", () => Promise.resolve(this.testShellPathReport()));
 
       // T13 也是 advisory（S6 §3.4 / A11）：代理身份**只报告不判定** ——
       // 但这些值只能说明"这一层有没有生效"，说明不了"用户的网络能不能通"（T4 已经在真宿主里直连成功）。
@@ -1167,6 +1173,21 @@ class SelfTestRun {
     } finally {
       await host.dispose().catch(() => undefined);
     }
+  }
+
+  /**
+   * T16（S9 追加④，**advisory**）：一行报告“现在会解析到哪个 bash”。
+   *
+   * 口径是**已保存用户配置（global）的解析结果**（Astra R2-B2）：临时 agentDir、
+   * 不读项目配置 ⇒ 它报的就是 `Pi: Set Shell Path` 写进去的那份。
+   */
+  private testShellPathReport(): string {
+    const root = join(this.tempRoot, "shell");
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "cwd");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(cwd, { recursive: true });
+    return describeShellResolution(resolveCurrentShell({ pi: this.options.pi, cwd, agentDir }));
   }
 
   private async testBashBasic(host: SessionHost | undefined): Promise<string> {

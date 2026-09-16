@@ -46,7 +46,7 @@
 ### 环境要求
 
 - **VS Code ≥ 1.123**（该版本起扩展宿主为 Node 24；随包分发的 pi bundle 要求 Node ≥ 22.19，本项目只承诺实测过的 Node 24 档）。
-- **Windows 上需要 Git Bash**（`bash.exe`），或在 pi 的 `settings.json` 里配置 `shellPath`。
+- **Windows 上需要 Git Bash**（`bash.exe`）。pi 依次找：`settings.json` 的 `shellPath` → `%ProgramFiles%\Git\bin\bash.exe` → `%ProgramFiles(x86)%\…` → PATH 里的 `bash.exe`；**按用户安装**的 Git（`%LOCALAPPDATA%\Programs\Git`，且安装器的 PATH 选项默认只加 `cmd`、不加 `bin`）会落在这条瀑布之外 —— 这时跑 **`Pi: Set Shell Path`**：它列出探测到的候选（含上面那个按用户安装的位置）或让你手输，写进 pi 的 `settings.json`，**重载窗口（或新建会话）后生效**。手动编辑 `settings.json` 的 `shellPath` 仍然有效（命令只是让它不容易拼错）。
 - 一个可用的 pi 配置目录 `~/.pi/agent`：
   - `settings.json`：默认模型、工具、shell 等；
   - `models.json`：自定义 provider / 模型（可选）；
@@ -74,6 +74,7 @@
 - 默认模型、`shellPath`、工具白名单等请在 pi 的 `settings.json` 中修改，扩展提供 **`Pi: Open Settings File`** 直接打开它。
 - API key 存在 **VS Code SecretStorage**（`Pi: Set API Key`，候选来自 pi 自己认识的 provider、并标注每个 provider 当前的凭据来源），**不会写进 pi 的 `auth.json`**；删除用 **`Pi: Clear Stored API Keys`**（它只删本扩展存的那份，**不碰** `auth.json` / `models.json` —— 那两份是 pi 自己的文件）。
 - 模型目录默认**不联网刷新**；**`Pi: Refresh Model Catalog`** 是唯一的联网入口（点了才发请求，刷新 `<agentDir>/models-store.json`）。
+- bash 路径：**`Pi: Set Shell Path`** 写 pi 的 `settings.json` 的 `shellPath`（候选含按用户安装的 Git；也可以手输或清除）。**重载窗口（或新建会话）后生效**；写之前会先解析一次“现在的 `shellPath` 会落到哪个 bash”，失效时给出 pi 的原文。
 - 项目级配置的信任：打开面板时如果工作区里有 `.pi/` 或 `.agents/skills`，会弹一次原生对话框问"信任这个文件夹吗"。改判用 **`Pi: Project Trust…`**（信任并记住 / 信任父文件夹 / 仅本次 / 不信任 / 清除记录）。
 - 代理与证书默认交给 VS Code 自身的 `http.proxy` / `http.systemCertificates` 处理，无需额外配置。
 
@@ -130,7 +131,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 | `npm run check:protocol` | **112** 条聊天协议断言（纯函数，不需要网络） |
 | `npm run check:render` | **128** 条渲染与 XSS 断言（12 个载荷 + 图片策略 + CSP） |
 | `npm run check:controller` | **110** 条面板控制器断言；**需要凭据与网络**（没有凭据时打印 SKIPPED 并跳过；总数随模型是否发起工具调用略有浮动） |
-| `npm run check:gate` | 把 `Pi: Run Self-Test` 这条闸门（T1–T15）搬到终端里跑；**需要凭据与网络** |
+| `npm run check:gate` | 把 `Pi: Run Self-Test` 这条闸门（T1–T16）搬到终端里跑；**需要凭据与网络** |
 | `node scripts/host-check.mjs` | **368** 条宿主接线断言（vscode 桩 + 真命令） |
 | `node scripts/settings-check.mjs` | **16** 条设置声明与 README 一致性断言 |
 | `npm run check:manifest` | **6** 条 `contributes` 不变式（容器在 `secondarySidebar`、视图仍挂 `jerrypi`、命令贡献齐全） |
@@ -149,7 +150,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
    `git tag -a v<版本> -m "jerrypi <版本>；产物 <大小> 字节，SHA-256 <指纹>"`，再 `git push --tags`。
    tag 只在第 5 步核对通过后才打 —— 这样每个 tag 都对应一份**确实发布出去**的产物。
 
-装好扩展后，用 `Pi: Run Self-Test` 跑可行性闸门（**T1–T15** = 14 个 gating 项 + 3 个 advisory（T5c/T12/T13），结果写在 `jerrypi` Output 频道）：它会验证 pi 运行时能否在扩展宿主里真实加载、扩展生命周期、真实模型流式对话、子进程与中止、文件读写编辑、会话持久化与替换、图片 worker 往返，**以及会话目录是否落在 pi 的规范位置、`pi` 自己的 `list(cwd)` 能否看到它（T10/T11）**；T13 会报告一行代理身份（fetch 是不是原生、`http.proxy*`、代理环境变量的存在性），**只报告不判定**。**跑之前先用 `Pi: Set API Key` 配一把 provider key**（默认 DeepSeek），否则 T4/T6/T7/T9 会以 `E_NO_CREDENTIALS` 失败。（开发机上也可以 `npm run check:gate` 无头跑同一条闸门。）
+装好扩展后，用 `Pi: Run Self-Test` 跑可行性闸门（**T1–T16** = 14 个 gating 项 + 4 个 advisory（T5c/T12/T13/T16），结果写在 `jerrypi` Output 频道）：它会验证 pi 运行时能否在扩展宿主里真实加载、扩展生命周期、真实模型流式对话、子进程与中止、文件读写编辑、会话持久化与替换、图片 worker 往返，**以及会话目录是否落在 pi 的规范位置、`pi` 自己的 `list(cwd)` 能否看到它（T10/T11）**；T13 会报告一行代理身份（fetch 是不是原生、`http.proxy*`、代理环境变量的存在性）、T16 会报告一行 bash 路径（找不到时给出 `Pi: Set Shell Path` 的指引），两条都**只报告不判定**。**跑之前先用 `Pi: Set API Key` 配一把 provider key**（默认 DeepSeek），否则 T4/T6/T7/T9 会以 `E_NO_CREDENTIALS` 失败。（开发机上也可以 `npm run check:gate` 无头跑同一条闸门。）
 
 > `.vsix` 里还包含 `test-fixtures/ext-smoke/index.ts`：它是**打包验收用的最小 pi 扩展**（不是给用户使用的功能），目的是让「从解包产物复跑校验」成为可能。细节见 [`docs/S0-plan.md`](docs/S0-plan.md)。
 
@@ -261,7 +262,7 @@ To make that possible, the extension **ships pi's official pre-bundled SDK** ins
 ### Requirements
 
 - **VS Code ≥ 1.123** (extension host on Node 24; the bundled SDK requires Node ≥ 22.19 and this project only commits to the tested Node 24 line).
-- **Git Bash on Windows** (`bash.exe`), or a `shellPath` configured in pi's `settings.json`.
+- **Git Bash on Windows** (`bash.exe`). pi looks in this order: `shellPath` in `settings.json` → `%ProgramFiles%\Git\bin\bash.exe` → `%ProgramFiles(x86)%\…` → `bash.exe` on PATH; a **per-user** Git install (`%LOCALAPPDATA%\Programs\Git`, whose installer adds only `cmd` to PATH, not `bin`) falls outside that waterfall — run **`Pi: Set Shell Path`**: it lists detected candidates (including that per-user location) or lets you type a path, writes it into pi's `settings.json`, and it **takes effect after a window reload (or a new session)**. Editing `shellPath` by hand still works (the command just makes it hard to mistype).
 - A working pi config directory `~/.pi/agent` (`settings.json`, optional `models.json` / `auth.json`).
 - Network access from the extension host to your model API (proxy settings below if needed).
 
@@ -287,6 +288,7 @@ Use **`Pi: Open Settings File`** to edit pi's `settings.json` for default model,
 
 - API keys live in **VS Code SecretStorage** (`Pi: Set API Key` — the candidate list comes from pi itself, with each provider's current credential source shown) and are **never written into pi's `auth.json`**. Remove them with **`Pi: Clear Stored API Keys`**, which only deletes our copy and **does not touch** `auth.json` / `models.json` (those belong to pi).
 - The model catalog is **not refreshed over the network by itself**; **`Pi: Refresh Model Catalog`** is the only network entry point (it requests only when you click it, refreshing `<agentDir>/models-store.json`).
+- bash path: **`Pi: Set Shell Path`** writes `shellPath` in pi's `settings.json` (candidates include per-user Git installs; you can also type a path or clear it). It **takes effect after a window reload (or a new session)**; before writing it resolves what the current `shellPath` points at and shows pi's original error when it is stale.
 - Project-level trust: when the workspace contains `.pi/` or `.agents/skills`, opening the panel asks once via a native dialog. Change the answer with **`Pi: Project Trust…`** (remember / trust the parent folder / this session only / do not trust / clear).
 
 ### pi package management (install / list / remove)
@@ -342,7 +344,7 @@ Common scripts:
 | `npm run check:protocol` | 112 chat-protocol assertions (pure functions, no network) |
 | `npm run check:render` | 128 rendering and XSS assertions (12 payloads, image policy, CSP) |
 | `npm run check:controller` | 110 panel-controller assertions; **needs credentials and network** (prints SKIPPED without them; the total drifts slightly with whether the model calls tools) |
-| `npm run check:gate` | Runs the `Pi: Run Self-Test` gate (T1–T15) in a terminal; **needs credentials and network** |
+| `npm run check:gate` | Runs the `Pi: Run Self-Test` gate (T1–T16) in a terminal; **needs credentials and network** |
 | `node scripts/host-check.mjs` | 368 host-side wiring assertions (vscode stub + real commands) |
 | `node scripts/settings-check.mjs` | 16 settings-declaration vs README consistency assertions |
 | `npm run check:manifest` | 6 `contributes` invariants (container in `secondarySidebar`, view still under `jerrypi`, all command contributions present) |
@@ -361,7 +363,7 @@ Common scripts:
    `git tag -a v<version> -m "jerrypi <version>; artifact <size> bytes, SHA-256 <digest>"`, then `git push --tags`.
    Only tag after step 5 checks out, so that every tag corresponds to an artifact that was **actually published**.
 
-Once installed, run the feasibility gate with `Pi: Run Self-Test` (**T1–T15** = 14 gating items + 3 advisory (T5c/T12/T13), results go to the `jerrypi` output channel): it checks that the pi runtime really loads inside the extension host, extension lifecycle, a real streaming model call, subprocesses and aborts, file read/write/edit, session persistence and replacement, the image worker round-trip, **and that sessions land where pi expects them (`pi`'s own `list(cwd)` must see them — T10/T11)**; T13 reports one line about the proxy identity (whether `fetch` is native, `http.proxy*`, which proxy env vars exist) and **never judges**. **Configure a provider key with `Pi: Set API Key` first** (DeepSeek by default), otherwise T4/T6/T7/T9 fail with `E_NO_CREDENTIALS`. (On a dev machine you can also run the same gate headlessly with `npm run check:gate`.)
+Once installed, run the feasibility gate with `Pi: Run Self-Test` (**T1–T16** = 14 gating items + 4 advisory (T5c/T12/T13/T16), results go to the `jerrypi` output channel): it checks that the pi runtime really loads inside the extension host, extension lifecycle, a real streaming model call, subprocesses and aborts, file read/write/edit, session persistence and replacement, the image worker round-trip, **and that sessions land where pi expects them (`pi`'s own `list(cwd)` must see them — T10/T11)**; T13 reports one line about the proxy identity (whether `fetch` is native, `http.proxy*`, which proxy env vars exist) and T16 reports one line about the bash path (with a pointer to `Pi: Set Shell Path` when it is missing) — both **never judge**. **Configure a provider key with `Pi: Set API Key` first** (DeepSeek by default), otherwise T4/T6/T7/T9 fail with `E_NO_CREDENTIALS`. (On a dev machine you can also run the same gate headlessly with `npm run check:gate`.)
 
 > The `.vsix` also ships `test-fixtures/ext-smoke/index.ts`: a **minimal pi extension used for packaging acceptance** (not a user-facing feature), so that verification can be re-run against the unpacked artifact. See [`docs/S0-plan.md`](docs/S0-plan.md).
 

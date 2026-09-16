@@ -140,6 +140,11 @@
         "command": "jerrypi.removePackage",
         "title": "Remove Package",
         "category": "Pi"
+      },
+      {
+        "command": "jerrypi.setShellPath",
+        "title": "Set Shell Path",
+        "category": "Pi"
       }
     ],
     "viewsContainers": {

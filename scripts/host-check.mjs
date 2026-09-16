@@ -189,6 +189,7 @@ async function buildModules(tempDir) {
       `export { createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/trust"))};`,
       `export { createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/trustPrompt"))};`,
       `export { isNpmSource, translateSourceError, describePackage, settingsPathOf, listPackages, installPackage, removePackage } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/packages"))};`,
+      `export { shellCandidates, pathBashCandidates, resolveCurrentShell, setShellPathWrite, shellSettingsPathOf, describeShellResolution } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/shell"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -206,7 +207,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES, createSessionHost, SessionHostController, createSelfTestUIContext, createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS, createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM, isNpmSource, translateSourceError, describePackage, settingsPathOf, listPackages, installPackage, removePackage } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES, createSessionHost, SessionHostController, createSelfTestUIContext, createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS, createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM, isNpmSource, translateSourceError, describePackage, settingsPathOf, listPackages, installPackage, removePackage, shellCandidates, pathBashCandidates, resolveCurrentShell, setShellPathWrite, shellSettingsPathOf, describeShellResolution } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 const vscodeStub = await import(pathToFileURL(STUB_PATH).href);
@@ -3383,6 +3384,141 @@ check(
         JSON.stringify(afterRemove.tools) === JSON.stringify([]),
       JSON.stringify({ removed, listedAfterRemove }),
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// ------------------------------------- S9 第 7 步：④ shell 路径入口（A24/A25/A26）
+//
+// A24 是**纯函数**（注入 env/exists/platform，所以能在 Mac 上验 Windows 形态的候选）；
+// A25/A26 用真 pi + 临时 agentDir（不碰 `~/.pi/agent`）。
+{
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "s9-shell-"));
+  const agentDir = path.join(root, "agent");
+  const cwd = path.join(root, "ws");
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(cwd, { recursive: true });
+  const piModule = await loadPi(REPO_ROOT);
+  const deps = { pi: piModule, cwd, agentDir };
+  const settingsPath = shellSettingsPathOf(deps);
+  const readSettings = () => (fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, "utf8")) : {});
+  try {
+    // ---- A24：候选（纯函数）
+    {
+      const env = {
+        ProgramFiles: "C:\\PF",
+        "ProgramFiles(x86)": "C:\\PF86",
+        LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local",
+        USERPROFILE: "C:\\Users\\me",
+      };
+      const all = [
+        "C:\\tools\\bash.exe",
+        "C:\\PF\\Git\\bin\\bash.exe",
+        "C:\\PF86\\Git\\bin\\bash.exe",
+        "C:\\Users\\me\\AppData\\Local\\Programs\\Git\\bin\\bash.exe",
+        "C:\\Users\\me\\scoop\\apps\\git\\current\\bin\\bash.exe",
+        "C:\\Users\\me\\scoop\\shims\\bash.exe",
+      ];
+      const candidates = shellCandidates({ env, exists: (p) => all.includes(p), pathBash: [all[0]], platform: "win32" });
+      check(
+        "A24①：候选有序（where 最优先 → PF → PF86 → LOCALAPPDATA（F39 盲区）→ scoop 两处）",
+        JSON.stringify(candidates) === JSON.stringify(all),
+        JSON.stringify(candidates),
+      );
+      const filtered = shellCandidates({ env, exists: (p) => p === all[3], platform: "win32" });
+      check("A24②：不存在的候选被滤掉（只剩下存在的那个）", JSON.stringify(filtered) === JSON.stringify([all[3]]), JSON.stringify(filtered));
+      const other = shellCandidates({ env, exists: () => true, platform: "darwin" });
+      check("A24③：非 win32 不列 Windows 候选（Mac 上只有 where 结果，通常是空）", JSON.stringify(other) === JSON.stringify([]), JSON.stringify(other));
+      check("A24④：pathBashCandidates() 在非 win32 上是空数组（不 spawn）", JSON.stringify(pathBashCandidates()) === JSON.stringify([]), JSON.stringify(pathBashCandidates()));
+    }
+
+    // ---- A25：写穿 + 回读校验（对齐 A19）
+    {
+      const written = await setShellPathWrite({ ...deps, path: "/bin/sh" });
+      check(
+        "A25①：写穿成功 → 夹具回读 settings.json 顶层 shellPath 相等",
+        written.ok === true && readSettings().shellPath === "/bin/sh",
+        JSON.stringify({ written, settings: readSettings() }),
+      );
+      const cleared = await setShellPathWrite({ ...deps, path: undefined });
+      check(
+        "A25③：清除分支 → 回读该键消失（且同样走成功校验）",
+        cleared.ok === true && readSettings().shellPath === undefined,
+        JSON.stringify({ cleared, settings: readSettings() }),
+      );
+      const broken = "{invalid-json\n";
+      fs.writeFileSync(settingsPath, broken, "utf8");
+      const failed = await setShellPathWrite({ ...deps, path: "/bin/sh" });
+      check(
+        "A25②：坏 JSON → 生产返回失败 + 文件不改写 + 消息带 drainErrors 原文（删掉回读校验就红）",
+        failed.ok === false &&
+          fs.readFileSync(settingsPath, "utf8") === broken &&
+          /pi 报告的错误：global .*settings\.json：/.test(String(failed.message)),
+        JSON.stringify(failed),
+      );
+      const failedClear = await setShellPathWrite({ ...deps, path: undefined });
+      check("A25②b：坏 JSON 的清除分支同样报失败（不许说“已清除”）", failedClear.ok === false && fs.readFileSync(settingsPath, "utf8") === broken, JSON.stringify(failedClear));
+      const source = fs.readFileSync(path.join(REPO_ROOT, "src", "pi", "shell.ts"), "utf8");
+      check(
+        "A25④：shell.ts 里的 manager 显式 { projectTrusted: false }（不许沾默认信任）",
+        /projectTrusted:\s*false/.test(source) && !/projectTrusted:\s*true/.test(source),
+        "",
+      );
+      fs.rmSync(settingsPath, { force: true });
+    }
+
+    // ---- A26：已保存用户配置（global）的预检四态
+    {
+      const auto = piModule.getShellConfig().shell;
+      check("A26 前置：自动探测值 ≠ /bin/sh（否则①测不出区别）", auto !== "/bin/sh", String(auto));
+
+      fs.writeFileSync(settingsPath, JSON.stringify({ shellPath: "/bin/sh" }), "utf8");
+      const configured = resolveCurrentShell(deps);
+      check(
+        "A26①：配了 shellPath → 报的是配置值（不是自动探测值）",
+        configured.configured === "/bin/sh" && configured.path === "/bin/sh",
+        JSON.stringify({ configured, auto }),
+      );
+
+      fs.writeFileSync(settingsPath, JSON.stringify({ shellPath: "/nonexistent/s9-nope/bash" }), "utf8");
+      const broken = resolveCurrentShell(deps);
+      check(
+        "A26②：配置的路径已失效 → 报 pi 的原文 Custom shell path not found",
+        broken.error !== undefined && broken.error.includes("Custom shell path not found"),
+        JSON.stringify(broken),
+      );
+
+      fs.writeFileSync(settingsPath, JSON.stringify({}), "utf8");
+      const automatic = resolveCurrentShell(deps);
+      check(
+        "A26③：无配置 → 报自动探测值",
+        automatic.configured === undefined && automatic.path === auto,
+        JSON.stringify({ automatic, auto }),
+      );
+
+      // ④ 项目覆盖组合：全局 /bin/sh + 项目 .pi/settings.json 的失效路径。
+      // 预检的 manager 必须 {projectTrusted:false} —— 默认信任会把项目的失效路径报出来（实测）。
+      fs.writeFileSync(settingsPath, JSON.stringify({ shellPath: "/bin/sh" }), "utf8");
+      fs.mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+      fs.writeFileSync(path.join(cwd, ".pi", "settings.json"), JSON.stringify({ shellPath: "/nonexistent/project-shell" }), "utf8");
+      const withProject = resolveCurrentShell(deps);
+      check(
+        "A26④：项目级 shellPath 不许影响预检（信任与否都报全局值）",
+        withProject.configured === "/bin/sh" && withProject.path === "/bin/sh",
+        JSON.stringify(withProject),
+      );
+
+      // ⑤ T16 是 advisory（自身不判定）⇒ 把“找不到时的指引”抽成纯函数在这里钉住。
+      const missing = describeShellResolution({ error: "Custom shell path not found: /x" });
+      const ok = describeShellResolution({ configured: "/bin/sh", path: "/bin/sh" });
+      const detected = describeShellResolution({ path: auto });
+      check(
+        "A26⑤：T16 的文案（找不到时含 Pi: Set Shell Path 指引；找到时报路径与来源）",
+        missing.includes("Pi: Set Shell Path") && ok.includes("/bin/sh") && ok.includes("settings.json 的 shellPath") && detected.includes("pi 自动探测"),
+        JSON.stringify({ missing, ok, detected }),
+      );
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

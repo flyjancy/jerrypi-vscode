@@ -9,6 +9,7 @@ import * as vscode from "vscode";
 import { loadPi } from "./pi/loader";
 import type { PiModule } from "./pi/loader";
 import { describePackage, installPackage, listPackages, removePackage, settingsPathOf } from "./pi/packages";
+import { pathBashCandidates, resolveCurrentShell, setShellPathWrite, shellCandidates, shellSettingsPathOf } from "./pi/shell";
 import { clearStoredApiKeys, createApiKeyStore, DEFAULT_PROVIDER, getModelRuntime, injectApiKey, refreshModelCatalog } from "./pi/runtime";
 import { describeAuthSource } from "./shared/format";
 import { runSelfTest } from "./pi/selftest";
@@ -443,6 +444,71 @@ export function registerCommands(
         const message = error instanceof Error ? error.message : String(error);
         output.appendLine(`[packages] 移除包失败：${message}`);
         void vscode.window.showErrorMessage(`jerrypi: 移除包失败：${message}`);
+      }
+    }),
+
+    // S9 ④（追加范围）：给 Windows 上“bash 不在 pi 的探测瀑布里”的盲区一个入口（F39）。
+    //
+    // 原生 QuickPick（Q12/Q11）：这是命令面板发起的动作，焦点可能不在面板那边。
+    // “当前”显示的**不是**纯探测瀑布，而是“已保存用户配置（global）的解析结果”
+    // （Astra R2-B2 定的口径；见 `src/pi/shell.ts` 的 `resolveCurrentShell`）。
+    vscode.commands.registerCommand("jerrypi.setShellPath", async () => {
+      try {
+        const module = await pi();
+        const deps = { pi: module, cwd: workspaceCwd().cwd, agentDir: module.getAgentDir() };
+        const current = resolveCurrentShell(deps);
+        const currentLabel =
+          current.error !== undefined
+            ? `当前：找不到（${current.error}）`
+            : `当前：${current.path}${current.configured === undefined ? "（pi 自动探测）" : "（settings.json 里的 shellPath）"}`;
+        // 候选只用来给用户选；生效仍由 pi 自己的瀑布决定（我们**不复刻**它）。
+        const candidates = shellCandidates({ env: process.env, exists: existsSync, pathBash: pathBashCandidates() });
+        const MANUAL = "手动输入路径…";
+        const CLEAR = "清除 shellPath（恢复 pi 自动探测）";
+        const picked = await vscode.window.showQuickPick(
+          [
+            { label: currentLabel, pick: "current" as const },
+            ...candidates.map((path) => ({ label: path, description: "探测到的 bash（会写进 settings.json 的 shellPath）", pick: "candidate" as const })),
+            { label: MANUAL, pick: "manual" as const },
+            { label: CLEAR, pick: "clear" as const },
+          ],
+          { title: `jerrypi: bash 路径（写入 ${shellSettingsPathOf(deps)}）`, ignoreFocusOut: true },
+        );
+        if (picked === undefined || picked.pick === "current") return;
+
+        let path: string | undefined;
+        if (picked.pick === "manual") {
+          const typed = await vscode.window.showInputBox({
+            title: "jerrypi: bash 路径",
+            placeHolder: "例如 C:\\Program Files\\Git\\bin\\bash.exe",
+            ignoreFocusOut: true,
+          });
+          if (typed === undefined || typed.trim().length === 0) return;
+          path = typed.trim();
+        } else if (picked.pick === "clear") {
+          path = undefined;
+        } else {
+          path = picked.label;
+        }
+
+        const outcome = await setShellPathWrite({ ...deps, path });
+        if (!outcome.ok) {
+          output.appendLine(`[shell] 写 shellPath 失败：${outcome.message}`);
+          void vscode.window.showWarningMessage(
+            `jerrypi: 没有写入 shellPath —— ${String(outcome.message).split("\n")[0]}（细节见 Output）`,
+          );
+          return;
+        }
+        const what = path === undefined ? "已清除 shellPath（回到 pi 自动探测）" : `已写入 shellPath = ${path}`;
+        const settingsPath = shellSettingsPathOf(deps);
+        output.appendLine(`[shell] ${what}；配置：${settingsPath}`);
+        void vscode.window.showInformationMessage(
+          `jerrypi: ${what}（配置：${settingsPath}）—— 重载窗口（或新建会话）后生效`,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        output.appendLine(`[shell] 设置 bash 路径失败：${message}`);
+        void vscode.window.showErrorMessage(`jerrypi: 设置 bash 路径失败：${message}`);
       }
     }),
 

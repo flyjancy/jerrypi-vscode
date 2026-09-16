@@ -858,6 +858,31 @@ R14–R16）无错位；F40–F45、Q12–Q17 与本次改动无新增冲突；�
 - **没做（待真机）**：老 profile 的视图位置记忆是否真能把面板留在左侧（F46 未实测）—— 留给 M1/W1 用全新 profile 看干净默认，
   老 profile 只查 README 文案（Q16）。
 
+### 11.7 步骤 7（2026-09-17）：④ `Pi: Set Shell Path` + T16（A24/A25/A26）
+
+- **落盘**：`src/pi/shell.ts`（`shellCandidates` / `pathBashCandidates` / `resolveCurrentShell` /
+  `describeShellResolution` / `setShellPathWrite` / `shellSettingsPathOf`）+ 命令 `Pi: Set Shell Path`
+  （原生 QuickPick：首项“当前：…”、探测候选、“手动输入路径…”、“清除 shellPath…”）+
+  自测 **T16**（advisory，不用模型）+ host-check **14 条**（**368 → 383**）。
+  `check:gate` 从 17 项变 **18 项（14 gating + 4 advisory）**；README 中英把 Windows 的“三条出路”
+  收敛到“跑 `Pi: Set Shell Path`”（手改 JSON 仍作为埋底一句）。
+- **实施期发现**：候选必须用 **`path.win32.join`** 拼 —— 断言会在 Mac 上注入 `platform:"win32"` 验 Windows 形态，
+  用宿主的 `path.join` 会拼出 `C:\PF/Git/bin/bash.exe` 这种混合形态（第一条 A24 就是这么红的）。
+- **T16 的“能红”形态**：它是 **advisory、自身不判定**，所以把文案抽成纯函数 `describeShellResolution()`，
+  由 **A26⑤** 在 host-check 里钉住“找不到时必须含 `Pi: Set Shell Path` 指引”；实跑 `check:gate` 时
+  把 `resolveCurrentShell` 里读到的 `configured` 改成一条不存在的路径 ⇒ T16 那行变成
+  `找不到：Custom shell path not found: /nonexistent/forced-shell｜下一步：运行 Pi: Set Shell Path…`（已实跑）。
+- **能红验证（实跑）**：
+
+  | 断言 | 改坏方式 | 结果 |
+  | --- | --- | --- |
+  | A24①② | 删掉 `LOCALAPPDATA` 那一档 | 两条红（候选里没有按用户安装的 Git） |
+  | A25② / A25②b | 删掉生产回读校验（恒返回 ok） | 两条红（坏 JSON 下报成功） |
+  | A25④ / A26④ | `shell.ts` 里的 manager 改回默认信任 | 两条红（A26④ 报出项目的 `/nonexistent/project-shell`） |
+  | A26① | `getShellConfig` 改回无参调用 | 红（报自动探测值 `/bin/bash` 而配置的是 `/bin/sh`） |
+  | A26② | catch 里吞掉错误 | 红（不再报 `Custom shell path not found`） |
+  | A26⑤ | 文案里删掉“下一步：运行 Pi: Set Shell Path” | 红 |
+
 ## 12. 实施与验收结果
 
 （待实施）
