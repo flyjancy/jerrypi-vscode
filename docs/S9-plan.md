@@ -807,6 +807,28 @@ R14–R16）无错位；F40–F45、Q12–Q17 与本次改动无新增冲突；�
   这样 `removeAndPersist()` 真的返回 `false`，断言读的是**生产返回值**而不是把状态改坏。
   候选列表故意用 `picked.find(label === "../pkg-input")` 精确取本地条目，避开 npm 条目（删除 npm 源会 spawn `npm uninstall`）。
 
+### 11.4 步骤 4（2026-09-17）：自测 T15（gating，不用模型）+ 跨进程 A22
+
+- **落盘**：`src/pi/selftest.ts` 新增 **T15**（临时 agentDir/cwd + 临时包：`extensions/probe.ts` 注册 `probe_echo`、
+  一份改名后的真主题 `jerrypi-probe-theme`）+ `REQUIRED_ITEMS`/`TIMEOUTS`/头部注释同步；
+  host-check 新增 **A22**（子进程真的 import `host-bundle.mjs`）。host-check **366 → 368**；
+  `check:gate` 从 16 项变 **17 项（14 gating + 3 advisory）**，本机 `GATE PASS`。
+- 🔴 **实施期发现：计划里 T15 的红法不成立**。计划写“把 `session.ts` 里那份 `SettingsManager`
+  从 `createRuntime` 闭包里提到外面 → ⑤红”。实测：把 manager 提到外面（复用启动那份）之后 **T15 仍然 PASS** ——
+  因为 `DefaultResourceLoader.reload()` 内部**总是**先 `await this.settingsManager.reload()`
+  再从盘上重读（bundle 里三处 `settingsManager.reload()` 的第三处就是它）⇒ 陈旧的 manager 在加载资源前被刷新了。
+  **真实的红法**（已实跑）：把工厂里的 `agentDir` 换成 `pi.getAgentDir()`（默认目录）
+  ⇒ `T15 FAIL E_PKG_TOOL`、`GATE BLOCKED T15`。这恰好是 `session.ts` 文件头第 2 条警告的那个陷阱
+  （“工厂必须用传进来的 cwd/agentDir”），比原红法更贴生产。
+- **A22 的夹具形状改过一次**：“装”与“列/建会话”必须是**两个不同进程**：
+  第一版让子进程 install 完就地 list，于是“状态放进程内存”这种退化**也能绿**（同一进程）。
+  现在固定为 `install` / `list` / `remove` / `list` 四次 `spawnSync`。
+- **A22 的红法**：在 `session.ts` 的工厂里把 `agentDir` 换成 `agentDir + "/no-packages"`
+  ⇒ `A22①` 红（`listed` 仍是 `["../my-pkg"]` 而 `tools: []`）—— 这一条精准打在“会话侧有没有读对配置”，
+  而“文件根本没写上”那种退化会在 `A3/A4` 先红（同一次改坏里跑不到 A22），所以不另做演示。
+- T15 的步骤①（基线）必须在 install **之前**取；⑤⑦ 走 `host.runtime.newSession()`（面板里“新建会话”按的那条）；
+  整个 T15 在临时 agentDir 里，绝不用真实 `~/.pi/agent`。
+
 ## 12. 实施与验收结果
 
 （待实施）

@@ -1,4 +1,4 @@
-// S1 可行性闸门：T1–T13 + GATE 判定（T5c、T12 与 T13 是 advisory，不参与判定）。
+// S1 可行性闸门：T1–T15 + GATE 判定（T5c、T12 与 T13 是 advisory，不参与判定）。
 //
 // 输出契约（PLAN.md 第 6 节 S1）：
 //   flyjancy.jerrypi <扩展版本> selftest-v1 <平台> node=<版本>
@@ -9,12 +9,13 @@
 //
 // 判定规则：**除 T5c / T12 / T13 外，任一 required 项非 PASS 即 GATE BLOCKED；SKIP 不算通过。**
 // T5c（模型驱动的 bash 中止）、T12（终端那份 pi 的会话目录比对）与 T13（代理身份，S6）是 **advisory**。
+// T14（工具审批，S8）与 T15（包管理往返，S9）是 **gating 但不用模型**（受限机上也真跑）。
 //
 // 设计约束：
 //   - 不污染用户环境：全部临时目录在 os.tmpdir() 下，最后统一清理；
 //   - 每项独立超时；每项结束立刻写一行 Output（最坏情况约 16 分钟，中途静默无法定位）；
 //   - 模型相关项（T4/T6/T7/T9）各重试 1 次，并把 E_MODEL_* 与能力错误分开记录。
-import { accessSync, appendFileSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { accessSync, appendFileSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -37,6 +38,7 @@ import type { WriteRecord } from "./custom-tools";
 import { createApprovals } from "./approval";
 import { createSessionHost, type SessionHost } from "./session";
 import { resolveSessionDir, sessionsRootOf } from "./sessions";
+import { installPackage, listPackages, removePackage, settingsPathOf } from "./packages";
 import { createSelfTestUIContext } from "./selftest-ui";
 
 export const SELFTEST_TAG = "selftest-v1";
@@ -75,7 +77,7 @@ interface ItemResult {
 }
 
 /** 参与 GATE 判定的项（T5c 是 advisory）。 */
-const REQUIRED_ITEMS = ["T1", "T2", "T3", "T4", "T5a", "T5b", "T6", "T7", "T8", "T9", "T10", "T11", "T14"] as const;
+const REQUIRED_ITEMS = ["T1", "T2", "T3", "T4", "T5a", "T5b", "T6", "T7", "T8", "T9", "T10", "T11", "T14", "T15"] as const;
 
 const MIN_NODE = [24, 15, 0] as const;
 
@@ -100,6 +102,8 @@ const TIMEOUTS: Record<string, number> = {
   T9: 120_000,
   // T14（S8）：不用模型、不用网络，只是几次本地工具调用 —— 但要建会话，给足 30s
   T14: 30_000,
+  // T15（S9）：同上（装/列/卸 + 两次 newSession），不用模型
+  T15: 30_000,
 };
 
 class SelfTestFailure extends Error {
@@ -230,6 +234,38 @@ async function promptOrFail(
     fail("E_PROVIDER_ERROR", message);
   }
 }
+
+/**
+ * T15 用的那个包的扩展源码（写在临时包里，真的走 pi 的扩展加载链）。
+ *
+ * 依赖 `@earendil-works/pi-coding-agent` / `typebox` 都由 bundle 的 virtualModules 提供
+ * （与 `test-fixtures/ext-smoke/index.ts` 同一套）；工具名固定为 `probe_echo`，
+ * 前后断言都拿它去 `session.getActiveToolNames()` 里找。
+ */
+const PROBE_EXTENSION_SOURCE = `
+import { defineTool } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+
+export default function probe(pi) {
+  pi.registerTool(
+    defineTool({
+      name: "probe_echo",
+      label: "Probe Echo",
+      description: "S9 selftest probe tool",
+      parameters: Type.Object({ message: Type.Optional(Type.String()) }),
+      async execute(_toolCallId, params) {
+        return {
+          content: [{ type: "text", text: "probe: " + (params.message ?? "ok") }],
+          details: {},
+        };
+      },
+    }),
+  );
+}
+`;
+
+/** T15 的包主题名（不与 pi 内置的 `dark` 撞名）。 */
+const PROBE_THEME_NAME = "jerrypi-probe-theme";
 
 class SelfTestRun {
   private readonly results: ItemResult[] = [];
@@ -504,6 +540,9 @@ class SelfTestRun {
       // T14（S8，**gating**）：工具审批。**不用模型**（脚本化 `streamFunction` + 内存 key，
       // 见 S8-plan F8），所以它在受限机/无凭据机器上也真的会跑 —— 这正是把它放进自测的理由。
       await this.item("T14", () => this.testApprovalGate());
+      // T15（S9，**gating**）：pi 包管理的往返（装/列/卸 + 新建会话真的看到包里的资源）。
+      // **不用模型**（只建会话、不发 prompt），但真 pi + 真文件系统 + 临时 agentDir。
+      await this.item("T15", () => this.testPackageRoundTrip());
 
       // T13 也是 advisory（S6 §3.4 / A11）：代理身份**只报告不判定** ——
       // 但这些值只能说明"这一层有没有生效"，说明不了"用户的网络能不能通"（T4 已经在真宿主里直连成功）。
@@ -1000,6 +1039,131 @@ class SelfTestRun {
       if (existsSync(marker)) fail("E_APPROVAL_ABORT_SIDE_EFFECT", "中止之后 bash 仍然执行了");
 
       return `三档 + 拒绝/允许/中止都符合；问过 ${asked.length} 次（${[...new Set(asked)].join("/")}）`;
+    } finally {
+      await host.dispose().catch(() => undefined);
+    }
+  }
+
+  /**
+   * T15（S9）：pi 包管理的往返 —— 装 / 列 / 卸，以及“新建会话真的看到包里的资源”。
+   *
+   * 为什么能不用模型：只建会话、**不发 prompt**（与 T14 的差别就在这里：T14 要跑工具调用，
+   * 所以它需要脚本化模型流；T15 只看工具表/主题表）。但仍然是真 pi + 真文件系统 + 临时 agentDir。
+   *
+   * 三条纪律（S9-plan §3.4）：
+   *   ① 基线（“装之前没有”）必须在 install **之前**取 —— 装完之后任何新会话都已经带着那个包；
+   *   ⑤⑦ 必须走**生产路径** `host.runtime.newSession()`（面板里“新建会话”按的那条）；
+   *   整个 T15 在临时 agentDir 里（绝不用真实 `~/.pi/agent`，F28）。
+   */
+  private async testPackageRoundTrip(): Promise<string> {
+    const { pi } = this.options;
+    const root = join(this.tempRoot, "packages");
+    const agentDir = join(root, "agent");
+    const cwd = join(root, "cwd");
+    const pkgDir = join(root, "my-pkg");
+    mkdirSync(join(pkgDir, "extensions"), { recursive: true });
+    mkdirSync(join(pkgDir, "themes"), { recursive: true });
+    mkdirSync(join(cwd, ".pi"), { recursive: true }); // 先建出来，好断言“一个字节没动”
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(pkgDir, "extensions", "probe.ts"), PROBE_EXTENSION_SOURCE, "utf8");
+    // 主题：抄一份 pi 自带的有效主题、改个名字（避免与内置 `dark` 撞名）。
+    const theme = JSON.parse(
+      readFileSync(runtimePath(this.options.extensionPath, "dist", "modes", "interactive", "theme", "dark.json"), "utf8"),
+    ) as { name: string };
+    theme.name = PROBE_THEME_NAME;
+    writeFileSync(join(pkgDir, "themes", "probe-theme.json"), JSON.stringify(theme, null, 2), "utf8");
+
+    const bootstrap = await pi.ModelRuntime.create({
+      authPath: join(agentDir, "auth.json"),
+      modelsPath: join(agentDir, "models.json"),
+      modelsStorePath: join(agentDir, "models-store.json"),
+      allowModelNetwork: false,
+    });
+    const model = bootstrap.getModels()[0];
+    const keys: ApiKeyStore = {
+      listProviders: () => [model.provider],
+      getApiKey: async (providerId) => (providerId === model.provider ? "selftest-probe-key" : undefined),
+      saveApiKey: async () => {},
+      removeApiKey: async () => {},
+    };
+
+    const deps = { pi, cwd, agentDir };
+    const settingsFile = settingsPathOf(deps);
+    const projectSettingsFile = join(cwd, ".pi", "settings.json");
+
+    const host = await createSessionHost({
+      pi,
+      cwd,
+      agentDir,
+      sessionManager: pi.SessionManager.create(cwd, resolveSessionDir(cwd, join(root, "sessions"))),
+      keys,
+      uiContext: createSelfTestUIContext(this.sink),
+      mode: "rpc",
+      sink: this.sink,
+      model,
+    });
+
+    const probeTools = (): string[] => host.session.getActiveToolNames().filter((name) => name === "probe_echo");
+    const probeThemes = (): string[] =>
+      host.runtime.services.resourceLoader
+        .getThemes()
+        .themes.map((entry) => entry.name)
+        .filter((name) => name === PROBE_THEME_NAME);
+
+    try {
+      // ① 基线：装之前没有（必须在 ② 之前，否则恒绿 —— S9-plan §3.4 的评审 B2）
+      if (probeTools().length !== 0) {
+        fail("E_PKG_BASELINE_TOOL", `装之前工具表里就有 probe_echo：${host.session.getActiveToolNames().join(",")}`);
+      }
+      if (probeThemes().length !== 0) {
+        fail("E_PKG_BASELINE_THEME", `装之前主题表里就有 ${PROBE_THEME_NAME}`);
+      }
+      if (existsSync(projectSettingsFile)) {
+        fail("E_PKG_BASELINE_PROJECT", "夹具串味：工作区里已经有 .pi/settings.json");
+      }
+
+      // ② install → 写进临时 agentDir 的 settings.json（相对 agentDir 的形态）
+      const installed = await installPackage(deps, pkgDir);
+      if (!installed.ok) fail("E_PKG_INSTALL", installed.message);
+      if (installed.changed !== true) fail("E_PKG_INSTALL_CHANGED", "第一次装没有报 changed");
+      const raw = JSON.parse(readFileSync(settingsFile, "utf8")) as { packages?: unknown };
+      if (!Array.isArray(raw.packages) || raw.packages[0] !== "../my-pkg") {
+        fail("E_PKG_FORM", `settings.packages=${JSON.stringify(raw.packages)}（期望 ["../my-pkg"]）`);
+      }
+
+      // ③ 工作区里一个字节都不许有（C1：只写 user 作用域）
+      if (existsSync(projectSettingsFile)) fail("E_PKG_PROJECT_WRITE", `写进了工作区：${projectSettingsFile}`);
+
+      // ④ list() 命中那条
+      const listed = listPackages(deps);
+      if (listed.length !== 1 || listed[0].scope !== "user" || listed[0].installedPath === undefined) {
+        fail("E_PKG_LIST", `listConfiguredPackages()=${JSON.stringify(listed)}`);
+      }
+
+      // ⑤ **新建会话**（生产路径）→ 包里的工具与主题出现
+      const created = await host.runtime.newSession();
+      if (created.cancelled !== false) fail("E_PKG_CANCELLED", "newSession() 被取消");
+      if (probeTools().length !== 1) {
+        fail("E_PKG_TOOL", `新会话工具表=${host.session.getActiveToolNames().join(",")}｜诊断=${JSON.stringify(host.runtime.diagnostics)}`);
+      }
+      if (probeThemes().length !== 1) {
+        fail("E_PKG_THEME", `新会话主题表没有 ${PROBE_THEME_NAME}：${host.runtime.services.resourceLoader.getThemes().themes.map((t) => t.name).join(",")}`);
+      }
+
+      // ⑥ remove → true；再 remove → false
+      const removed = await removePackage(deps, pkgDir);
+      if (!removed.ok || removed.removed !== true) fail("E_PKG_REMOVE", JSON.stringify(removed));
+      const again = await removePackage(deps, pkgDir);
+      if (!again.ok || again.removed !== false) fail("E_PKG_REMOVE_TWICE", JSON.stringify(again));
+
+      // ⑦ 再新建一个会话 → 消失
+      await host.runtime.newSession();
+      if (probeTools().length !== 0) {
+        fail("E_PKG_TOOL_GONE", `移除后新会话仍有 probe_echo：${host.session.getActiveToolNames().join(",")}`);
+      }
+      if (probeThemes().length !== 0) fail("E_PKG_THEME_GONE", `移除后新会话仍有 ${PROBE_THEME_NAME}`);
+
+      return `装/列/卸往返 OK：settings=${settingsFile}；新会话看到 probe_echo 与 ${PROBE_THEME_NAME}，移除后再建会话都没有了`;
     } finally {
       await host.dispose().catch(() => undefined);
     }

@@ -17,6 +17,7 @@
  * 这里**不测**：CSP 是否被浏览器执行（桩不执行 CSP）、滚动、真实焦点。
  */
 import * as esbuild from "esbuild";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -3274,6 +3275,115 @@ check(
     setWorkspaceFolders([]);
     if (savedEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = savedEnv;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// ------------------------------------- S9 第 4 步：跨进程持久化（A22）
+//
+// 为什么要有它：M1 的人工验收里原本有一项“重启 VS Code 后再看”—— 能在无头里做的就不留给用户。
+// 子进程真的 import `host-bundle.mjs`（同一份 esbuild 产物）并走**生产** `packages.ts`。
+{
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "s9-xproc-"));
+  const agentDir = path.join(root, "agent");
+  const cwd = path.join(root, "ws");
+  const pkg = path.join(root, "my-pkg");
+  fs.mkdirSync(path.join(pkg, "extensions"), { recursive: true });
+  // 真的注册一个工具（与 T15 的探针同一个名字）：否则“跨进程后能看到包里的工具”永远绿不了。
+  fs.writeFileSync(
+    path.join(pkg, "extensions", "probe.ts"),
+    [
+      'import { defineTool } from "@earendil-works/pi-coding-agent";',
+      'import { Type } from "typebox";',
+      "export default function probe(pi) {",
+      "  pi.registerTool(defineTool({",
+      '    name: "probe_echo",',
+      '    label: "Probe Echo",',
+      '    description: "S9 cross-process probe",',
+      "    parameters: Type.Object({ message: Type.Optional(Type.String()) }),",
+      "    async execute(_id, params) {",
+      "      return { content: [{ type: \"text\", text: \"probe: \" + (params.message ?? \"ok\") }], details: {} };",
+      "    },",
+      "  }));",
+      "}",
+    ].join("\n"),
+    "utf8",
+  );
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(cwd, { recursive: true });
+  const childScript = path.join(root, "child.mjs");
+  fs.writeFileSync(
+    childScript,
+    [
+      "const bundle = await import(process.argv[2]);",
+      "const [mode, agentDir, cwd, pkg, repoRoot] = process.argv.slice(3);",
+      "const pi = await bundle.loadPi(repoRoot);",
+      "const deps = { pi, cwd, agentDir };",
+      "if (mode !== 'list') {",
+      "  const outcome = mode === 'install' ? await bundle.installPackage(deps, pkg) : await bundle.removePackage(deps, pkg);",
+      "  console.log(JSON.stringify({ outcome }));",
+      "}",
+      "const listed = bundle.listPackages(deps).map((entry) => entry.source);",
+      // 真建会话（生产装配路径）看包里的工具 —— 与 T15⑤ 同一判据，但跨进程
+      "const bootstrap = await pi.ModelRuntime.create({",
+      "  authPath: agentDir + '/auth.json', modelsPath: agentDir + '/models.json',",
+      "  modelsStorePath: agentDir + '/models-store.json', allowModelNetwork: false,",
+      "});",
+      "const model = bootstrap.getModels()[0];",
+      "const keys = { listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {}, removeApiKey: async () => {} };",
+      "const host = await bundle.createSessionHost({",
+      "  pi, cwd, agentDir,",
+      "  sessionManager: pi.SessionManager.create(cwd, cwd + '/sessions'),",
+      "  keys, uiContext: bundle.createSelfTestUIContext({ appendLine() {} }), mode: 'rpc', sink: { appendLine() {} },",
+      "});",
+      "try {",
+      "  const tools = host.session.getActiveToolNames().filter((name) => name === 'probe_echo');",
+      "  console.log(JSON.stringify({ listed, tools }));",
+      "} finally {",
+      "  await host.dispose().catch(() => undefined);",
+      "}",
+    ].join("\n"),
+    "utf8",
+  );
+  const runChild = (mode) => {
+    const result = spawnSync(process.execPath, [childScript, pathToFileURL(path.join(tempDir, "host-bundle.mjs")).href, mode, agentDir, cwd, pkg, REPO_ROOT], {
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    const lines = String(result.stdout ?? "").trim().split("\n").filter((line) => line.startsWith("{"));
+    const parsed = lines.map((line) => JSON.parse(line));
+    return { status: result.status, parsed, stderr: String(result.stderr ?? "").slice(0, 800) };
+  };
+  try {
+    // 关键：**装与列必须是在两个不同进程里**（同一进程里的内存状态会假绿）。
+    const installed = runChild("install");
+    const installOutcome = installed.parsed[0]?.outcome;
+    const listed = runChild("list");
+    const afterInstall = listed.parsed.at(-1) ?? {};
+    check(
+      "A22①：装完之后**另起一个**子进程能看到它并建会话看到包里的工具（跨进程持久化）",
+      installed.status === 0 &&
+        installOutcome?.ok === true &&
+        listed.status === 0 &&
+        JSON.stringify(afterInstall.listed) === JSON.stringify(["../my-pkg"]) &&
+        JSON.stringify(afterInstall.tools) === JSON.stringify(["probe_echo"]),
+      JSON.stringify({ installed, listed }),
+    );
+    const removed = runChild("remove");
+    const removeOutcome = removed.parsed[0]?.outcome;
+    const listedAfterRemove = runChild("list");
+    const afterRemove = listedAfterRemove.parsed.at(-1) ?? {};
+    check(
+      "A22②：卸完之后再起一个子进程 → 列表与工具都没了",
+      removed.status === 0 &&
+        removeOutcome?.ok === true &&
+        removeOutcome?.removed === true &&
+        listedAfterRemove.status === 0 &&
+        JSON.stringify(afterRemove.listed) === JSON.stringify([]) &&
+        JSON.stringify(afterRemove.tools) === JSON.stringify([]),
+      JSON.stringify({ removed, listedAfterRemove }),
+    );
+  } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
