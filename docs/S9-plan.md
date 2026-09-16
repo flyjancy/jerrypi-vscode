@@ -4,8 +4,8 @@
 > 上游承诺：`docs/PLAN.md` §6 的 S9 两条（`src/pi/packages.ts` 那行 + 验收那句）。
 > **2026-09-17 用户拍板追加**：①面板内对话框 ②API key 卡片 ③面板移右侧 ④shell 路径入口 四项全部并入本阶段
 > （§0.8 起的追加范围）。**Astra 第 1 轮（2026-09-17，§10.3）已审：8 条实质意见全部 ACCEPT 并落盘**；
-> 本轮修订新写的内容（§3.7 的按配置预检、§3.8 的 `dialog/close` 与就绪独立性、A32–A35）**未经第 2 轮复核**
-> （预算：≤2 轮设计 + 末轮转写，还剩 1 轮设计 + 转写）。
+> 本轮修订新写的内容（§3.7 的用户配置预检、§3.8 的 `dialog/close`/就绪独立性/晚到加载过滤、A32–A35）
+> **未经复核**（Astra 两轮设计已用完，末轮只剩转写核对 —— AGENTS §6 末条）。
 > 纪律：`AGENTS.md`。**本计划里的每条"pi 的行为"都带 `文件:行号`，每个"我们的观察"都带探针输出。**
 
 ## 0. 本计划已核实的事实（都带证据，不靠记忆）
@@ -122,7 +122,7 @@
 | C6 | 受限机上 **`npm:` 源**失败时给出**能懂的**提示（"这个源需要 npm"），而不是把 `spawn … ENOENT` 甩给用户；**git 源**（含要 npm 的 git 源）保留 pi 的原文（F37：缺 git 与缺 npm 在 spawn 错误里分不开，硬翻译会撒谎）；**不许**把失败说成成功，也不许留下写脏的 settings | A11/A12 |
 | C7 | 不碰用户数据、也不许**未信任的项目配置**影响我们：①`agentDir` **必须显式给**（不许回退 pi 默认目录）；②**写路径**显式 `projectTrusted: false`（否则项目的 `npmCommand` 决定我们 spawn 什么，F31）；③配置只写 **user 作用域**，**不碰工作区**（`{local:true}` 一律不用）；④npm/git 的包存储由 pi 在它自己的目录里管（不是"只动一个文件"）；⑤自测项自带临时 agentDir；⑥`Pi: Install Package` 在没打开过面板时也能用 | A2/A3/A13a/A13b/A14/A18 |
 | C8（③） | 新装用户的面板默认在**辅助边栏（右侧）**打开，与资源管理器并排；`Pi: Focus Chat` 仍可用 | A23 + M1/W1 肉眼 |
-| C9（④） | Windows 上 bash 不在 pi 探测瀑布内时，`Pi: Set Shell Path` 给出候选（**含按用户安装位置**）或手输路径，写进 pi 的 `settings.json`（`shellPath`）并明说生效方式；预检**按生效配置**（先读 `getShellPath()` 再传参 `getShellConfig`，F41）把"会抛"提前暴露；自测 T16 报告解析结果 | A24/A25/A26 |
+| C9（④） | Windows 上 bash 不在 pi 探测瀑布内时，`Pi: Set Shell Path` 给出候选（**含按用户安装位置**）或手输路径，写进 pi 的 `settings.json`（`shellPath`）并明说生效方式；**已保存的用户配置（global）预检**（`{projectTrusted:false}` 的 manager 读 `getShellPath()` 再传参 `getShellConfig`，F41；不受项目配置影响，Astra R2-B2）把"会抛"提前暴露；自测 T16 报告解析结果 | A24/A25/A26 |
 | C10（①②） | 聊天中的 select/confirm/input、**面板发起**的模型/思考等级/会话选择、API key 输入都停在**面板里**，不再弹窗口顶部；Esc/取消语义与原生版一致；模型列表**加载期间有 loading 指示**，失败/取消后焦点还给聊天输入框（F42 第 4 条扩到三条退出路径）；挂起的对话框**不依赖会话 ensure**（初始化期间销毁重开也能作答，F43）；面板不可见时通知喊话（对齐 S8）；**命令面板发起**的保留原生（Q11） | A27/A28/A30–A35 |
 | C11（②） | API key 只经 postMessage 进宿主（SecretStorage），**不进重放、不进 Output 日志、不进 webview 状态** | A29 |
 
@@ -332,7 +332,7 @@ T15：包管理的往返（临时 agentDir + 临时 cwd + 一个临时"包"）
   profile** 验干净默认位置。
 - 断言：A23（manifest 不变量）。
 
-### 3.7 ④ shell 路径入口（Astra 第 1 轮后已按 B2 修订；按配置预检未经第 2 轮复核）
+### 3.7 ④ shell 路径入口（Astra 两轮后已按 R1-B2/R2-B2 修订；本轮新写部分未经复核）
 
 - `src/pi/shell.ts`（纯逻辑，依赖注入，不认识 vscode）：
   - `shellCandidates({env, exists})` → 有序候选：`where bash.exe` 的结果（用户 PATH 的显式意愿，最优先）、
@@ -340,11 +340,16 @@ T15：包管理的往返（临时 agentDir + 临时 cwd + 一个临时"包"）
     （F39 盲区）、`~\scoop\apps\git\current\bin\bash.exe`、`~\scoop\shims\bash.exe`（shim 可执行，
     `getBashShellConfig` 把它当普通 bash）；不存在的候选被滤掉。**不复刻 pi 的探测** —— 候选只用来给用户选，
     生效仍由 pi 自己的瀑布（`shellPath` 写进去之后）决定。
-  - `resolveCurrentShell({cwd, agentDir})` → **按生效配置**预检（Astra B2 修正）：新建只读 manager →
-    `getShellPath()` 有值 → `getShellConfig(该值)`（路径已失效则抛 `Custom shell path not found: …`，原文透出）；
-    无值 → `getShellConfig()`（纯自动探测）。**不许只调无参版本** —— 那验的是探测瀑布，不是"用户刚存的配置"
-    （F41 实测：无参不读 settings.json）。写穿成功后再调它，看到的**立即**是新值（对跑着的会话仍要重载窗口，
-    文案分开说："已写入，重载窗口（或新建会话）后生效"）。
+  - `resolveCurrentShell({cwd, agentDir})` → **已保存的用户配置（global）预检**（Astra R2-B2 定口径）：新建
+    **`{projectTrusted:false}`** 的只读 manager → `getShellPath()` 有值 → `getShellConfig(该值)`（路径已失效则抛
+    `Custom shell path not found: …`，原文透出）；无值 → `getShellConfig()`（纯自动探测）。**不许只调无参版本**
+    —— 那验的是探测瀑布，不是"用户刚存的配置"（F41 实测）；**也不许用默认信任的 manager** —— 实测全局
+    `/bin/sh`、项目 `/nonexistent/project-shell` 时：`projectTrusted:true` 读到**项目的失效路径**，`false`
+    读到全局值；而实际会话从 `projectTrusted ?? false` 起步再走信任裁决（`session.ts:88`）⇒ 默认 manager 会把
+    用户已拒绝的项目配置报出来。**corner case 明说**：项目已信任且项目级 `shellPath` 覆盖存在时，实际会话用
+    项目值，预检报的是 global 值 —— 预检口径就是"我们写入的那份（global）"，与 `setShellPathWrite` 同源
+    （F40：`setShellPath` 写 global）；不假装覆盖项目场景。写穿成功后再调它，看到的**立即**是新值（对跑着的
+    会话仍要重载窗口，文案分开说："已写入，重载窗口（或新建会话）后生效"）。
   - `setShellPathWrite({cwd, agentDir, path})` → `SettingsManager.create(cwd, agentDir, {projectTrusted:false})`
     （B1 纪律）+ `setShellPath` + **写后回读**（对齐 A19：坏 JSON / 没写上都不许报成功）。
 - 命令 **`Pi: Set Shell Path`**（原生 QuickPick，Q12）：首项显示"当前：`<resolveCurrentShell() 或找不到>`"，
@@ -356,21 +361,23 @@ T15：包管理的往返（临时 agentDir + 临时 cwd + 一个临时"包"）
   bash 缺失挡住"）⇒ 无 bash 的机器 GATE 本来就过不了，W2 的端到端修复才有意义。
 - README 已知限制收敛："装在其他路径"的三条出路收敛成"跑 `Pi: Set Shell Path`"（手动改 JSON 仍作为埋底写一句）。
 
-### 3.8 ①② 面板内对话框（Astra 第 1 轮后已按 B1/B3/S8 修订；新写的部分未经第 2 轮复核）
+### 3.8 ①② 面板内对话框（Astra 两轮后已按 R1-B1/B3/S8 + R2-B1/S1 修订；本轮新写部分未经复核）
 
 - **协议**（host→webview）：`{type:"dialog/open", dialogId, kind:"select"|"input"|"confirm"|"password",
   title, message?, items?:[{label, description?, detail?}], current?, placeholder?, loading?:boolean}`；
   （webview→host）：`{type:"dialog/answer", dialogId, value? | cancelled:true}`；**撤卡（Astra B3 补）**
-  （host→webview）：`{type:"dialog/close", dialogId, reason:"timeout"|"cancelled"|"replaced"|"load-failed"}`。
+  （host→webview）：`{type:"dialog/close", dialogId, reason:"answered"|"timeout"|"cancelled"|"replaced"|"load-failed"}`。
   协议版本 +1，`ready` 握手的版本不一致警告照旧（chatView.ts 的既有机制）。
   **重放**：pending 的 dialog 重发 `dialog/open`，但**不携带已输入的值**（password/input 一律清空，只恢复
   "有一个待答的框" —— 这是为了 A29 的泄漏面）。**同 `dialogId` 二次 `dialog/open` = 内容更新**（加载态 →
   有 items 的模型列表，见下面 modelPicker）。
-  **结算语义**（Astra B3 补齐，一张表）：answer（用户作答）/ cancel（Esc）/ signal（pi 侧 abort，取
-  fallback）/ timeout（竞争胜出）/ replaced（会话切换）/ load-failed（列表加载失败）⇒ 宿主一律发
+  **结算语义**（Astra R1-B3 补齐 + R2-S1 闭合，一张表）：answer（用户作答，撤卡 reason=`answered`，
+  webview 可渲染"已选择"终态）/ cancel（Esc，`cancelled`）/ signal（pi 侧 abort → 取 fallback，映射
+  `cancelled`）/ timeout（竞争胜出，`timeout`）/ replaced（**会话切换**，`replaced`；宿主/控制器的 dispose
+  —— S8 三条取消路径里的那条，**不是**视图销毁 —— 映射 `cancelled`）/ load-failed（列表加载失败）⇒ 宿主一律发
   `dialog/close` 撤卡，之后**晚到的 `dialog/answer` 按 dialogId 查不到 pending 就丢弃**（记一行 Output debug，
   不许再 resolve —— 已结算的挂起重演就是 R1/R2 那类"结算改写"事故的镜像）；**视图销毁不结算**（Q10：销毁 ≠
-  拒绝，等重开重放）。
+  拒绝，只断开 post 通道，等重开重放；与会话终止的清理是两回事）。
 - **宿主 `DialogHost`**（`src/host/dialogHost.ts`）：把 `uiContext.ts` 的 `withDialog` 竞争骨架（signal /
   timeout / Cancel 的 Promise.race）原样保留，只把 `open()` 从"原生控件"换成"post `dialog/open` + 等
   `dialog/answer`"。**就绪/重放/回答路由独立于会话 ensure**（Astra B1，F43 的一般解）：DialogHost 自持对
@@ -386,14 +393,17 @@ T15：包管理的往返（临时 agentDir + 临时 cwd + 一个临时"包"）
 - **API key 卡片**：`kind:"password"`（输入框 `type=password`）；answer 后宿主走现有 `setApiKey` 的
   保存/校验链（SecretStorage + `injectApiKey` + 本地校验，`commands.ts:117-143`），卡片值不落任何日志/
   重放/webview 状态（A29）。
-- **modelPicker 的四条 S4 硬要求平移**（F42）：当前项 `✓` 前缀；**加载态**（Astra S8 补）：点芯片**立即**
-  `dialog/open {loading:true}`（卡片显示"加载模型列表…"，不是点击后无响应），`listModels()` 完成后**同
-  dialogId** 重发带 items 的 `dialog/open`，失败发 `dialog/close {reason:"load-failed"}`；焦点归还的**三条**
-  退出路径（选中 / Esc / 加载失败都把焦点还给聊天输入框）；fromPanel 分流。`modelPicker.ts` 文件头的旧论证
-  同步改写（记下"为什么改主意"：位置硬编码在顶部是产品缺陷，四条硬要求平移而非作废）。
+- **modelPicker 的四条 S4 硬要求平移**（F42）：当前项 `✓` 前缀；**加载态**（Astra S8 补 + R2-B1 补晚到过滤）：
+  点芯片**立即** `dialog/open {loading:true}`（卡片显示"加载模型列表…"，不是点击后无响应），`listModels()`
+  完成后**同 dialogId** 重发带 items 的 `dialog/open`，失败发 `dialog/close {reason:"load-failed"}`；**发送
+  加载结果（成功或失败）之前必须先查该 dialogId 仍在 pending** —— 已结算（用户已 Esc / 会话已替换）就**丢弃
+  结果**（不发 open、不发 close、不抢焦点；否则晚到的列表会把已撤的卡片"复活"成孤儿卡，用户选了也不生效）。
+  焦点归还的**三条**退出路径（选中 / Esc / 加载失败都把焦点还给聊天输入框）；fromPanel 分流。
+  `modelPicker.ts` 文件头的旧论证同步改写（记下"为什么改主意"：位置硬编码在顶部是产品缺陷，四条硬要求平移
+  而非作废）。
 - **webview 侧**：卡片渲染在消息流末尾（与审批卡同级）：列表卡（↑↓ + Enter + Esc）、输入卡/密码卡
-  （Enter 提交 / Esc 取消）、确认卡（两枚按钮）；`dialog/close` 到达即撤卡（渲染"已取消/已超时"后移除或
-  直接移除）；`aria-*` 标签 + Tab 序；键盘 handler 逻辑（↑↓/Enter/Esc/IME 守卫）由 A33 无头断言，原生激活
+  （Enter 提交 / Esc 取消）、确认卡（两枚按钮）；`dialog/close` 到达即撤卡（**按 reason 渲染终态**：
+  `answered` → "已选择"、`cancelled`/`timeout` → "已取消/已超时"；也可直接移除）；`aria-*` 标签 + Tab 序；键盘 handler 逻辑（↑↓/Enter/Esc/IME 守卫）由 A33 无头断言，原生激活
   与真焦点留给真机（F45 两层口径）。
 
 ## 4. 决策与默认值（Q1–Q17，等用户拍板）
@@ -436,9 +446,9 @@ T15：包管理的往返（临时 agentDir + 临时 cwd + 一个临时"包"）
 | R11（追加） | 面板内输入的键盘/输入法/无障碍退化（S4 当年选原生控件的理由） | 自绘卡片 | 只做三种最小卡片；`aria-*` + Tab 序；handler 逻辑由 A33 无头断言，M1⑥/W1④ 真机只盯原生激活/真焦点/真输入法（F45 两层口径） |
 | R12（追加） | API key 经 webview 的泄漏面变大 | 重放/日志/webview 状态带出 key | A29（重放与 Output 断言无标记子串）+ 卡片值不进 `webviewState`（§3.8） |
 | R13（追加） | shell 写穿与包管理写并发 | 两命令同时跑 | F40：`withLock` 文件级锁 + 读改写在锁内；A25 的回读校验兜底 |
-| R14（追加） | 对话卡片把 pi 的 `signal`/`timeout`/结算语义做丢（含：宿主已结算但卡片还在，晚到 answer 被误接） | 面板版绕过 `withDialog` 竞争骨架 / 撤卡消息缺失（Astra B3） | 骨架原样保留（§3.8）；**结算语义一张表**（answer/cancel/signal/timeout/replaced/load-failed → `dialog/close`；销毁不结算）；晚到 answer 按 dialogId 丢弃；A27（协议三态）+ A32⑤（真 DialogHost 的撤卡与晚到无效） | 
+| R14（追加） | 对话卡片把 pi 的 `signal`/`timeout`/结算语义做丢（含：宿主已结算但卡片还在，晚到 answer 被误接；**晚到的加载结果复活已撤卡片**） | 面板版绕过 `withDialog` 竞争骨架 / 撤卡消息缺失（Astra B3）/ 加载结果不查 pending（R2-B1） | 骨架原样保留（§3.8）；**结算语义一张表**（answer→`answered`/cancel/signal→`cancelled`/timeout/replaced/load-failed → `dialog/close`；销毁不结算；**视图销毁 ≠ 会话终止的清理**）；晚到 answer 按 dialogId 丢弃；加载结果发送前查 pending；A27（协议形状）+ A32⑤（真 DialogHost 的撤卡与晚到无效）+ A35④ | 
 | R15（追加） | 🔴 **初始化期间对话框自锁**：session_start 处理器挂起在 `ctx.ui.select` 上 → 销毁视图 → 重开 → ready 先等 `ensure()`（仍 pending）→ 卡片永远重放不出来 → 死锁 | ①②把对话框接卡片后新开的窗口（S8 审批不在 ensure 期内，没这个风险；F43 只豁免了信任模态） | 就绪/重放/回答路由独立于 ensure（§3.8，Astra B1）；A32① 的专门断言（挂起期销毁→重开→作答→ensure 完成） |
-| R16（追加） | 模型列表加载期间点击无响应（listModels 要网络，可能数秒） | 面板化后没有原生 Thenable 加载态（F42 第 2 条的平移没接住） | 立即 `dialog/open {loading:true}` + 同 id 重发（§3.8，Astra S8）；失败 `dialog/close {reason:"load-failed"}` + 焦点归还；A35 受控 pending 验证 |
+| R16（追加） | 模型列表加载期间点击无响应（listModels 要等 `ensure()` + 目录读取，可能数秒；`allowModelNetwork:false`，不走网络） | 面板化后没有原生 Thenable 加载态（F42 第 2 条的平移没接住） | 立即 `dialog/open {loading:true}` + 同 id 重发（§3.8，Astra S8）；失败 `dialog/close {reason:"load-failed"}` + 焦点归还；**晚到的加载结果先查 pending**（R2-B1）；A35 受控 pending 四态验证 |
 
 ## 6. 检查清单（自动断言，先红后绿）
 
@@ -473,23 +483,23 @@ T15：包管理的往返（临时 agentDir + 临时 cwd + 一个临时"包"）
 | A23（追加） | **manifest 不变量**（③）：容器贡献在 `secondarySidebar`、视图仍挂 `jerrypi` 容器、命令/激活贡献不变（并进 `check-vsix` 或新 `manifest-check`） | 把键改回 `activitybar` → A23 红 |
 | A24（追加） | `shellCandidates()`（④）：候选**有序**且含 `LOCALAPPDATA\Programs\Git\bin\bash.exe` 与 scoop 两处；`where` 结果最优先；不存在的候选被滤掉（桩 `exists`） | 删 LOCALAPPDATA 分支 / 改顺序 → A24 红 |
 | A25（追加） | **写穿、信任边界与失败不撒谎**（④，Astra S7 改形状，对齐 A19）：① 正常写：`setShellPathWrite` 返回 ok 后**夹具回读** settings.json 顶层 `shellPath` 相等；② **坏 JSON 夹具**：`<agentDir>/settings.json` 预置 `{invalid-json` → `setShellPathWrite` **不许报成功**（返回失败且带 `drainErrors()` 原文）、文件保持坏内容不被改写 —— **这条断言读的是生产的返回值**（删掉生产回读校验就红，而不是删夹具里的一步）；③ **清除分支**：`setShellPath(undefined)` 后回读该键消失且同样走失败校验；manager 必须带 `{projectTrusted:false}`（源码不变式） | 去掉生产回读校验 → ②红；去掉 `false` → 不变式那条红；清除分支不校验 → ③红 |
-| A26（追加） | **按生效配置预检**（④，Astra B2 扩）：① 配置了 `shellPath`（≠ 自动探测结果）的夹具 → `resolveCurrentShell` 报告的是**配置值**（不是探测值）；② 配置的路径已失效 → 报 `Custom shell path not found: …` 原文；③ 无配置 → 报自动探测值；**T16**（advisory）输出行格式同此三态，找不到时指引含 `Pi: Set Shell Path` | 实现退回无参 `getShellConfig()` → ①红（报的是探测值）；吞掉抛错 → ②红；删指引 → T16 那条红 |
+| A26（追加） | **已保存用户配置预检**（④，Astra R1-B2 扩 + R2-B2 定口径）：① 配置了 `shellPath`（≠ 自动探测结果）的夹具 → `resolveCurrentShell` 报告的是**配置值**（不是探测值）；② 配置的路径已失效 → 报 `Custom shell path not found: …` 原文；③ 无配置 → 报自动探测值；④ **项目覆盖组合**：全局 `/bin/sh` + 项目 `.pi/settings.json` 写 `shellPath:/nonexistent/…` → 信任与否**都报全局值**（预检的 manager 必须 `{projectTrusted:false}`，实测默认信任会把项目的失效路径报出来）；**T16**（advisory）输出行格式同此四态，找不到时指引含 `Pi: Set Shell Path` | 实现退回无参 `getShellConfig()` → ①红；吞掉抛错 → ②红；删指引 → T16 那条红；manager 改回默认信任 → ④红（报出 `/nonexistent/…`） |
 | A27（追加） | **协议三态**（①②，protocol-check 加例）：`dialog/open`（含 `loading` 与二次同 id 更新）/ `dialog/answer(value \| cancelled)` / `dialog/close(reason)` 的消息形状与版本号 | 删 `dialog/close` 或 `loading` 字段 → 形状断言红（**生命周期行为由 A32⑤ 在 host-check 验**，Astra B3：纯协议检查证不了真宿主） |
 | A28（追加） | **uiContext 不再弹原生**（①②）：`uiContext.select/input/confirm` 走卡片后，host-check 桩里 `showQuickPick`/`showInputBox`/**modal 型 `showWarningMessage`** 的调用计数 = 0 | 回退成原生调用 → A28 红 |
 | A29（追加） | **key 不泄漏**（②）：模拟 password 卡 answer=`sk-TESTMARKER` → 构造重放消息集 + Output 行，断言都不含 `sk-TESTMARKER` | 把 value 塞进重放/日志 → A29 红 |
 | A30（追加） | **销毁不取消**（①②）：`dialog/open` 挂起时 dispose 视图 → promise 仍 pending；重开（ready）后重放再次收到 `dialog/open` 且 password 卡不带旧值 | dispose 时 resolve(undefined) / 重放携带旧值 → A30 红 |
 | A31（追加） | **分流不变式**（Q11）：命令面板路径（`fromPanel:false`）仍走原生（桩计数 ≥1）—— A28 的对偶 | 把 `fromPanel:false` 也接卡片 → A31 红 |
-| A32（追加） | **对话框生命周期正向**（①②，host-check + 桩 webview，Astra B1/B4）：① **ensure 独立性**：夹具扩展的 session_start 处理器调 `ctx.ui.select` 且不 resolve → 销毁视图 → 重开 → **不等 ensure** 即收到 `dialog/open` 重放 → 回 answer → select resolve 且 `ensure()` 随后完成（死锁用超时探测）；② `uiContext.select/confirm/input` 正向：桩 webview 收到内容正确的 `dialog/open`（kind/items/current/placeholder）→ 回 answer → 调用方 resolve 到对应值（含 cancelled → fallback）；③ 模型芯片：`dialog/open` 带 `✓` 当前项 → answer → `setModel` 被调；④ password 正向：面板内 setApiKey → answer(`sk-TESTMARKER`) → 桩 SecretStorage.store 收到该值 + 卡片清空（泄漏面仍由 A29 守）；⑤ **撤卡与晚到无效**：timeout 竞争胜出 → `dialog/close` 发出 → 之后模拟晚到 answer → 调用方不再 resolve/状态不变 | ①把重放挪回 `await ensure()` 之后（即 chatView 现状）→ 死锁超时红；②路由丢 kind / dialogId 对不上 → 红；③删 setModel 调用 → 红；④删保存调用 → 红；⑤不撤卡 / 晚到仍被接 → 红 |
+| A32（追加） | **对话框生命周期正向**（①②，host-check + 桩 webview，Astra B1/B4）：① **ensure 独立性**：夹具扩展的 session_start 处理器调 `ctx.ui.select` 且不 resolve → 销毁视图 → 重开 → **不等 ensure** 即收到 `dialog/open` 重放 → 回 answer → select resolve 且 `ensure()` 随后完成（死锁用超时探测；**夹具必须走真实初始化与真 `ctx.ui.select` 待答链**，不许用独立永久 pending 的 gate 代替；清理带超时 —— 红法不许是测试进程挂死，R2-N1）；② `uiContext.select/confirm/input` 正向：桩 webview 收到内容正确的 `dialog/open`（kind/items/current/placeholder）→ 回 answer → 调用方 resolve 到对应值（含 cancelled → fallback）；③ 模型芯片：`dialog/open` 带 `✓` 当前项 → answer → `setModel` 被调；④ password 正向：面板内 setApiKey → answer(`sk-TESTMARKER`) → 桩 SecretStorage.store 收到该值（输入框清空是 webview 行为，归 A34；泄漏面由 A29 守）；⑤ **撤卡与晚到无效**（oracle 写实，R2-S2）：timeout 竞争胜出 → `dialog/close` 发出 → **旧 dialogId 不在 pending 表**、晚到 answer **不产生副作用**（`setModel`/`SecretStorage.store` 未被调）且不再发 close/focus —— 不能只看"调用方不再 resolve"（Promise 天生忽略二次 resolve，那永远绿） | ①把重放挪回 `await ensure()` 之后（即 chatView 现状）→ 死锁超时红；②路由丢 kind / dialogId 对不上 → 红；③删 setModel 调用 → 红；④删保存调用 → 红；⑤删生产的晚答过滤（照单全收）→ **副作用那条红**（晚答被接住后 setModel/store 被调） |
 | A33（追加） | **键盘 handler 逻辑**（①②，dom-check 扩容，Astra S6）：列表卡 ↑↓ 移动高亮、Enter 选中、Esc 取消；输入卡 Enter 提交 / Esc 取消；**IME 守卫**：`isComposing=true` 的 Enter 不提交（仓库已有同款先例：输入框的发送守卫） | 删对应 handler / 删 isComposing 守卫 → 对应条红（**原生激活/真焦点/真输入法不在此列**，F45 两层口径） |
-| A34（追加） | **撤卡渲染**（①②，dom-check）：收到 `dialog/close` 后卡片移除（或渲染终态后移除），loading 态能渲染、同 id 二次 `dialog/open` 能更新内容 | webview 忽略 `dialog/close` / 不实现 loading → 红 |
-| A35（追加） | **加载与退出路径**（①②，host-check，Astra S8）：受控 pending 的 `listModels`（不 resolve）→ 卡片进入 loading（`dialog/open {loading:true}` 已发出）；resolve → 同 id 重发带 items；reject → `dialog/close {reason:"load-failed"}` + 焦点归还消息发出 | 删 loading 分支 → 第一态红；失败不撤卡 → 第三态红 |
+| A34（追加） | **撤卡渲染与输入清理**（①②，dom-check）：收到 `dialog/close` 后卡片移除（或按 reason 渲染终态后移除，`answered` ≠ "已取消"），loading 态能渲染、同 id 二次 `dialog/open` 能更新内容；**password 作答后输入框的值被清除、卡片撤除**（真 DOM，宿主桩验不了这个 —— R2-S3） | webview 忽略 `dialog/close` / 不实现 loading / 作答后输入值残留 → 对应条红 |
+| A35（追加） | **加载与退出路径**（①②，host-check，Astra S8 + R2-B1）：受控 pending 的 `listModels`（不 resolve）→ 卡片进入 loading（`dialog/open {loading:true}` 已发出）；resolve → 同 id 重发带 items；reject → `dialog/close {reason:"load-failed"}` + 焦点归还消息发出；④ **晚到结果丢弃**：先 Esc（结算、删 pending）→ 再 resolve/reject 那个受控 promise → **不再发任何 open/close/focus 消息**（否则孤儿卡复活） | 删 loading 分支 → 第一态红；失败不撤卡 → 第三态红；删"发送前查 pending"的有效性检查 → ④红（晚到 resolve 又发了 open） |
 
 以上 A1–A14、A16–A22 进 `host-check`（**无需凭据**；A22 用 `spawnSync` 起子进程复用同一份 esbuild 产物），
 A15 进 `Pi: Run Self-Test`（**gating**）。真命令部分沿用 S8 的做法：**真命令 + 桩 QuickPick/InputBox/OpenDialog**。
 追加范围：A23 是 manifest 检查（不进 host-check）；A24–A26 进 `host-check`；A27 进 `protocol-check`（只验消息形状，
 生命周期行为在 A32⑤）；A28–A32、A35 进 `host-check`（桩 webview 的收发计数与内容）；A33/A34 进 `webview-dom-check`。
 **A32（含①的 ensure 独立性）、A33、A34、A35 与 §3.7 的按配置预检、§3.8 的 `dialog/close` 是 Astra 第 1 轮之后新写的，
-未经第 2 轮复核前不得开写**（预算还剩 1 轮设计 + 末轮转写）。
+未经复核前不得开写**（Astra 两轮设计已用完，末轮只核转写）。
 
 ## 7. 人工验收（Mac，**2 个动作**）
 
@@ -631,8 +641,9 @@ A15 进 `Pi: Run Self-Test`（**gating**）。真命令部分沿用 S8 的做法
 
 ### 第 3 轮（2026-09-17，Astra ＝ codex/gpt-6-astra medium，本仓 `w60:pD` 面板；结论 `VERDICT: BLOCKING`，**5 B / 3 S / 2 N**）
 
-即用户拍板后开的**追加范围评审窗第 1 轮**（编号上排第 3 轮，预算上算 Astra 的第 1 轮，还剩 1 轮设计 + 末轮转写）。
-只审 `61ff02d`→`620bba6` 的新增范围（§0.8/§1 C8–C11/§3.6–§3.8/Q11–Q17/R10–R14/A23–A31）。它实测了
+即用户拍板后开的**追加范围评审窗第 1 轮**（编号上排第 3 轮，预算上算 Astra 的第 1 轮，当时还剩 1 轮设计 + 末轮转写）。
+只审 `41ff02d`→`620bba6` 的新增范围（§0.8/§1 C8–C11/§3.6–§3.8/Q11–Q17/R10–R14/A23–A31；基线提交号第 1 次笔误写成
+了不存在的 `61ff02d`，R2-N2 抓到后改正）。它实测了
 `getShellConfig` 三态、curl 了 GitHub 1.103/1.104 的 `viewsExtensionPoint.ts`、读了本仓的
 `chatView.ts`/`uiContext.ts`/`agent-session.js`/`webview-dom-check.mjs`，未动仓库。
 
@@ -653,9 +664,34 @@ A15 进 `Pi: Run Self-Test`（**gating**）。真命令部分沿用 S8 的做法
 
 > **本轮净效果**：计划新增了 4 条断言（A32–A35）与 1 条协议消息（`dialog/close`），但消掉了 1 个死锁窗口（R15）、
 > 1 个版本语义冲突（Q15 退回预发布）、1 个预检假阴性（B2）与 1 个假绿面（A25②/A27 的断言主语错位）。
-> **本轮修订新写的部分（A32–A35、§3.7 按配置预检、§3.8 的 dialog/close 与就绪独立性）未经第 2 轮复核**；
-> 第 2 轮（Astra，预算最后一轮设计）重点应打：A32① 的死锁探测法是否真能红、结算表与 S8 Q10 的边界是否自洽、
-> Q15 改回 0.1.13 后 §0/§11 与 PLAN 的引文是否全部对齐。
+> 本轮修订已送 Astra 第 2 轮（见 §10.4）。
+
+### 第 4 轮（2026-09-17，Astra 第 2 轮 ＝ codex/gpt-6-astra medium，本仓 `w60:pD` 面板；结论 `VERDICT: BLOCKING`，**2 B / 3 S / 2 N**）
+
+预算上算 Astra 的第 2 轮（也是**最后一轮设计评审**，末轮只剩转写）。只审 `620bba6`→`a5b41de` 的修订，
+重点按 §10.3 末尾留的三个问题。它用 SDK 探针复现了项目覆盖的读值差异、读了 `session.ts`/`controller.ts`/
+`settings-manager.js`，未动仓库。
+
+**三个重点的结论（它的原话口径）**：① A32① 死锁探测**能红**（设计链路成立；尚未实现，不能当作已实跑）；
+② 结算表与 S8 Q10：**销毁边界自洽，但整体不自洽**（正常回答缺 close reason、加载完成可能复活已撤卡片）；
+③ Q15 版本引用**对齐**（剩余 0.2.0 都是 S10/备选/历史说明）。
+
+**处置：5 条实质意见（2B+3S）全部 ACCEPT；2 条 NOTE 照录并全部落地。**
+
+| # | 意见（摘要） | 处置 | 我怎么处置的 |
+| --- | --- | --- | --- |
+| **B1** | 加载完成可能**重新打开已取消的卡片**：结算规则只拦晚到 answer，没拦晚到的**加载结果** —— loading → 用户 Esc（close、删 pending）→ 列表完成 → 再发 open ⇒ 孤儿卡，用户选了也不生效；晚到的 reject 还可能重复撤卡、抢回焦点；A35 的三个独立场景抓不到这个交叉 | ACCEPT | **§3.8 modelPicker 补晚到过滤**：发送加载结果（成功或失败）之前必须先查该 dialogId 仍在 pending，已结算则**丢弃结果**（不发 open、不发 close、不抢焦点）；R14/R16 同步；**A35 加第四态**（先 Esc 再 resolve/reject → 断言不再发任何 open/close/focus；红法 = 删"发送前查 pending"的有效性检查） |
+| **B2** | 新建只读 manager ≠ 读取实际生效配置：SDK 默认 `projectTrusted:true` 会把**项目级** shellPath 报出来，而实际会话从 `false` 起步再走信任裁决（`session.ts:88`）⇒ 用户拒绝项目配置后预检仍可能报一个实际不会用的失效路径；项目已信任且有覆盖时"写入 global 后立即看到新值"也不成立 | ACCEPT（已复核） | **自跑 SDK 探针复现**：全局 `/bin/sh` + 项目 `/nonexistent/project-shell` 时，`projectTrusted:true` 读到项目失效路径、`false` 读到全局值。**口径定为"已保存的用户配置（global）预检"**：manager 必须 `{projectTrusted:false}`（与写路径同源，F40：`setShellPath` 写 global）；corner case（项目已信任且项目有覆盖）明说"预检报 global 值，不假装覆盖项目场景"；C9 措辞同步；**A26 加第四态**（项目覆盖组合，信任与否都报全局值；红法 = manager 改回默认信任） |
+| S1 | 结算事件与 reason 不闭合：正常 answer 也要撤卡，但 reason 枚举没有"已答"，成功作答会被迫标 `cancelled`（而 webview 会渲染"已取消"）；signal 如何映射未写；view.dispose 与宿主/会话终止的清理要区分 | ACCEPT | **reason 补 `answered`**（正常作答撤卡，可渲染"已选择"终态）；**结算表补映射**：signal → `cancelled`；宿主/控制器的 dispose（S8 三条取消路径之一，**不是**视图销毁）→ `cancelled`；会话切换 → `replaced`；并把"视图销毁 = 只断开 post 通道"与"会话终止 = 清理 pending"写为两回事；R14 同步 |
+| S2 | A32⑤ 的 oracle 不实："调用方不再 resolve"拿 Promise 天生忽略二次 resolve 当证据，永远绿；"状态不变"没指定观察对象 | ACCEPT | **A32⑤ oracle 写实**：旧 dialogId 不在 pending 表；晚到 answer **不产生副作用**（`setModel`/`SecretStorage.store` 未被调）且不再发 close/focus；红法改为"删生产的晚答过滤 → 副作用那条红"（不再依赖 Promise 二次结算语义） |
+| S3 | "卡片清空"放错测试台：A32④ 的宿主桩验不了真密码框是否清空；收到 close 消息与 DOM 实际撤卡是两件事 | ACCEPT | **A32④ 去掉"卡片清空"**（只留保存链）；**A34 加"password 作答后输入值清除、节点撤除"**（真 DOM）与"按 reason 渲染终态（`answered` ≠ 已取消）"；两个测试台各有独立的红法 |
+| N1 | A32① 方向通过，附实施注意：夹具必须走**真实初始化与真 `ctx.ui.select` 待答链**（不许用独立永久 pending 的 gate 代替）；清理要带超时（红法不许是测试进程挂死） | 照录 + 落地 | **A32① 行文补进这两条纪律**（标 R2-N1） |
+| N2 | 版本对齐通过；另抓两处文字错：§10.3 基线写成了**不存在的 `61ff02d`**（应为 `41ff02d`）；R16 的"listModels 要网络"不准确（`controller.ts:672` 是 `ensure()` 后读 `getAvailable()`，且 `allowModelNetwork:false`） | 照录 + 落地 | 基线改正并**把这次笔误本身记进 §10.3**（防再犯）；R16 改为"要等 `ensure()` + 目录读取，可能数秒；`allowModelNetwork:false`，不走网络"（loading 的合理性不变） |
+
+> **本轮净效果**：没有新增断言编号，但把三个"能绿但不证明判据"的口子焊死（晚到加载过滤、A32⑤ 的副作用 oracle、
+> 预检的信任口径），并补齐了 `answered` 这个唯一缺失的结算 reason。
+> **第 2 轮之后新写的改动未经复核**（设计轮已用完）：留给末轮转写核对；核对通过后 Q1–Q17 摆给用户拍板。
+（原"第 2 轮重点应打"的三问 —— A32① 能否红、结算表自洽、Q15 引文对齐 —— 已在第 2 轮中逐一回答，见上。）
 
 ## 11. 实施期发现
 
@@ -669,5 +705,6 @@ A15 进 `Pi: Run Self-Test`（**gating**）。真命令部分沿用 S8 的做法
 
 见 §4 的 **Q1–Q17**（第 2 轮把 Q3 改成"不自动 reload"、加了 Q5b/Q9/Q10，并新增 B1 那条信任边界；
 **2026-09-17 追加 Q11–Q17**，对应 §0.8 起的追加范围）。
-**⚠️ Q15 的默认值在本轮评审后改了**（0.2.0 → **0.1.13**，Astra B5：0.2.0 是 S10 首个正式版的语义，
+**Astra 的两轮设计评审都已吸收**（§10.3/§10.4）；末轮只剩转写核对，核对通过后 Q1–Q17 摆给用户拍板。
+**⚠️ Q15 的默认值在评审中改过两次**（0.2.0 → **0.1.13**，Astra B5/R2-N2：0.2.0 是 S10 首个正式版的语义，
 S9 抢跳等于正式版跳过 Windows 预发布验证门槛）—— 用户拍板时请特别看这一条。
