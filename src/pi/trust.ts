@@ -43,6 +43,8 @@ export type DefaultProjectTrust = "ask" | "always" | "never";
  * 取窄接口是为了让断言能注入一个假的存储去验"裁决顺序"，而不是每次都写真实文件。
  */
 export interface TrustStoreLike {
+  /** 可选的"最近一条记录在哪"（真 `ProjectTrustStore` 有；桩可以不给 —— 反馈里就少一个路径）。 */
+  getEntry?(cwd: string): { path: string; decision: boolean } | null;
   get(cwd: string): boolean | null;
   set(cwd: string, decision: boolean | null): void;
   /** 一条写入里改多把钥匙（pi 的 `ProjectTrustStore.setMany`；"信任父文件夹"要用它保证原子）。 */
@@ -88,7 +90,11 @@ export function createTrustResolver(
     if (!options.hasRequiringResources(cwd)) {
       // 没有需要信任的资源 ⇒ 信任与否不影响任何事。不能"顺手问一下"：
       // 那会让每个干净的仓库都弹一次对话框。
-      memo.set(cwd, true);
+      //
+      // ⚠️ **但这一支绝不能进 memo**（回顾评审 codex 的 P1）："没有资源"不是一次**授权**，
+      // 只是一个**当时的事实**。缓存它的话，同一个窗口里先在一个空目录裁决过、之后目录里长出
+      // `.pi/settings.json`（git pull、别人塞文件、自己刚建），下一个会话就会**不问就用**项目配置。
+      // 每次重新问一遍 `hasRequiringResources` 的成本只是几次 `existsSync`。
       options.log.appendLine(`[trust] ${cwd}：工作区里没有 pi 的项目级资源（.pi/ 或 .agents/skills），按信任处理`);
       return true;
     }
@@ -206,7 +212,15 @@ export function applyTrustAction(action: TrustAction, options: ApplyTrustActionO
       const had = trustStore.get(cwd) !== null;
       trustStore.set(cwd, null);
       memo.delete(cwd);
-      log.appendLine(`[trust] ${cwd}：清除记录（原本${had ? "有" : "没有"}）`);
+      // ⚠️ 清除只删**这个目录**的键，而 `get(cwd)` 会**向上找祖先的记录** ⇒ 清完之后很可能
+      // 仍然"被信任"（回顾评审 codex 的 P2：原来那句"下次会重新问"在父目录有记录时是**假的**）。
+      // 我们**不**去删祖先（那是用户的数据，而且在别的目录上做的决定），但反馈必须说真话。
+      const inherited = trustStore.get(cwd);
+      const source = inherited === null ? undefined : trustStore.getEntry?.(cwd)?.path;
+      log.appendLine(`[trust] ${cwd}：清除记录（原本${had ? "有" : "没有"}）｜清完后 get(cwd)=${inherited === null ? "null" : String(inherited)}`);
+      if (inherited !== null) {
+        return `已清掉这个文件夹的记录；但上层目录${source === undefined ? "" : `（${source}）`}的记录仍然生效（当前：${inherited ? "信任" : "不信任"}）—— 仍然不会重新问。要恢复询问，请在那个目录上清除，或把 settings.json 的 defaultProjectTrust 设为 ask。`;
+      }
       return had ? "已清除这里的记录（下次会重新问）" : "这里本来就没有记录";
     }
   }

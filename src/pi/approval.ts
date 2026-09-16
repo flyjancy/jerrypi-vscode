@@ -146,6 +146,14 @@ export function createApprovals(options: ApprovalsOptions): Approvals {
   const records = new Map<string, ApprovalRecord>();
   /** 还没答的那些（值 = 收口用的 resolve）。 */
   const waiting = new Map<string, (outcome: ApprovalOutcome) => void>();
+  /**
+   * 挂在 `ctx.signal` 上的中止监听（拿住引用是为了**结算时摘掉**）。
+   *
+   * ⚠️ 不摘掉的话：用户先点「拒绝」、这一轮里再点「中止」时，abort 监听还会响第二次 ——
+   * 而 `settle` 原先无条件覆盖决定，`deny` 就被改写成 `cancelled`，卡片上那个"已拒绝"
+   * 标记（回放要用）随之消失。这是**回顾评审（codex）P2** 实测到的形态。
+   */
+  const watchers = new Map<string, { signal: AbortSignal; listener: () => void }>();
 
   /** 只数已决：`decided` 与 `waiting` 是同一批 key 的两个视图。 */
   const decidedCount = (): number => {
@@ -164,12 +172,27 @@ export function createApprovals(options: ApprovalsOptions): Approvals {
     }
   };
 
+  /**
+   * 统一收口：**第一次结算说了算**，并负责摘监听、叫醒 `waiting`、按上限淘汰。
+   *
+   * 三个"顺带做"的事都有判例（回顾评审 codex 的 P2/P3）：
+   *   - 已决的不能被覆盖（拒绝之后再中止，原决定要留着 —— 卡片上那个标记是给回放用的）；
+   *   - 监听必须摘（否则 `ctx.signal` 上挂着一堆只响一次却永不触发的闭包）；
+   *   - **淘汰也要走这条路**：取消同样是"已决"，而 abort 这条路径原先根本不淘汰
+   *     （连着中止 201 次 ⇒ 表里 201 条）。
+   */
   const settle = (toolCallId: string, outcome: ApprovalOutcome): void => {
     const record = records.get(toolCallId);
-    if (record !== undefined) record.decision = outcome;
+    if (record !== undefined && record.decision === undefined) record.decision = outcome;
+    const watcher = watchers.get(toolCallId);
+    if (watcher !== undefined) {
+      watcher.signal.removeEventListener("abort", watcher.listener);
+      watchers.delete(toolCallId);
+    }
     const resolve = waiting.get(toolCallId);
     waiting.delete(toolCallId);
     resolve?.(outcome);
+    pruneDecided();
   };
 
   return {
@@ -183,12 +206,15 @@ export function createApprovals(options: ApprovalsOptions): Approvals {
       records.set(request.toolCallId, { ...request });
       if (signal?.aborted === true) {
         settle(request.toolCallId, "cancelled");
-        pruneDecided();
         return Promise.resolve("cancelled");
       }
       const promise = new Promise<ApprovalOutcome>((resolve) => {
         waiting.set(request.toolCallId, resolve);
-        signal?.addEventListener("abort", () => settle(request.toolCallId, "cancelled"), { once: true });
+        if (signal !== undefined) {
+          const listener = (): void => settle(request.toolCallId, "cancelled");
+          watchers.set(request.toolCallId, { signal, listener });
+          signal.addEventListener("abort", listener, { once: true });
+        }
       });
       // 先登记 `waiting` 再叫宿主：宿主（或测试）在 `onPending` 里就能直接 `decide`。
       // 宿主抛错也必须收口 —— 否则 `waiting` 里留下一条永远没人答的（文件头第 1 条：
@@ -206,12 +232,16 @@ export function createApprovals(options: ApprovalsOptions): Approvals {
     decide(toolCallId, decision) {
       if (!waiting.has(toolCallId)) return false;
       settle(toolCallId, decision);
-      pruneDecided();
       return true;
     },
 
     reset() {
       for (const toolCallId of [...waiting.keys()]) settle(toolCallId, "cancelled");
+      // `settle` 会把监听摘掉；这里再兜一遍（万一有 watcher 没见过 waiting）
+      for (const [toolCallId, watcher] of watchers) {
+        watcher.signal.removeEventListener("abort", watcher.listener);
+        watchers.delete(toolCallId);
+      }
       records.clear();
     },
 

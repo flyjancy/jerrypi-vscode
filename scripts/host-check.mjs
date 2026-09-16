@@ -1682,6 +1682,38 @@ check(
     check("A6：已决记录超上限时按 FIFO 丢最旧的", approvals.size().decided === 5 && approvals.get("d0") === undefined && approvals.get("d7") !== undefined, JSON.stringify({ size: approvals.size(), d0: approvals.get("d0") === undefined }));
     check("A6：待答的那条没有被淘汰", JSON.stringify(approvals.fieldsOf("keep", true)) === '{"approval":"pending"}', JSON.stringify(approvals.fieldsOf("keep", true)));
 
+    // ⑥ **回顾评审（codex）P2**：答完之后 abort 监听必须失效 ——
+    //    "先拒绝、这一轮里再点中止"是很常见的顺序，而"已拒绝"是给回放用的标记（A6b②）。
+    {
+      const ctl2 = new AbortController();
+      const deniedThenAborted = approvals.ask({ toolCallId: "t5", toolName: "bash", title: "y", requestedAt: 6 }, ctl2.signal);
+      approvals.decide("t5", "deny");
+      await settled(deniedThenAborted, "t5");
+      ctl2.abort(); // 用户随后点了「中止」
+      check(
+        "A6⑥：拒绝之后再中止，原来的 deny 不许被改写成 cancelled（codex 回顾评审 P2）",
+        approvals.get("t5")?.decision === "deny" &&
+          JSON.stringify(approvals.fieldsOf("t5", false)) === '{"approval":"denied"}',
+        JSON.stringify({ decision: approvals.get("t5")?.decision, fields: approvals.fieldsOf("t5", false) }),
+      );
+    }
+
+    // ⑦ **回顾评审（codex）P3**：上限必须覆盖**取消**这条路径（它也是"已决"）
+    {
+      const capApprovals = createApprovals({ log: silentLog, maxDecided: 5 });
+      for (let i = 0; i < 12; i += 1) {
+        const ctl3 = new AbortController();
+        const p3 = capApprovals.ask({ toolCallId: `c${i}`, toolName: "bash", title: "c", requestedAt: 20 + i }, ctl3.signal);
+        ctl3.abort();
+        await settled(p3, `c${i}`);
+      }
+      check(
+        "A6⑦：连续中止也不能让已决记录无限增长（上限覆盖取消路径；codex 回顾评审 P3）",
+        capApprovals.size().decided <= 5,
+        JSON.stringify(capApprovals.size()),
+      );
+    }
+
     // reset：会话替换/卸载 → 全部收口 + 清空
     approvals.reset();
     check("A6：reset 之后 pending 清零、已决也清空", JSON.stringify(approvals.size()) === '{"pending":0,"decided":0}', JSON.stringify(approvals.size()));
@@ -2266,6 +2298,68 @@ check(
     }
   }
 
+  // ---- A10⑪：**无资源 → 之后长出资源** 的真 pi 端到端（回顾评审 codex 的 P1 的"用户可见后果"）
+  //
+  // 纯函数那一条（A11⑦）证明的是 resolver 的机制；这一条证明的是**后果**：
+  // 同一个 memo（= 同一个 VS Code 窗口）里，第二个会话必须**问**，而且项目配置不许生效。
+  {
+    const root = trustRoot();
+    const agentDir = path.join(root, "agent");
+    const cwd = path.join(root, "proj");   // ← 故意**先不建** .pi
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(cwd, { recursive: true });
+    const memo = new Map();
+    let asked = 0;
+    const makeResolver = () =>
+      createTrustResolver({
+        cwd,
+        trustStore: new piModule.ProjectTrustStore(agentDir),
+        hasRequiringResources: (dir) => piModule.hasTrustRequiringProjectResources(dir),
+        defaultProjectTrust: () => "ask",
+        ask: async () => {
+          asked += 1;
+          return { trusted: false, remember: false };  // 用户这次**不**信任
+        },
+        log: quiet,
+        memo,
+      });
+    const openSession = async () => {
+      const settingsManager = piModule.SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+      const services = await piModule.createAgentSessionServices({
+        cwd,
+        agentDir,
+        settingsManager,
+        // ⚠️ 键名是 **resourceLoaderReloadOptions**（不是 resourceLoaderOptions）——
+        // 写错的话钩子**一个都不装**，表现为"没问、也不信任"，很容易被当成"实现是对的"
+        resourceLoaderReloadOptions: { resolveProjectTrust: makeResolver() },
+      });
+      await services.resourceLoader.reload();
+      return settingsManager;
+    };
+    try {
+      const first = await openSession();
+      check("A10⑪：空目录的第一个会话不问（F14）", asked === 0 && first.isProjectTrusted() === true, JSON.stringify({ asked, trusted: first.isProjectTrusted() }));
+
+      // 之后目录里长出项目级资源（git pull / 别人塞文件 / 自己刚建）
+      fs.mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+      fs.writeFileSync(path.join(cwd, ".pi", "settings.json"), JSON.stringify({ defaultTools: ["read"] }), "utf8");
+
+      const second = await openSession();
+      check(
+        "A10⑪：长出 .pi/ 之后的第二个会话**必须问**（memo 不许把「无资源」当成授权）",
+        asked === 1,
+        JSON.stringify({ asked, memo: [...memo.entries()] }),
+      );
+      check(
+        "A10⑪：而且这次用户不信任 ⇒ 项目配置**不能**生效（真 pi 的 isProjectTrusted）",
+        second.isProjectTrusted() === false,
+        JSON.stringify({ trusted: second.isProjectTrusted() }),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
   // ---- A11：裁决顺序（memo → 没资源 → trust.json → defaultProjectTrust → 问）
   {
     const cwd = "/w/proj";
@@ -2344,6 +2438,49 @@ check(
         log: quiet,
       });
       check("A11⑥：询问失败 → 按不信任处理且不写文件（安全方向）", (await resolver({})) === false && store.writes.length === 0, JSON.stringify(store.writes));
+    }
+    // ⑦ **回顾评审（codex）P1**：**"没有资源"不是一次授权**，不许进 memo。
+    //    否则同一个窗口里先在一个空目录裁决过，之后目录里长出 `.pi/settings.json`
+    //    （git pull / 别人塞文件 / 自己刚建），下一个会话就会**不问就用**项目配置。
+    {
+      const store = fakeStore();
+      const memo = new Map();
+      let hasResources = false;
+      let asked = 0;
+      const makeResolver = () =>
+        createTrustResolver({
+          cwd, trustStore: store, hasRequiringResources: () => hasResources,
+          defaultProjectTrust: () => "ask",
+          ask: async () => { asked += 1; return { trusted: false, remember: false }; },
+          log: quiet, memo,
+        });
+      const first = await makeResolver()({});          // 空目录：不问、按信任
+      hasResources = true;                             // 之后长出资源
+      const second = await makeResolver()({});         // **同一个 memo**、新会话
+      check(
+        "A11⑦：无资源那次不进 memo —— 之后长出 .pi/ 必须重新问（codex 回顾评审 P1）",
+        first === true && asked === 1 && second === false,
+        JSON.stringify({ first, second, asked, memo: [...memo.entries()] }),
+      );
+    }
+    // ⑧ **回顾评审（codex）P2**：父目录已有裁决时，"清除本目录记录"的**反馈**必须说清
+    //    仍然受继承影响（`get(cwd)` 会查祖先，而清除只删 cwd 自己的键）。
+    {
+      const root = trustRoot();
+      const agentDir = path.join(root, "agent");
+      const parent = path.join(root, "parent");
+      const child = path.join(parent, "child");
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.mkdirSync(child, { recursive: true });
+      const store = new piModule.ProjectTrustStore(agentDir);
+      store.set(parent, true);
+      const message = applyTrustAction("clear", { cwd: child, trustStore: store, memo: new Map(), log: quiet });
+      check(
+        "A11⑧：父目录有记录时，清除的反馈不许说成「下次会重新问」（codex 回顾评审 P2）",
+        store.get(child) === true && !/下次会重新问/.test(message) && /上层|父|inherit/i.test(message),
+        JSON.stringify({ message, stillTrusted: store.get(child) }),
+      );
+      fs.rmSync(root, { recursive: true, force: true });
     }
   }
 

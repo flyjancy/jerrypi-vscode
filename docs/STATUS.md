@@ -19,6 +19,13 @@
 `settings+loader: []`（两步都不够）、`session-reload: ["pkg-two"]`（一步够，**F16 比原计划更强**）。
 **按用户要求暂不启动第 2 轮**；下一步：把 §4 的 Q1–Q8 摆给用户拍板（或等用户说"再送一轮"）。
 
+> **另：S8 的回顾补修（2026-09-15）** —— codex（`w60:pD`）对**已关闭的 S8** 做了一次回顾审，报 4 条，
+> 我逐条复现后全部为真并已修（`docs/S8-plan.md` §11.2 的 R1–R4）：①**"没有资源"被缓存成长期授权**
+> （之后目录里长出 `.pi/` 就静默信任，项目配置未经询问生效 —— 安全问题）；②拒绝被后续中止改写
+> （回放的"已拒绝"标记丢失）；③父目录有记录时"清除记录、下次重新问"是**假话**；④200 条上限没覆盖
+> **取消**路径（连续中止就无界增长）。修完 host-check **322 → 329**，四条都有能红断言；
+> **随 S9 的 0.1.13 一起发**（不需要新的人工动作）。
+
 > S8 收尾（已关闭）：Mac（M1/M2）与 Windows（W0 `GATE PASS` 15 PASS / 0 FAIL / 1 SKIP = T12，含 T14；W1 正常）都验过；发布 **0.1.12**（逐字节核验、tag `v0.1.12`）。
 
 | | |
@@ -34,12 +41,12 @@
 | 命令 | 现在 |
 | --- | --- |
 | `npm run typecheck`（2 套 tsconfig） | ✅ |
-| `npm run self-test` | **9/9**（其中 host-check **321**、webview-dom 91、render 128、protocol 112、settings 16/16） |
+| `npm run self-test` | **9/9**（其中 host-check **329**、webview-dom 91、render 128、protocol 112、settings 16/16） |
 | `npm run check:protocol` | 112 |
 | `npm run check:render` | **128** |
 | `node scripts/tool-text-check.mjs` | **91** |
 | `node scripts/webview-dom-check.mjs` | **91** |
-| `node scripts/host-check.mjs` | **321** |
+| `node scripts/host-check.mjs` | **329** |
 | `npm run check:controller`（真模型，**不进 CI**） | **110/110**（S8 加了 A15：`approvalMode:all` 下拒绝→副作用没发生→允许→真的执行；另含 S7 的 A7 与一条真 spawn `pi -c` 的 CLI 互通检查；总数随模型是否调工具浮动，见 S5-plan §11 的 1-5） |
 | `npm run check:gate`（无头跑 `Pi: Run Self-Test`，真模型，**不进 CI**） | **16 项（13 gating + T5c/T12/T13 advisory）GATE PASS**（本机 T12 也 PASS ⇒ 16 PASS / 0 FAIL / 0 SKIP；**T14 是 S8 新增的工具审批项，不用模型**；T13：`fetch=wrapped；http.proxySupport=(无头)；http.proxy=(未设)；代理环境变量存在=[…]；PI_OFFLINE=未设`） |
 | `Pi: Run Self-Test`（在 VS Code 里跑，**不进 CI**；无头等价物：`npm run check:gate`） | **16 项（13 gating + T5c/T12/T13 advisory）GATE PASS**（0.1.8 时是 15 项；**S8 加了 T14 之后是 16 项**。上次 Windows W0 真宿主跑的是 15 项版：14 PASS / 0 FAIL / 1 SKIP = T12 —— 那台机器没有 `pi`） |

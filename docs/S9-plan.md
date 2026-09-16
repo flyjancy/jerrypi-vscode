@@ -340,6 +340,7 @@ A16 与 A5/A9 的"真命令"部分沿用 S8 的做法：**真命令 + 桩 QuickP
 
 | 步 | 内容 | 断言 |
 | --- | --- | --- |
+| 0 | **（已完成，2026-09-15）S8 的回顾补修**：codex 对已关闭的 S8 报了 4 条（`docs/S8-plan.md` §11.2 的 R1–R4），全部复现、修好、各带能红断言 ⇒ host-check 322 → **329**。这四条**随本阶段的 0.1.13 一起发**（不需要新的人工动作），S9 的步骤从 1 开始 | 见 S8-plan §11.2 |
 | 1 | `src/pi/packages.ts`（纯函数 + 依赖注入）+ `translateSourceError` + `describePackage` | A1–A4、A8、A9、A11、A12 |
 | 2 | `SessionHost.reloadSession()`（`src/pi/session.ts`）+ **`controller.reloadSession()`** + **`PickerCommands` 加 `isBusy()` / `reloadSession()`**（`chatView` 转发，与 S8 的 `trustMemo()` 同一条路子）+ `extension.ts` 接线 | A6、A7、A14 |
 | 3 | 三条命令（+ `package.json` 的 `contributes.commands`、i18n 标题）+ 输入框/文件夹选择器 | A5、A10、A16 |
