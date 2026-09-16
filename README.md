@@ -59,7 +59,7 @@
 
 1. 在 VS Code 扩展面板搜索 **`jerrypi`**（发布者 `flyjancy`）；
 2. 开发期使用预发布通道：扩展详情页选择 **Install Pre-Release Version**；
-3. 安装后打开侧边栏的 Pi 图标即可开始对话。
+3. 安装后打开**辅助边栏（右侧）**的 Pi 图标即可开始对话（面板默认在右侧，与资源管理器并排；见下面「面板在哪个位置」）。
 
 ### 配置
 
@@ -93,9 +93,15 @@
 - 已经装过的源再装一次会走幂等分支，提示「已经在配置里了（未改动）」，**不是**失败。
 - 列表里看到的是**文件里的真相**（每次都新读 `<agentDir>/settings.json`），与终端 `pi` / 新建会话看到的一致。
 
+### 面板在哪个位置
+
+- **新装用户**：面板默认开在**辅助边栏（右侧）**，与资源管理器并排；`Pi: Focus Chat` 仍然可用（容器 id 没变）。
+- **从 0.1.12 及更早升级上来**：VS Code 会**记住**视图的旧位置，所以你的面板**可能还在左侧活动栏**（每个工作区的记忆是独立的）。想挪到右侧：**右键视图标题栏 → 「移至」→「辅助边栏」**（命令面板里也能搜到 "Move View"）。不需要重装扩展，也不影响任何功能。
+
+
 ### 使用
 
-1. 打开侧边栏 Pi 面板（命令 `Pi: Focus Chat`）；
+1. 打开 Pi 面板（命令 `Pi: Focus Chat`，默认在**右侧辅助边栏**）；
 2. 输入消息、按 `Enter` 发送；回复流式显示，结束后按 markdown 渲染；
 3. **回复过程中**面板不会禁用输入，可以继续打字，此时有三种选择：
    - `Enter` = **转向**：等当前这段输出结束、下一次调用模型之前，把新指令注入进去（**不会掐断正在生成的文字**）；
@@ -127,6 +133,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 | `npm run check:gate` | 把 `Pi: Run Self-Test` 这条闸门（T1–T15）搬到终端里跑；**需要凭据与网络** |
 | `node scripts/host-check.mjs` | **368** 条宿主接线断言（vscode 桩 + 真命令） |
 | `node scripts/settings-check.mjs` | **16** 条设置声明与 README 一致性断言 |
+| `npm run check:manifest` | **6** 条 `contributes` 不变式（容器在 `secondarySidebar`、视图仍挂 `jerrypi`、命令贡献齐全） |
 | `npm run package` | 构建 + 打包 `.vsix`；vsce 打包前会自动执行 `vscode:prepublish`（唯一构建入口） |
 | `npm run check-vsix -- jerrypi-0.1.8.vsix` | `.vsix` 体积门禁（< 30 MB）与必需文件校验 |
 | `npm run vscode:prepublish` | 等同于 `sync && build` |
@@ -264,7 +271,7 @@ To make that possible, the extension **ships pi's official pre-bundled SDK** ins
 
 1. Search **`jerrypi`** in the VS Code Extensions view (publisher `flyjancy`).
 2. During development, pick **Install Pre-Release Version** on the extension page.
-3. Open the Pi icon in the activity bar and start chatting.
+3. Open the Pi icon in the **secondary side bar (right)** and start chatting (the panel opens on the right by default, next to the Explorer — see "Where the panel lives" below).
 
 ### Configuration
 
@@ -298,9 +305,15 @@ Four commands, powered by pi's own package manager (they edit the **same config*
 - Installing a source that is already configured takes the idempotent branch and reports "already configured (unchanged)" — that is **not** a failure.
 - The list always shows **the truth from the file** (it re-reads `<agentDir>/settings.json` on every call), matching what the terminal `pi` and new sessions see.
 
+### Where the panel lives
+
+- **Fresh installs**: the panel opens in the **secondary side bar (right)** by default, next to the Explorer; `Pi: Focus Chat` still works (the container id is unchanged).
+- **Upgrading from 0.1.12 or earlier**: VS Code **remembers** the view's old position, so your panel **may still be in the left activity bar** (the memory is per workspace). To move it: **right-click the view's title bar → "Move To" → "Secondary Side Bar"** (also available from the Command Palette as "Move View"). No reinstall needed, and nothing stops working.
+
+
 ### Usage
 
-1. Open the Pi panel in the activity bar (command `Pi: Focus Chat`).
+1. Open the Pi panel (command `Pi: Focus Chat`; it lives in the **secondary side bar** on the right by default).
 2. Type a message and press `Enter`; the reply streams in and is rendered as markdown when it finishes.
 3. **While the agent is streaming** the input box stays enabled. You then have four options:
    - `Enter` = **steer**: wait for the current response to finish and inject the new instruction before the next model call (**it does not cut off the text being generated**);
@@ -332,6 +345,7 @@ Common scripts:
 | `npm run check:gate` | Runs the `Pi: Run Self-Test` gate (T1–T15) in a terminal; **needs credentials and network** |
 | `node scripts/host-check.mjs` | 368 host-side wiring assertions (vscode stub + real commands) |
 | `node scripts/settings-check.mjs` | 16 settings-declaration vs README consistency assertions |
+| `npm run check:manifest` | 6 `contributes` invariants (container in `secondarySidebar`, view still under `jerrypi`, all command contributions present) |
 | `npm run package` | Build + package the `.vsix`; vsce runs `vscode:prepublish` first (the single build entry point) |
 | `npm run check-vsix -- jerrypi-0.1.8.vsix` | `.vsix` size gate (< 30 MB) and required-file check |
 | `npm run vscode:prepublish` | Equivalent to `sync && build` |

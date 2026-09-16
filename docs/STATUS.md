@@ -11,8 +11,9 @@
 
 ## 1. 现在
 
-**进行中**：**S9 实施期 · 步骤 5 完成**（文档：README 中英新增包管理一节 + 三条已知限制，顺手改对过时计数；
-`pi-traps` 加 **28–36** 九条；`PLAN.md` §6 的 S9 加状态行）。下一步：步骤 6（追加③ manifest 移 `secondarySidebar` + A23）。
+**进行中**：**S9 实施期 · 步骤 6 完成**（③ 面板默认移右侧：`viewsContainers` → `secondarySidebar`；新增 `scripts/manifest-check.mjs`
+（6 条，接进 self-test 第 6 个用例）+ `npm run check:manifest`；README 中英加“面板在哪个位置”节）。
+下一步：步骤 7（追加④ `src/pi/shell.ts` + `Pi: Set Shell Path` + T16 + A24/A25/A26）。
 
 **计划与评审**（细节全在 `docs/S9-plan.md`）：§0 有 **46 条**带证据的事实（F1–F46）+ 两个可重跑探针
 （`scripts/probes/s9-package-probe.mjs`、`scripts/probes/s9-reload-probe.mjs`）；§4 的 Q1–Q17 是决策与默认值。
@@ -88,8 +89,8 @@
 | 3 | 四个 VS Code 命令 + `package.json`（A5/A6/A8–A10/A16/A17） | ✅ |
 | 4 | 自测 T15（走 `runtime.newSession()`）+ A22（跨进程） | ✅ |
 | 5 | 文档：README 中英 / `pi-traps` / `PLAN.md` §6 | ✅ |
-| 6 | （追加③）manifest 移 `secondarySidebar` + A23 | ⏳ 下一个 |
-| 7 | （追加④）`src/pi/shell.ts` + `Pi: Set Shell Path` + T16 + A24/A25/A26 | |
+| 6 | （追加③）manifest 移 `secondarySidebar` + A23 | ✅ |
+| 7 | （追加④）`src/pi/shell.ts` + `Pi: Set Shell Path` + T16 + A24/A25/A26 | ⏳ 下一个 |
 | 8 | （追加①②宿主侧）协议三消息 + `DialogHost` + `uiContext` 三件接卡片（A27/A28/A30/A32） | |
 | 9 | （追加①②面板侧）webview 三卡片 + password 卡 + 面板入口 + 键盘 handler（A29/A31/A33–A35） | |
 | 10 | 文档收尾（README 面板位置 / shell 指引 / 面板内交互；`settings-check` 扩容） | |

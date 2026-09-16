@@ -143,7 +143,7 @@
       }
     ],
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
           "id": "jerrypi",
           "title": "Pi",
@@ -169,6 +169,7 @@
     "check:gate": "node scripts/selftest-check.mjs",
     "check:render": "node scripts/render-xss-check.mjs",
     "check:settings": "node scripts/settings-check.mjs",
+    "check:manifest": "node scripts/manifest-check.mjs",
     "build": "node esbuild.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.webview.json",
     "compile": "npm run sync && npm run build",

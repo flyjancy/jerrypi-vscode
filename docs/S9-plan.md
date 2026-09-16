@@ -845,6 +845,19 @@ R14–R16）无错位；F40–F45、Q12–Q17 与本次改动无新增冲突；�
 - **未做（留给后线）**：面板位置（步骤 6）、`Pi: Set Shell Path`（步骤 7）、面板内对话框（步骤 8/9）的 README 段落 ——
   它们得跟着代码一起写，否则文档会先于实现描述行为。
 
+### 11.6 步骤 6（2026-09-17）：③ 面板默认移右侧（A23）
+
+- **落盘**：`package.json` 的 `viewsContainers.jerrypi` 从 `activitybar` 挪到 **`secondarySidebar`**（容器 id/图标不变）；
+  新增 `scripts/manifest-check.mjs`（**6 条**）+ `npm run check:manifest`，并接进 `npm run self-test` 的第 6 个用例
+  （`TOTAL` 仍为 9 —— 归入“纯函数/声明类检查”那一档）；README 中英各加一节“面板在哪个位置”
+  （新装默认右侧；老用户右键视图标题 → 移至 → 辅助边栏；位置是工作区级记忆）。
+- **A23 的 6 条**：① 容器在 `secondarySidebar`；② 旧位置（`activitybar`/`panel`）没有残留同名容器；
+  ③ 容器形状（id/title/icon）；④ 视图仍挂在 `jerrypi` 容器下（`jerrypi.chat` 且 `type:webview`）；
+  ⑤ 命令贡献 = 0.1.12 的 11 条 + S9 的 4 条；⑥ 每条都有 title 与 `Pi` category。
+- **能红验证（实跑）**：把键改回 `activitybar` → **A23①②③ 红**；删掉一条命令贡献 → **A23⑤ 红**。
+- **没做（待真机）**：老 profile 的视图位置记忆是否真能把面板留在左侧（F46 未实测）—— 留给 M1/W1 用全新 profile 看干净默认，
+  老 profile 只查 README 文案（Q16）。
+
 ## 12. 实施与验收结果
 
 （待实施）

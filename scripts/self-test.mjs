@@ -28,6 +28,7 @@ const TOOL_TEXT_CHECK = path.join(SCRIPT_DIR, "tool-text-check.mjs");
 const WEBVIEW_DOM_CHECK = path.join(SCRIPT_DIR, "webview-dom-check.mjs");
 const HOST_CHECK = path.join(SCRIPT_DIR, "host-check.mjs");
 const SETTINGS_CHECK = path.join(SCRIPT_DIR, "settings-check.mjs");
+const MANIFEST_CHECK = path.join(SCRIPT_DIR, "manifest-check.mjs");
 const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 
 const TOTAL = 9;
@@ -243,6 +244,7 @@ function testUnitChecks() {
     ["render", RENDER_CHECK],
     ["tool-text", TOOL_TEXT_CHECK],
     ["settings", SETTINGS_CHECK],
+    ["manifest", MANIFEST_CHECK],
   ]) {
     const result = spawnSync(process.execPath, [script], { cwd: REPO_ROOT, encoding: "utf8" });
     const output = `${result.stdout}${result.stderr}`.trim();
