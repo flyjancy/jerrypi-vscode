@@ -51,6 +51,8 @@ export interface PackageDescription {
   detail: string;
 }
 
+type SettingsManagerHandle = ReturnType<PiModule["SettingsManager"]["create"]>;
+
 /** `<agentDir>/settings.json` —— 文案里要说清"写去了哪个文件"（C2）。 */
 export function settingsPathOf(deps: PackageDeps): string {
   return join(deps.agentDir, "settings.json");
@@ -66,33 +68,51 @@ export function listPackages(deps: PackageDeps): ConfiguredPackage[] {
   }).listConfiguredPackages();
 }
 
-export async function installPackage(deps: PackageDeps, source: string): Promise<InstallOutcome> {
+export function installPackage(deps: PackageDeps, source: string): Promise<InstallOutcome> {
   requireAgentDir(deps);
-  const settingsManager = writeManagerFor(deps);
-  const manager = new deps.pi.DefaultPackageManager({ cwd: deps.cwd, agentDir: deps.agentDir, settingsManager });
-  // `changed` 的口径：**这次调用有没有改动配置**（F10：同一个源再装一次返回"没改动"）。
-  // 装之前先快照 —— pi 的 `packageSourcesMatch` 命中时不写，两端自然相等。
-  const before = JSON.stringify(settingsManager.getPackages());
-  try {
-    // `installAndPersist` 是"先 install 再写"：install 抛了就不写（F23 ⇒ A12 天然成立）。
-    await manager.installAndPersist(source);
-  } catch (error) {
-    return { ok: false, message: translateSourceError(error, source) };
-  }
-  return { ok: true, changed: before !== JSON.stringify(settingsManager.getPackages()), source };
+  return withPackageLock(async () => {
+    const settingsManager = writeManagerFor(deps);
+    const manager = new deps.pi.DefaultPackageManager({ cwd: deps.cwd, agentDir: deps.agentDir, settingsManager });
+    // `changed` 的口径：**这次调用有没有改动配置**（F10：同一个源再装一次返回"没改动"）。
+    const beforeInMemory = JSON.stringify(settingsManager.getPackages());
+    const beforeOnDisk = persistedSnapshot(deps);
+    try {
+      // `installAndPersist` 是"先 install 再写"：install 抛了就不写（F23 ⇒ A12 天然成立）。
+      await manager.installAndPersist(source);
+      // `enqueueWrite` 是**排队**的，`installAndPersist` 不等它 —— 不 flush 就读回读会假红。
+      await settingsManager.flush();
+    } catch (error) {
+      return { ok: false, message: translateSourceError(error, source) };
+    }
+    const changed = beforeInMemory !== JSON.stringify(settingsManager.getPackages());
+    // 写后回读校验（F32/R14 的反面）：`installAndPersist()` **正常返回 ≠ 落盘成功** ——
+    // settings.json 是坏 JSON 时它照样返回、内存里也有那条，但文件一个字节都没动。
+    // 判据用**全新** manager 读文件，不是看返回值。
+    if (changed && persistedSnapshot(deps) === beforeOnDisk) {
+      return { ok: false, message: notPersistedMessage(deps, settingsManager) };
+    }
+    return { ok: true, changed, source };
+  });
 }
 
-export async function removePackage(deps: PackageDeps, source: string): Promise<RemoveOutcome> {
+export function removePackage(deps: PackageDeps, source: string): Promise<RemoveOutcome> {
   requireAgentDir(deps);
-  const settingsManager = writeManagerFor(deps);
-  const manager = new deps.pi.DefaultPackageManager({ cwd: deps.cwd, agentDir: deps.agentDir, settingsManager });
-  try {
-    // `removed` 原样透出 pi 的返回值：`false` 就是"配置里没有匹配的条目"（F11 ⇒ C5 不许报成功）。
-    const removed = await manager.removeAndPersist(source);
-    return { ok: true, removed, source };
-  } catch (error) {
-    return { ok: false, message: translateSourceError(error, source) };
-  }
+  return withPackageLock(async () => {
+    const settingsManager = writeManagerFor(deps);
+    const manager = new deps.pi.DefaultPackageManager({ cwd: deps.cwd, agentDir: deps.agentDir, settingsManager });
+    const beforeOnDisk = persistedSnapshot(deps);
+    try {
+      // `removed` 原样透出 pi 的返回值：`false` 就是"配置里没有匹配的条目"（F11 ⇒ C5 不许报成功）。
+      const removed = await manager.removeAndPersist(source);
+      await settingsManager.flush();
+      if (removed && persistedSnapshot(deps) === beforeOnDisk) {
+        return { ok: false, message: notPersistedMessage(deps, settingsManager) };
+      }
+      return { ok: true, removed, source };
+    } catch (error) {
+      return { ok: false, message: translateSourceError(error, source) };
+    }
+  });
 }
 
 /**
@@ -135,13 +155,43 @@ export function describePackage(entry: ConfiguredPackage): PackageDescription {
 }
 
 /** 写路径专用：显式 `projectTrusted: false`（F31/R7）。**绝不复用读列表那份。** */
-function writeManagerFor(deps: PackageDeps) {
+function writeManagerFor(deps: PackageDeps): SettingsManagerHandle {
   return deps.pi.SettingsManager.create(deps.cwd, deps.agentDir, { projectTrusted: false });
 }
 
 /** 读列表专用（只读）：允许合并项目级配置，好把项目条目也列出来（C4）。 */
-function readManagerFor(deps: PackageDeps) {
+function readManagerFor(deps: PackageDeps): SettingsManagerHandle {
   return deps.pi.SettingsManager.create(deps.cwd, deps.agentDir, { projectTrusted: true });
+}
+
+/** 文件里的真相：**全新** manager（与写路径同信任口径）读出来的 `packages`。 */
+function persistedSnapshot(deps: PackageDeps): string {
+  return JSON.stringify(writeManagerFor(deps).getPackages());
+}
+
+function notPersistedMessage(deps: PackageDeps, settingsManager: SettingsManagerHandle): string {
+  return `${settingsPathOf(deps)} 没有真的被改写（pi 的调用正常返回了，但文件里的 packages 没变）。${describeStorageErrors(settingsManager)}`;
+}
+
+function describeStorageErrors(settingsManager: SettingsManagerHandle): string {
+  const errors = settingsManager.drainErrors();
+  if (errors.length === 0) {
+    return "pi 没有报告任何错误（可能是文件系统拒绝写入）。";
+  }
+  return `pi 报告的错误：${errors.map((entry) => `${entry.scope}${entry.path === undefined ? "" : ` ${entry.path}`}：${entry.error.message}`).join("；")}`;
+}
+
+let packageWriteQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * 同一模块内的写操作串行化（F33/R8）：两个命令同时"算数组 → 写文件"时，后写的会整份
+ * 覆盖先写的（各实例的 `packages` 在**内存里**算好），而 `SettingsManager` 的文件锁只保护
+ * "写入那一段"。**跨进程**（终端 pi、另一个窗口）不在覆盖范围 —— README/§12.4 明说。
+ */
+function withPackageLock<T>(task: () => Promise<T>): Promise<T> {
+  const run = packageWriteQueue.then(task, task);
+  packageWriteQueue = run.catch(() => undefined);
+  return run;
 }
 
 function requireAgentDir(deps: PackageDeps): void {

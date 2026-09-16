@@ -750,6 +750,32 @@ R14–R16）无错位；F40–F45、Q12–Q17 与本次改动无新增冲突；�
 
 （步骤 2 起继续往下记。）
 
+### 11.2 步骤 2（2026-09-17）：串行化 + 写后回读校验（A18/A19/A20/A13b）
+
+- **落盘**：`withPackageLock`（模块级 promise 链，包住 install/remove 的整个"算数组 → 写盘"段）、
+  `persistedSnapshot()`（**全新** manager 读文件）、`notPersistedMessage()`/`describeStorageErrors()`
+  （把 `drainErrors()` 原文写进失败消息）；host-check 再加 **8 条**（**349 → 357**）。
+- **实施期的一个坑（值得记）**：`SettingsManager.enqueueWrite()` 是**排队**的，
+  `installAndPersist()` **不等**那次写盘 —— 只 `await installAndPersist()` 就去读文件会假红。
+  所以写完先 `await settingsManager.flush()` 再回读（`flush()` 等的就是那条 `writeQueue`）。
+  这也解释了为什么 F32 的"坏 JSON 下文件没动"能稳定复现：`save()` 在 `globalSettingsLoadError`
+  非空时**根本不排队**（`settings-manager.js:355-366`），错误只在 `drainErrors()` 里。
+- **写后回读的判据**：拿"装之前 / 装之后"两次**全新** manager 的 `getPackages()` 比 ——
+  `changed === true` 但文件快照不变 ⇒ `ok:false` + `drainErrors()` 原文。比"逐字节比"稳
+  （pi 会 `JSON.stringify(…,null,2)` 重写整份，见 N2），也比"认源字符串"稳（落盘是相对 agentDir 的形态）。
+- **A18 的夹具设计**：全局 `npmCommand` 与项目 `npmCommand` 指到**两个不同**的不存在路径
+  （`/nonexistent/user-npm` vs `/nonexistent/evil`）—— 错误里出现哪个就证明了用的是哪份配置，
+  而且**不需要联网**（不能用真实的 `npm`，那会真的去装）。
+- **能红验证（实跑）**：
+
+  | 断言 | 改坏方式 | 结果 |
+  | --- | --- | --- |
+  | A19①③ | 删掉写后回读那一段 | 两条红（`ok:true` 而文件没写） |
+  | A20 | `withPackageLock` 改成直接 `task()` | 红（文件里只剩 `../pkg-b` —— 与 F33 实测一致） |
+  | A18 / A18② | 写 manager 改回默认信任 | 两条红（错误变成 `spawn /nonexistent/evil ENOENT`） |
+  | A13b① | 同上 | 红 |
+  | A13b② | 在 `installPackage` 里插一句 `void readManagerFor(deps)` | 红 |
+
 ## 12. 实施与验收结果
 
 （待实施）

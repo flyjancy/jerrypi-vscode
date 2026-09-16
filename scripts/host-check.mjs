@@ -3021,6 +3021,115 @@ check(
       fs.rmSync(root, { recursive: true, force: true });
     }
   }
+
+  // ---- A18：未信任的项目配置不许影响写路径（R7/B1）
+  //
+  // 全局 npmCommand 与项目 npmCommand 指到**两个不同**的不存在路径：
+  // 错误里出现哪个，就证明了用的是哪份配置（B1 的实测就是这么做的）。
+  {
+    const root = s9Root();
+    const agentDir = path.join(root, "agent");
+    const cwd = path.join(root, "ws");
+    fs.mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(path.join(cwd, ".pi", "settings.json"), JSON.stringify({ npmCommand: ["/nonexistent/evil"] }), "utf8");
+    fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ npmCommand: ["/nonexistent/user-npm"], packages: [] }), "utf8");
+    const deps = { pi: piModule, cwd, agentDir };
+    try {
+      const outcome = await installPackage(deps, "npm:whatever");
+      check(
+        "A18：未信任项目的 npmCommand 不许决定我们 spawn 什么（错误里不许出现 evil）",
+        outcome.ok === false && !outcome.message.includes("evil"),
+        JSON.stringify(outcome),
+      );
+      check(
+        "A18②：用的确实是全局那份 npmCommand（阳性证据：错误里出现 user-npm）",
+        outcome.ok === false && outcome.message.includes("user-npm"),
+        JSON.stringify(outcome),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // ---- A19：写后回读校验（F32：API 正常返回 ≠ 落盘成功）
+  {
+    const root = s9Root();
+    const agentDir = path.join(root, "agent");
+    const cwd = path.join(root, "ws");
+    const pkg = fs.realpathSync(makePackage(path.join(root, "my-pkg")));
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(cwd, { recursive: true });
+    const deps = { pi: piModule, cwd, agentDir };
+    const settingsPath = settingsPathOf(deps);
+    const broken = "{invalid-json\n";
+    fs.writeFileSync(settingsPath, broken, "utf8");
+    try {
+      const outcome = await installPackage(deps, pkg);
+      check(
+        "A19①：坏 JSON 时 install 必须 ok:false（pi 的 API 正常返回但文件没写）",
+        outcome.ok === false,
+        JSON.stringify(outcome),
+      );
+      check("A19②：坏内容不被改写（我们没「修」它、也没写脏）", fs.readFileSync(settingsPath, "utf8") === broken, fs.readFileSync(settingsPath, "utf8"));
+      check(
+        "A19③：消息里带 drainErrors() 的原文（scope + 路径 + 解析错误）",
+        outcome.ok === false && /pi 报告的错误：global .*settings\.json：/.test(outcome.message),
+        outcome.ok === false ? outcome.message : JSON.stringify(outcome),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // ---- A20：模块内并发不丢更新（F33/R8）
+  {
+    const root = s9Root();
+    const agentDir = path.join(root, "agent");
+    const cwd = path.join(root, "ws");
+    const pkgA = fs.realpathSync(makePackage(path.join(root, "pkg-a")));
+    const pkgB = fs.realpathSync(makePackage(path.join(root, "pkg-b")));
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(cwd, { recursive: true });
+    const deps = { pi: piModule, cwd, agentDir };
+    try {
+      const [a, b] = await Promise.all([installPackage(deps, pkgA), installPackage(deps, pkgB)]);
+      const packages = JSON.parse(fs.readFileSync(settingsPathOf(deps), "utf8")).packages;
+      check(
+        "A20：两个并发 install → 两个包都在文件里（F33 的丢更新）",
+        a.ok === true && b.ok === true && packages.length === 2 && packages.includes("../pkg-a") && packages.includes("../pkg-b"),
+        JSON.stringify({ a, b, packages }),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // ---- A13b：源码不变式（写路径的信任口径，R7）
+  {
+    const source = fs.readFileSync(path.join(REPO_ROOT, "src", "pi", "packages.ts"), "utf8");
+    const region = (start, end) => {
+      const at = source.indexOf(start);
+      return at < 0 ? "" : source.slice(at, source.indexOf(end, at + start.length));
+    };
+    const writeManager = region("function writeManagerFor(", "function readManagerFor(");
+    const writeRegion =
+      region("export function installPackage(", "export function removePackage(") +
+      region("export function removePackage(", "export function isNpmSource(");
+    check(
+      "A13b①：写路径的 manager 显式 { projectTrusted: false }（且不沾 true 那份）",
+      writeManager.includes("projectTrusted: false") && !writeManager.includes("projectTrusted: true"),
+      writeManager,
+    );
+    check(
+      "A13b②：写函数不碰读列表那份 manager、也不出现 projectTrusted:true",
+      source.includes("export function installPackage(") &&
+        source.includes("export function removePackage(") &&
+        writeRegion.includes("writeManagerFor(") &&
+        !/readManagerFor|projectTrusted:\s*true/.test(writeRegion),
+      writeRegion.slice(0, 200),
+    );
+  }
 }
 
 // ----------------------------------------------------------------- 汇总
