@@ -11,9 +11,12 @@
 
 ## 1. 现在
 
-**进行中**：**S9 实施期 · 步骤 9 完成**（①② 面板侧：webview 三卡片 + password 卡 + loading/撤卡渲染 + 键盘 handler；
-面板版模型/等级/会话/API-key 入口（命令面板仍原生）；夹具 `/smoke-ask`。
-host-check **418**、webview-dom **110**）。下一步：步骤 10（文档收尾：README 中英面板内交互说明 + `settings-check` 扩容）。
+**进行中**：**S9 实施期 · 步骤 11 准备完成，待人工验收**。编码十步全部落盘；版本已 bump 到 **0.1.13**，
+`jerrypi-0.1.13.vsix` 已打包并核过（**338 文件 / 6,068,334 字节**，SHA-256 `57fc7ad1…`；`check-vsix` OK；
+`unzip -l` 确认没有 `src/`、`scripts/`、`docs/`、`.pi/`、`AGENTS.md`）。自动门禁全绿（见下）。
+**下一步（需要用户）**：① 用这个 VSIX 做 **Mac M1/M2**（清单见 `docs/S9-plan.md` §7；夹具已备好 `~/Desktop/s9-pkg-demo/`）
+→ ② Marketplace 手动上传（勾预发布）→ ③ `compare-vsix` 核验 + tag → ④ Windows **W0/W1/W2**（§8）→ ⑤ §12 回填 + 关阶段。
+⚠️ **不要在 Mac 验收前上传**（本地就挂的包别发出去）。
 
 **计划与评审**（细节全在 `docs/S9-plan.md`）：§0 有 **46 条**带证据的事实（F1–F46）+ 两个可重跑探针
 （`scripts/probes/s9-package-probe.mjs`、`scripts/probes/s9-reload-probe.mjs`）；§4 的 Q1–Q17 是决策与默认值。
@@ -39,10 +42,10 @@ host-check **418**、webview-dom **110**）。下一步：步骤 10（文档收�
 
 | | |
 | --- | --- |
-| 阶段 | **S5、S6、S7、S8 均已关闭**；**S9 实施中**（编码十步已完成，见上；只剩步骤 11：版本/打包/人工验收） |
+| 阶段 | **S5、S6、S7、S8 均已关闭**；**S9 编码完成、待人工验收**（0.1.13 未上传；见上） |
 | 最新发布 | **0.1.12**（2026-09-15，预发布；S8 的全部内容；上一个 0.1.11 —— 两者只差 T14 夹具的路径写法） |
 | 发布核验 | **0.1.12**：`NODE_USE_ENV_PROXY=1 node scripts/compare-vsix.mjs 0.1.12` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,050,314 字节 / `3ffd7adc…`）；tag `v0.1.12`；留档 `~/jerrypi-releases/jerrypi-0.1.12.vsix`（0.1.11：338 文件 / `bd3cdcde…`；0.1.9：338 文件 / `85db1434…`）。⚠️ 本机跑这个脚本必须带 `NODE_USE_ENV_PROXY=1`（代理只在环境变量里，Node 的 fetch 默认不看，见 S8-plan §11 的 P-1） |
-| 真机验收 | S4 ✅／✅ · S5 ✅／✅ · S6 ✅／✅ · S7 ✅／✅（各自的 §12.3）｜ **S8：Mac ✅ ／ Windows ✅**（M1 六项 + M2 三项；**W0 `GATE PASS` 15 PASS / 0 FAIL / 1 SKIP = T12，含 T14**；W1 正常 —— S8-plan §12.3） |
+| 真机验收 | S4 ✅／✅ · S5 ✅／✅ · S6 ✅／✅ · S7 ✅／✅（各自的 §12.3）｜ **S8：Mac ✅ ／ Windows ✅**（M1 六项 + M2 三项；**W0 `GATE PASS` 15 PASS / 0 FAIL / 1 SKIP = T12，含 T14**；W1 正常 —— S8-plan §12.3）｜ **S9：待 Mac + Windows**（§12.2/§12.3） |
 | 工作区 | `main` 与 origin 同步（S7 的提交与 `v0.1.9` tag 都已推）；工作区干净（logo 素材已由用户提交为 `77196c1`，并从 VSIX 里排除）。**总计划只有一份**：`docs/PLAN.md`（2026-09-13 已把根目录那份的 233 行评审记录并进去并删除，见 S5-plan §10.1 的 U6） |
 
 **会自动跑的东西（每个动作改完必须全绿）**：
@@ -94,7 +97,7 @@ host-check **418**、webview-dom **110**）。下一步：步骤 10（文档收�
 | 8 | （追加①②宿主侧）协议三消息 + `DialogHost` + `uiContext` 三件接卡片（A27/A28/A30/A32） | ✅ |
 | 9 | （追加①②面板侧）webview 三卡片 + password 卡 + 面板入口 + 键盘 handler（A29/A31/A33–A35） | ✅ |
 | 10 | 文档收尾（README 面板位置 / shell 指引 / 面板内交互；`settings-check` 扩容） | ✅ |
-| 11 | 版本 0.1.13 + 打包 + Mac M1/M2 → 上传/核验 → Windows W0/W1（+W2）→ §12 回填 → 关阶段 | |
+| 11 | 版本 0.1.13 + 打包 + Mac M1/M2 → 上传/核验 → Windows W0/W1（+W2）→ §12 回填 → 关阶段 | ⏳ 准备完成，待用户 |
 
 ## 4. 发布流程（每次都一样）
 

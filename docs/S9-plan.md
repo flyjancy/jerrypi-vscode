@@ -969,7 +969,23 @@ R14–R16）无错位；F40–F45、Q12–Q17 与本次改动无新增冲突；�
 
 ## 12. 实施与验收结果
 
-（待实施）
+### 12.1 自动部分（2026-09-17，0.1.13 打包前后）
+
+| 门禁 | 结果 |
+| --- | --- |
+| `npm run typecheck` | ✅（两套 tsconfig） |
+| `npm run self-test` | **9/9**（host-check **418**、webview-dom **110**、protocol **124**、render 128、tool-text 91、settings **33/33**、manifest 6/6） |
+| `npm run check:gate`（真模型，本机） | **`GATE PASS`**，**18 项（14 gating + T5c/T12/T13/T16 advisory）· 18 PASS / 0 FAIL / 0 SKIP** |
+| `npm run check:controller`（真模型，本机） | **110/110** |
+| 打包 | `jerrypi-0.1.13.vsix`：**338 文件 / 6,068,334 字节**，SHA-256 `57fc7ad15a533b637581f6c0dde503ce031a92f8b7d3596291ab0805edc46c75`；`check-vsix` OK（30 MB 门禁的 19.3%）。`unzip -l` 复核：只有 `dist/`(3) + `media/` + `pi-runtime/`(327) + `test-fixtures/` + LICENSE/README/THIRD_PARTY_NOTICES —— **无** `src/`、`scripts/`、`docs/`、`.pi/`、`AGENTS.md` |
+
+### 12.2 Mac 人工验收（M1/M2）
+
+（待用户；清单见 §7）
+
+### 12.3 Windows 人工验收（W0/W1/W2）
+
+（待用户；清单见 §8）
 
 ## 13. 待用户拍板
 
