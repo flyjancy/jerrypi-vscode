@@ -19,6 +19,7 @@ import { buildWebviewHtml, createNonce } from "./webviewHtml";
 import { pickModel, pickThinkingLevel, type PickerBridge } from "./modelPicker";
 import { pickSession, type SessionPickerBridge } from "./sessionPicker";
 import { replaceSessionWithConfirm, reportReplaceOutcome } from "./sessionActions";
+import { DialogHost } from "./dialogHost";
 import { MetaStatusBar } from "./statusBar";
 import type { DiffPresenter } from "./diff";
 import type { ApprovalDecision } from "../pi/approval";
@@ -35,14 +36,40 @@ export interface ChatViewOptions {
   output: vscode.OutputChannel;
   /** S7：打开"这次调用改了什么"的 diff（`extension.ts` 造，白名单在它里面）。 */
   diff: DiffPresenter;
+  /**
+   * S9 ①②：面板内的对话框。
+   *
+   * 生产由 `extension.ts` 单独造并**同时**交给 `createVSCodeUIContext` —— 两边必须是
+   * 同一个实例：`uiContext.select/confirm/input` 挂起的那个 Promise，等的就是面板
+   * 回传的 `dialog/answer`。
+   *
+   * 不传时自己造一个（post 指向自己的 `post`）—— 只为让不关心对话框的夹具少写一行；
+   * 那种情况下 `uiContext` 也没接它，所以不会有“两张表”的问题。
+   */
+  dialogHost?: DialogHost;
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly statusBar = new MetaStatusBar();
+  /**
+   * S9 ①②：面板内的对话框（由 `extension.ts` 注入，与 `uiContext` 共用同一实例）。
+   *
+   * 它自持 post 通道，所以就绪/重放/回答路由**不经过 `controller.ensure()`**
+   * （R15 的死锁窗口就是这么消掉的）。
+   */
+  readonly dialogHost: DialogHost;
 
-  constructor(private readonly options: ChatViewOptions) {}
+  constructor(private readonly options: ChatViewOptions) {
+    this.dialogHost =
+      options.dialogHost ??
+      new DialogHost({
+        post: (message) => this.post(message),
+        announce: () => this.notifyDialogPending(),
+        log: { appendLine: (line) => options.output.appendLine(line) },
+      });
+  }
 
   /** 把控制器的协议消息送到面板（面板不在时静默丢弃：重放时会给全量状态）。 */
   readonly post = (message: ServerMessage): void => {
@@ -89,6 +116,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async replaceSession(
     run: (force: boolean) => Promise<SessionReplaceOutcome>,
   ): Promise<void> {
+    // S9 ①②：会话切换 ⇒ 旧会话上挂着的对话框**结算成 replaced**（§3.8 的结算表）。
+    // 放在替换之前：替换会 abort 旧会话，而对话框等的是旧会话的初始化/命令，
+    // 留着它只会变成一张永远答不上的孤卡。
+    const cancelled = this.dialogHost.cancelAll("replaced");
+    if (cancelled > 0) this.options.output.appendLine(`[dialog] 会话切换：撤掉 ${cancelled} 个待答对话框（replaced）`);
     const outcome = await replaceSessionWithConfirm(run);
     reportReplaceOutcome(outcome, (level, text) => this.options.controller.notifyUser(level, text));
   }
@@ -166,6 +198,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
+   * S9 ①②：有对话框在等作答（对齐 S8 的 `notifyApprovalPending`）。
+   *
+   * 面板可见 → 只记 Output（卡片就在眼前）；不可见 → 弹一条通知 + 「打开面板」。
+   */
+  notifyDialogPending(): void {
+    const count = this.dialogHost.pendingCount();
+    if (count === 0) return;
+    if (this.view?.visible === true) {
+      this.options.output.appendLine(`[dialog] 面板可见，不再弹通知（${count} 个待答）`);
+      return;
+    }
+    void vscode.window
+      .showInformationMessage(`jerrypi: 有一个对话框等待作答（共 ${count} 个）：打开面板即可回答`, FOCUS_CHAT_ITEM)
+      .then((picked) => {
+        if (picked === FOCUS_CHAT_ITEM) void vscode.commands.executeCommand(`${CHAT_VIEW_ID}.focus`);
+      });
+  }
+
+  /**
    * 全量重放。
    *
    * **`state` 的组装只有这一处** —— 面板重建（`ready`/`requestState`）与会话替换
@@ -212,11 +263,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // Q10：销毁**不**取消待审批项（那是 C6 的反面），但得再喊一次 —— 用户可能
         // 再也看不到那张卡片，而「中止」按钮在面板里。
         this.announcePendingApproval();
+        // S9 ①②：对话框同理 —— 销毁**不结算**（只断开 post 通道），但要说一声。
+        this.notifyDialogPending();
       }),
     );
   }
 
   dispose(): void {
+    // S9 ①②：控制器销毁 = 会话终止（与“视图销毁”是两回事，Q10）：把挂起的对话框
+    // 结算成 cancelled，否则调用方（pi 扩展的 select/confirm/input）会永远挂着。
+    this.dialogHost.cancelAll("cancelled");
     this.disposeView();
     this.statusBar.dispose();
   }
@@ -238,6 +294,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               `[webview] 协议版本不一致：面板=${message.protocol} 扩展=${PROTOCOL_VERSION}（已按当前协议继续）`,
             );
           }
+          // ⚠️ **顺序是刻意的**（S9-plan §3.8 / R15）：先把挂起的对话框重放出去，
+          // 再 `await controller.ensure()`。反过来的话，“初始化期间某个 session_start
+          // 处理器挂起在对话框上”时：ensure 等那个回答，而回答要等 keep ensure 完成
+          // 才能重放到前端 —— 死锁。对话框的 post 通道自持，所以可以先于 ensure 走。
+          this.dialogHost.replay();
           await controller.ensure();
           this.replay();
           return;
@@ -311,6 +372,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           if (!controller.decideApproval(message.toolCallId, message.decision satisfies ApprovalDecision)) {
             output.appendLine(`[webview] 这次审批已经不在了（已中止/已答过）：${message.toolCallId}`);
           }
+          return;
+        }
+        case "dialog/answer": {
+          // 路由**直接查 DialogHost 的 pending 表**，不经过 controller —— 才能做到
+          // “初始化期间也能作答”（A32①）。晚到 / 未知的 id 在 DialogHost 里被丢弃。
+          if ("cancelled" in message) this.dialogHost.answer(message.dialogId, { cancelled: true });
+          else this.dialogHost.answer(message.dialogId, { value: message.value });
           return;
         }
         case "openDiff": {

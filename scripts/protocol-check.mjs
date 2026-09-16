@@ -321,6 +321,39 @@ async function checkToolCard(serialize, protocol, toolText) {
   check("空 path 不铸造", serialize.openablePathsOfToolCall({ path: "   " }, "/w").length === 0);
 }
 
+/**
+ * S9 ①②：对话框三态（`dialog/open` / `dialog/answer` / `dialog/close`）。
+ *
+ * ⚠️ 这是**形状**检查（proto 是纯类型，运行期只剩 PROTOCOL_VERSION）：它只能证明
+ * “字段还在”，证明不了“生命周期对”——后者由 host-check 的 A32⑤（真 DialogHost +
+ * 桩 webview）与 A30（销毁不取消）来验（Astra B3 定的分工）。
+ */
+function checkDialogProtocol(protocol, source) {
+  console.log("[protocol-check] protocol.ts（S9 ①② 对话框三态）");
+  equal("协议版本是 7", protocol.PROTOCOL_VERSION, 7);
+
+  check(
+    "dialog/open 带 kind/title 与可选 loading",
+    /type:\s*"dialog\/open"\s*;[\s\S]*?kind:\s*DialogKind\s*;[\s\S]*?title:\s*string\s*;[\s\S]*?loading\?:\s*boolean\s*;/.test(source),
+  );
+  check(
+    "dialog/open 带 items/current/placeholder（列表卡与当前项）",
+    /items\?:\s*DialogItem\[\]\s*;/.test(source) && /current\?:\s*string\s*;/.test(source) && /placeholder\?:\s*string\s*;/.test(source),
+  );
+  check("dialog/close 的 reason 用 DialogCloseReason", /type:\s*"dialog\/close"\s*;\s*dialogId:\s*string\s*;\s*reason:\s*DialogCloseReason/.test(source));
+  check("ClientMessage 含 DialogAnswerMessage", /\|\s*DialogAnswerMessage\s*;/.test(source));
+  check(
+    "回答有两种形态（value | cancelled:true —— “选了空值”与“取消”是两件事）",
+    /type:\s*"dialog\/answer"\s*;\s*dialogId:\s*string\s*;\s*value:\s*string/.test(source) &&
+      /type:\s*"dialog\/answer"\s*;\s*dialogId:\s*string\s*;\s*cancelled:\s*true/.test(source),
+  );
+  check("kind 恰好四种（select/input/confirm/password）", /export type DialogKind = "select" \| "input" \| "confirm" \| "password"/.test(source));
+  const reasons = (source.match(/export type DialogCloseReason = ([^;]+);/) ?? [])[1] ?? "";
+  for (const reason of ["answered", "timeout", "cancelled", "replaced", "load-failed"]) {
+    check(`DialogCloseReason 含 ${reason}`, reasons.includes(`"${reason}"`));
+  }
+}
+
 async function checkUrlPolicy(urlPolicy) {
   console.log("[protocol-check] urlPolicy.ts");
 
@@ -488,6 +521,7 @@ function main() {
       await checkSerialize(serialize, protocol);
       await checkToolCard(serialize, protocol, toolText);
       await checkUrlPolicy(urlPolicy);
+      checkDialogProtocol(protocol, fs.readFileSync(path.join(REPO_ROOT, "src/shared/protocol.ts"), "utf8"));
       checkWebviewElementIds();
     })
     .then(() => {

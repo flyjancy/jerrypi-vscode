@@ -883,6 +883,41 @@ R14–R16）无错位；F40–F45、Q12–Q17 与本次改动无新增冲突；�
   | A26② | catch 里吞掉错误 | 红（不再报 `Custom shell path not found`） |
   | A26⑤ | 文案里删掉“下一步：运行 Pi: Set Shell Path” | 红 |
 
+### 11.8 步骤 8（2026-09-17）：①② 宿主侧对话框（A27/A28/A30/A32）
+
+- **落盘**：协议 +3 条（`dialog/open`（含 `loading`）/ `dialog/answer`（`value` | `cancelled:true`）/
+  `dialog/close`（五个 reason），`PROTOCOL_VERSION` 6 → **7**）；`src/host/dialogHost.ts`（pending 表 +
+  信号/超时竞争 + 重放 + 撤卡 + 晚到丢弃）；`uiContext` 的 `select/confirm/input` 改走卡片
+  （不传 DialogHost 时保留原生旧路）；`chatView` 的 `ready` **先 `dialogHost.replay()` 再 `await ensure()`**；
+  `dialog/answer` 直接路由到 DialogHost（不经 controller）；`extension.ts` 把**同一个** DialogHost 交给
+  `uiContext` 与 `ChatViewProvider`。host-check **383 → 404**（+21）；protocol-check **112 → 124**（+12，A27）。
+- 🔴 **实施期发现（真 bug，已修）：`uiContext.select` 的签名一直是错的**。
+  pi 的 `ExtensionUIContext.select(title, options: **string[]**)`（`types.d.ts:70`；pi 内部自己就是
+  `options.map((o) => o.label)` 传进来的），而旧实现按 `option.label` 读 ⇒ 真机上每一项都会变成
+  `label: undefined`（弹出一个空白列表）。它一直没暴露是因为**这个接口在本仓库从未被真跑过**：
+  信任模态走 `trustPrompt.ts`、模型选择器走 `modelPicker.ts`、`ctx.ui.custom()` 直接报错。
+  已按 string[] 修好，**A28① 现在断言 `items` 逐字等于 pi 给的字符串数组**（否则会静默退回 undefined）。
+- **A32① 的能红形态**（计划给的红法已实跑）：把 `chatView` 里 `dialogHost.replay()` 挪回
+  `await controller.ensure()` **之后**（= 改之前的形状）⇒ `A32①①` 红（重放发不出来，因为 ensure
+  正挂在那个对话框上）。夹具是真的：真 `createSessionHost` + 一个 `session_start` 里 `await ctx.ui.select`
+  的临时扩展（不 resolve 就不回），且超时后先 `cancelAll` 再收尾（红法不允许是“测试进程挂死”）。
+- **能红验证（实跑）**：
+
+  | 断言 | 改坏方式 | 结果 |
+  | --- | --- | --- |
+  | A28①②③ / A32② | `uiContext` 回退成原生控件 | 五条红（桩里真的弹了 QuickPick/InputBox/模态） |
+  | A30① | `ChatViewProvider.disposeView()` 里调 `dialogHost.cancelAll()` | 红（销毁把 promise 结算了） |
+  | A30② | `DialogHost.post()` 给 `dialog/open` 多塞一个 `value` 字段 | 红（重放携带旧值） |
+  | A32①① | `replay()` 挪到 `await ensure()` 之后 | 红 |
+  | A32⑤① | `settle()` 不再发 `dialog/close` | 红（超时不撤卡） |
+  | A32⑤③ | 晚到的 answer 发一条 `focusInput` | 红（`posted.length` 变了） |
+
+- **夹具补修**：`makeController` 补了 `pendingApprovals`/`decideApproval` —— `onDidDispose` 会问它，
+  缺了会以 `pendingApprovals is not a function` 收场（不是断言失败）。`ChatViewOptions.dialogHost` 改为
+  **可选**（不传就自建一个，post 指向自己的 `post`），否则一堆不关心对话框的旧夹具都要改。
+- **未做（属步骤 9）**：webview 侧的三张卡片与 `dialog/close` 渲染、password 卡、loading 态；
+  以及“有 N 个待答”的**状态行**（webview 侧从 `dialog/open` 自己算）—— 详见步骤 9。
+
 ## 12. 实施与验收结果
 
 （待实施）

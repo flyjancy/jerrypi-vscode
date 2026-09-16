@@ -16,7 +16,7 @@
 //   3. `busy` 的判定：**空闲以 `agent_settled` 为准**，不能以第一个 `agent_end`
 //      （`agent_end` 之后可能还有 followUp 队列或自动重试）。
 
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /**
  * 当前会话的**元信息**（模型 / 思考等级 / 上下文用量），显示在输入框下方那一行。
@@ -169,7 +169,27 @@ export type ClientMessage =
    * 只带 toolCallId 与决定 —— 白名单在 controller 的审批表里（"这条 id 现在真的在等吗"），
    * 面板说什么不算数。未知/过期的 id 会被拒并记一行 Output。
    */
-  | { type: "approvalDecision"; toolCallId: string; decision: "allow" | "deny" };
+  | { type: "approvalDecision"; toolCallId: string; decision: "allow" | "deny" }
+  /** S9 ①②：面板内对话框的回答（见下面 `DialogAnswerMessage` 的两种形态）。 */
+  | DialogAnswerMessage;
+
+/** S9 ①②：面板内对话框的三种形态（`dialog/open` 的 `kind`）。 */
+export type DialogKind = "select" | "input" | "confirm" | "password";
+
+/** 对话框撤卡的 reason（与 `docs/S9-plan.md` §3.8 的结算表一一对应）。 */
+export type DialogCloseReason = "answered" | "timeout" | "cancelled" | "replaced" | "load-failed";
+
+/** 列表卡里的一项。 */
+export interface DialogItem {
+  label: string;
+  description?: string;
+  detail?: string;
+}
+
+/** S9 ①②：对话框的**回答**。`cancelled` 与“选了空值”是两件事。 */
+export type DialogAnswerMessage =
+  | { type: "dialog/answer"; dialogId: string; value: string }
+  | { type: "dialog/answer"; dialogId: string; cancelled: true };
 
 /** 扩展 → webview */
 export type ServerMessage =
@@ -219,7 +239,34 @@ export type ServerMessage =
    * 从命令面板发起时不发 —— 那时用户的焦点可能在编辑器里，抢焦点是 bug。
    * 两条退出路径（选中 / Esc 取消）都要发。
    */
-  | { type: "focusInput" };
+  | { type: "focusInput" }
+  /**
+   * S9 ①②：在面板里打开一个对话框（卡片渲染在消息流末尾）。
+   *
+   * **同 `dialogId` 二次 `dialog/open` = 内容更新**（加载态 → 有 items 的模型列表）。
+   * 这个载荷里**永远不会**携带已经输入过的值（password/input 重放一律清空）—— 这是
+   * A29 的泄漏面：重放链路只恢复“有一个待答的框”。
+   */
+  | {
+      type: "dialog/open";
+      dialogId: string;
+      kind: DialogKind;
+      title: string;
+      message?: string;
+      items?: DialogItem[];
+      /** 当前项（模型/等级选择器用 `✓` 前缀标记）。 */
+      current?: string;
+      placeholder?: string;
+      /** true = 内容还在加载（卡片显示“加载中”，不是点击后无响应）。 */
+      loading?: boolean;
+    }
+  /**
+   * S9 ①②：撤卡。
+   *
+   * 宿主一旦结算（用户作答 / Esc / 超时 / 会话切换 / 列表加载失败）就发它，
+   * 前端据此移除卡片（或按 reason 渲染终态）。**视图销毁不发**（销毁 ≠ 结算）。
+   */
+  | { type: "dialog/close"; dialogId: string; reason: DialogCloseReason };
 
 /** 重放时的总量上限（防止一个长会话把 webview 灌爆）。 */
 export const MAX_REPLAY_ITEMS = 500;

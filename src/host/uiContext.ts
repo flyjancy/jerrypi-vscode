@@ -14,6 +14,7 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import * as vscode from "vscode";
 import type { EventSink } from "../pi/bindings";
+import type { DialogHost } from "./dialogHost";
 
 /**
  * 覆盖检查：pi 的 `ExtensionUIContext` 新增成员时下面这行会编译失败，
@@ -73,11 +74,15 @@ class CancelledError extends Error {
 /**
  * 建立一个"把 pi 的对话框接到 VS Code"的 UI 上下文。
  *
+ * 传了 `dialogHost`（S9 ①②）时，`select` / `confirm` / `input` 走**面板内的卡片**；
+ * 不传时退回原生控件（旧的 `withDialog` 路径）—— 它仍被命令层的原生 QuickPick 用到，
+ * 也是 host-check 里没接对话框的夹具的默认行为。
+ *
  * 为什么不用 pi 自带的 noOp 上下文：它是模块私有常量（既不在 `.d.ts` 里也不在
  * bundle 的导出里），拿不到；而且它把 `custom` 做成静默 resolve，
  * 会把"宿主做不到"伪装成"做到了"。
  */
-export function createVSCodeUIContext(sink: EventSink): ExtensionUIContext {
+export function createVSCodeUIContext(sink: EventSink, dialogHost?: DialogHost): ExtensionUIContext {
   /**
    * 把 `signal` 与 `timeout` 接到 VS Code 的对话框上。
    *
@@ -128,32 +133,61 @@ export function createVSCodeUIContext(sink: EventSink): ExtensionUIContext {
   const ui: Record<string, unknown> = {
     select: async (
       title: string,
-      options: readonly { label: string; description?: string }[],
+      options: readonly string[],
       opts?: DialogOptions,
-    ) =>
-      withDialog<string | undefined>(opts, undefined, async () => {
-        const picked = await vscode.window.showQuickPick(
-          options.map((option) => ({
-            label: option.label,
-            ...(option.description === undefined ? {} : { description: option.description }),
-          })),
-          { title, ignoreFocusOut: true },
-        );
-        return picked?.label;
-      }),
-    confirm: async (title: string, message: string, opts?: DialogOptions) =>
-      withDialog<boolean>(opts, false, async () => {
+    ) => {
+      // ⚠️ pi 的 `ExtensionUIContext.select(title, options: string[])` —— 选项是**字符串**
+      // （`types.d.ts:70`；pi 内部自己就是 `options.map((o) => o.label)` 传进来的）。
+      // 旧的实现按 `option.label` 读，于是真机上每项都变成 `label: undefined` ——
+      // 这个接口在本仓库从未被真跑过（信任模态与模型选择器都走别的路），所以一直没暴露。
+      if (dialogHost !== undefined) {
+        return dialogHost.open({
+          kind: "select",
+          title,
+          items: options.map((option) => ({ label: option })),
+          ...(opts?.signal === undefined ? {} : { signal: opts.signal }),
+          ...(opts?.timeout === undefined ? {} : { timeout: opts.timeout }),
+        });
+      }
+      return withDialog<string | undefined>(opts, undefined, async () => {
+        const picked = await vscode.window.showQuickPick([...options], { title, ignoreFocusOut: true });
+        return picked;
+      });
+    },
+    confirm: async (title: string, message: string, opts?: DialogOptions) => {
+      if (dialogHost !== undefined) {
+        const answer = await dialogHost.open({
+          kind: "confirm",
+          title,
+          message,
+          ...(opts?.signal === undefined ? {} : { signal: opts.signal }),
+          ...(opts?.timeout === undefined ? {} : { timeout: opts.timeout }),
+        });
+        return answer !== undefined;
+      }
+      return withDialog<boolean>(opts, false, async () => {
         const answer = await vscode.window.showWarningMessage(
           `${title}\n\n${message}`,
           { modal: true },
           "确认",
         );
         return answer === "确认";
-      }),
-    input: async (title: string, placeholder: string, opts?: DialogOptions) =>
-      withDialog<string | undefined>(opts, undefined, () =>
+      });
+    },
+    input: async (title: string, placeholder: string, opts?: DialogOptions) => {
+      if (dialogHost !== undefined) {
+        return dialogHost.open({
+          kind: "input",
+          title,
+          placeholder,
+          ...(opts?.signal === undefined ? {} : { signal: opts.signal }),
+          ...(opts?.timeout === undefined ? {} : { timeout: opts.timeout }),
+        });
+      }
+      return withDialog<string | undefined>(opts, undefined, () =>
         vscode.window.showInputBox({ title, placeHolder: placeholder, ignoreFocusOut: true }),
-      ),
+      );
+    },
     notify: (message: string, type?: "info" | "warning" | "error") => {
       if (type === "error") {
         void vscode.window.showErrorMessage(`jerrypi: ${message}`);

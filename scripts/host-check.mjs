@@ -140,6 +140,9 @@ function makeController(overrides = {}) {
     abort: async () => {},
     clearQueue: () => "",
     isOpenableFile: () => false,
+    // S8：面板销毁/重建时的“还有几个待确认”要问 controller（权威在它那里）。
+    pendingApprovals: () => [],
+    decideApproval: () => false,
     // ---- S4 的选择器接口 ----
     pickerContext: () => ({ model: "", thinkingLevel: "off", supportsThinking: false, levels: [] }),
     listAvailableModels: async () => [],
@@ -190,6 +193,8 @@ async function buildModules(tempDir) {
       `export { createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/trustPrompt"))};`,
       `export { isNpmSource, translateSourceError, describePackage, settingsPathOf, listPackages, installPackage, removePackage } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/packages"))};`,
       `export { shellCandidates, pathBashCandidates, resolveCurrentShell, setShellPathWrite, shellSettingsPathOf, describeShellResolution } from ${JSON.stringify(path.join(REPO_ROOT, "src/pi/shell"))};`,
+      `export { DialogHost } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/dialogHost"))};`,
+      `export { createVSCodeUIContext } from ${JSON.stringify(path.join(REPO_ROOT, "src/host/uiContext"))};`,
     ].join("\n"),
   );
   const outfile = path.join(tempDir, "host-bundle.mjs");
@@ -207,7 +212,7 @@ async function buildModules(tempDir) {
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "host-check-"));
-const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES, createSessionHost, SessionHostController, createSelfTestUIContext, createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS, createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM, isNpmSource, translateSourceError, describePackage, settingsPathOf, listPackages, installPackage, removePackage, shellCandidates, pathBashCandidates, resolveCurrentShell, setShellPathWrite, shellSettingsPathOf, describeShellResolution } =
+const { ChatViewProvider, replaceSessionWithConfirm, sessionToItem, applyAgentDirSetting, registerAgentDirWatcher, describeAgentDir, ENV_AGENT_DIR, readAgentDirSetting, readProxySetting, readApprovalModeSetting, clearStoredApiKeys, describeAuthSource, registerCommands, loadPi, getModelRuntime, sidesOfPatch, pathLabelOf, createFileChanges, recordEditsFromMessages, diffFieldsOf, createCustomTools, createDiffPresenter, DIFF_SCHEME, PROTOCOL_VERSION, parseApprovalMode, needsApproval, createApprovals, createApprovalExtension, createApprovalModeReader, approvalTitleOf, denyReason, CANCEL_REASON, READ_ONLY_TOOLS, APPROVAL_MODES, createSessionHost, SessionHostController, createSelfTestUIContext, createTrustResolver, applyTrustAction, trustParentOf, TRUST_ACTIONS, TRUST_ACTION_LABELS, createTrustPrompter, TRUST_REMEMBER_ITEM, TRUST_SESSION_ITEM, TRUST_DENY_ITEM, isNpmSource, translateSourceError, describePackage, settingsPathOf, listPackages, installPackage, removePackage, shellCandidates, pathBashCandidates, resolveCurrentShell, setShellPathWrite, shellSettingsPathOf, describeShellResolution, DialogHost, createVSCodeUIContext } =
   await buildModules(tempDir);
 const vscode = await import(pathToFileURL(STUB_PATH).href);
 const vscodeStub = await import(pathToFileURL(STUB_PATH).href);
@@ -3521,6 +3526,252 @@ check(
     }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// ------------------------------------- S9 第 8 步：①② 宿主侧对话框（A28/A30/A32）
+//
+// 驱动：真 `DialogHost` + 真 `createVSCodeUIContext` + 真 `ChatViewProvider`（桩只做 webview 那一端，
+// 与其它 host-check 块一致）；A32① 再叠一层真 `createSessionHost` + 一个真的会挂起的夹具扩展。
+{
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const fakeDiff = { open: () => {} };
+  const lastOpen = (posted) => posted.filter((m) => m.type === "dialog/open").at(-1);
+
+  // ---- A28 / A32②：uiContext 三件走卡片，且 answer 路由回调用方
+  {
+    resetStub();
+    const log = makeOutput();
+    const posted = [];
+    const dialogHost = new DialogHost({ post: (m) => posted.push(m), log });
+    const ui = createVSCodeUIContext(log, dialogHost);
+
+    const selectPromise = ui.select("选一个", ["甲", "乙"]);
+    await tick();
+    const selectOpen = lastOpen(posted);
+    check(
+      "A28①：select 走卡片（items 是 pi 给的字符串数组，不是 undefined），桩里一次原生 QuickPick 都没弹",
+      selectOpen?.kind === "select" &&
+        JSON.stringify(selectOpen.items) === JSON.stringify([{ label: "甲" }, { label: "乙" }]) &&
+        callsOf("showQuickPick").length === 0,
+      JSON.stringify({ selectOpen, quickPicks: callsOf("showQuickPick").length }),
+    );
+    if (selectOpen !== undefined) dialogHost.answer(selectOpen.dialogId, { value: "乙" });
+    check("A32②①：select 作答 → resolve 到那个值", (await selectPromise) === "乙");
+
+    const confirmPromise = ui.confirm("确认吗", "细节说明");
+    await tick();
+    const confirmOpen = lastOpen(posted);
+    check(
+      "A28②：confirm 走卡片（没有 modal 型 showWarningMessage）",
+      confirmOpen?.kind === "confirm" && confirmOpen.message === "细节说明" && callsOf("showWarningMessage").length === 0,
+      JSON.stringify({ confirmOpen, warnings: callsOf("showWarningMessage").length }),
+    );
+    if (confirmOpen !== undefined) dialogHost.answer(confirmOpen.dialogId, { value: "确认" });
+    check("A32②②：confirm 作答 → true", (await confirmPromise) === true);
+
+    const confirmCancel = ui.confirm("确认吗", "x");
+    await tick();
+    if (lastOpen(posted) !== undefined) dialogHost.answer(lastOpen(posted).dialogId, { cancelled: true });
+    check("A32②③：confirm 取消 → false（fallback）", (await confirmCancel) === false);
+
+    const inputPromise = ui.input("输入卡", "占位文本");
+    await tick();
+    const inputOpen = lastOpen(posted);
+    check(
+      "A28③：input 走卡片（带 placeholder，没有 showInputBox）",
+      inputOpen?.kind === "input" && inputOpen.placeholder === "占位文本" && callsOf("showInputBox").length === 0,
+      JSON.stringify({ inputOpen, inputs: callsOf("showInputBox").length }),
+    );
+    if (inputOpen !== undefined) dialogHost.answer(inputOpen.dialogId, { value: "hello" });
+    check("A32②④：input 作答 → 那个值", (await inputPromise) === "hello");
+
+    const cancelledSelect = ui.select("t", ["a"]);
+    await tick();
+    if (lastOpen(posted) !== undefined) dialogHost.answer(lastOpen(posted).dialogId, { cancelled: true });
+    check("A32②⑤：cancelled → fallback undefined", (await cancelledSelect) === undefined);
+  }
+
+  // ---- A30：视图销毁**不结算**；重开（ready）靠重放
+  {
+    resetStub();
+    const output = makeOutput();
+    const posted = [];
+    const dialogHost = new DialogHost({ post: (m) => posted.push(m), log: output });
+    const provider = new ChatViewProvider({
+      controller: makeController(),
+      extensionUri: vscode.Uri.file("/ext"),
+      output,
+      diff: fakeDiff,
+      dialogHost,
+    });
+    const view1 = makeView();
+    provider.resolveWebviewView(view1);
+    const ui = createVSCodeUIContext(output, dialogHost);
+    const pendingDialog = ui.input("销毁测试", "占位");
+    await tick();
+    const opened = lastOpen(posted);
+    check("A30 前置：卡片已发出", opened?.kind === "input", JSON.stringify(opened));
+
+    view1.disposeView();
+    const settled = await Promise.race([
+      pendingDialog.then(() => "settled"),
+      delay(30).then(() => "pending"),
+    ]);
+    check(
+      "A30①：销毁不结算（promise 仍 pending，且没有 dialog/close）",
+      settled === "pending" && posted.filter((m) => m.type === "dialog/close").length === 0,
+      JSON.stringify({ settled, closes: posted.filter((m) => m.type === "dialog/close").length }),
+    );
+
+    const view2 = makeView();
+    provider.resolveWebviewView(view2);
+    posted.length = 0;
+    await view2.send({ type: "ready", protocol: PROTOCOL_VERSION });
+    const replayed = posted.filter((m) => m.type === "dialog/open");
+    check(
+      "A30②：重开后（ready）重放 dialog/open，且载荷里没有任何已输入的值",
+      opened !== undefined && replayed.some((m) => m.dialogId === opened.dialogId) && replayed.every((m) => !("value" in m)),
+      JSON.stringify(replayed),
+    );
+    if (opened !== undefined) await view2.send({ type: "dialog/answer", dialogId: opened.dialogId, value: "abc" });
+    check(
+      "A30③：重开后作答 → resolve 到值，且发 answered 撤卡",
+      (await pendingDialog) === "abc" && opened !== undefined && posted.some((m) => m.type === "dialog/close" && m.dialogId === opened.dialogId && m.reason === "answered"),
+      JSON.stringify(posted),
+    );
+    provider.dispose();
+  }
+
+  // ---- A32①：ensure 独立性（初始化期对话框 + 销毁重开不死锁）—— 真 session host + 真挂起夹具
+  {
+    resetStub();
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "s9-dialog-"));
+    const agentDir = path.join(root, "agent");
+    const cwd = path.join(root, "ws");
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.mkdirSync(cwd, { recursive: true });
+    const fixture = path.join(root, "hang-ext.ts");
+    // 真的走 pi 的扩展加载链：session_start 处理器挂在一个 `ctx.ui.select` 上。
+    fs.writeFileSync(
+      fixture,
+      [
+        "export default function probe(pi) {",
+        '  pi.on("session_start", async (_event, ctx) => {',
+        '    await ctx.ui.select("初始化期提问", ["继续"]);',
+        "  });",
+        "}",
+      ].join("\n"),
+      "utf8",
+    );
+    const log = makeOutput();
+    const posted = [];
+    const dialogHost = new DialogHost({ post: (m) => posted.push(m), log });
+    const ui = createVSCodeUIContext(log, dialogHost);
+    const piModule = await loadPi(REPO_ROOT);
+    let host;
+    const hostPromise = createSessionHost({
+      pi: piModule,
+      cwd,
+      agentDir,
+      sessionManager: piModule.SessionManager.create(cwd, path.join(root, "sessions")),
+      keys: { listProviders: () => [], getApiKey: async () => undefined, saveApiKey: async () => {}, removeApiKey: async () => {} },
+      uiContext: ui,
+      mode: "rpc",
+      sink: { appendLine() {} },
+      additionalExtensionPaths: [fixture],
+    }).then(
+      (value) => {
+        host = value;
+        return "resolved";
+      },
+      (error) => `threw:${error instanceof Error ? error.message : String(error)}`,
+    );
+    try {
+      for (let i = 0; i < 200 && !posted.some((m) => m.type === "dialog/open"); i += 1) await delay(25);
+      const opened = lastOpen(posted);
+      check("A32① 前置：初始化期的 select 已经挂起（createSessionHost 还没 resolve）", opened !== undefined, JSON.stringify(posted.slice(-2)));
+
+      // 面板侧：controller.ensure() 等的就是那个还挂着的 createSessionHost。
+      const controller = makeController({ ensure: () => hostPromise.then(() => undefined) });
+      const provider = new ChatViewProvider({
+        controller,
+        extensionUri: vscode.Uri.file("/ext"),
+        output: log,
+        diff: fakeDiff,
+        dialogHost,
+      });
+      const view = makeView();
+      provider.resolveWebviewView(view);
+      posted.length = 0;
+      await view.send({ type: "ready", protocol: PROTOCOL_VERSION });
+      check(
+        "A32①①：ensure 还挂着，重放已经把 dialog/open 发出来了（没有死锁）",
+        opened !== undefined && posted.some((m) => m.type === "dialog/open" && m.dialogId === opened.dialogId),
+        JSON.stringify(posted),
+      );
+      if (opened !== undefined) await view.send({ type: "dialog/answer", dialogId: opened.dialogId, value: "继续" });
+      let outcome = await Promise.race([hostPromise, delay(5000).then(() => "timeout")]);
+      if (outcome === "timeout") {
+        // 死锁保护：别让红法变成“测试进程挂死”（R2-N1）。
+        dialogHost.cancelAll("cancelled");
+        outcome = await Promise.race([hostPromise, delay(5000).then(() => "timeout")]);
+      }
+      check(
+        "A32①②：作答之后 createSessionHost 真的完成了（session_start 处理器返回）",
+        outcome === "resolved" && host?.session !== undefined,
+        String(outcome),
+      );
+      check(
+        "A32①③：作答发了 answered 撤卡",
+        opened !== undefined && posted.some((m) => m.type === "dialog/close" && m.dialogId === opened.dialogId && m.reason === "answered"),
+        JSON.stringify(posted),
+      );
+      provider.dispose();
+    } finally {
+      if (host !== undefined) await host.dispose().catch(() => undefined);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // ---- A32⑤：撤卡与晚到无效（副作用 oracle，不依赖 Promise 二次结算语义）
+  {
+    resetStub();
+    const log = makeOutput();
+    const posted = [];
+    const effects = [];
+    const dialogHost = new DialogHost({ post: (m) => posted.push(m), log });
+    // 用“回答之后做一件事”当可观测副作用：晚到的回答**不允许**触发它。
+    const pending = dialogHost.open({ kind: "input", title: "晚答测试" }).then((value) => {
+      if (value !== undefined) effects.push(value);
+      return value;
+    });
+    await tick();
+    const opened = lastOpen(posted);
+    // 超时竞争胜出（用 timeout 选项造）
+    const timed = dialogHost.open({ kind: "input", title: "会超时的", timeout: 10 }).then((value) => {
+      if (value !== undefined) effects.push(`timed:${value}`);
+      return value;
+    });
+    await delay(30);
+    const closed = posted.filter((m) => m.type === "dialog/close");
+    check(
+      "A32⑤①：超时 → 发 dialog/close(timeout) 且旧 id 已不在 pending 表",
+      closed.some((m) => m.reason === "timeout") && dialogHost.pendingIds().length === 1,
+      JSON.stringify({ closed, pending: dialogHost.pendingIds() }),
+    );
+    const timedId = closed.find((m) => m.reason === "timeout")?.dialogId;
+    const before = posted.length;
+    check("A32⑤②：晚到的 answer 不被接住（answer() 返回 false）", dialogHost.answer(timedId, { value: "太晚了" }) === false, "");
+    await tick();
+    check(
+      "A32⑤③：晚到的回答**没有副作用**、也不再发 close/focus",
+      !effects.includes("timed:太晚了") && posted.length === before,
+      JSON.stringify({ effects, newMessages: posted.slice(before) }),
+    );
+    check("A32⑤④：没被结算的那条仍能正常作答", dialogHost.answer(opened.dialogId, { value: "正常" }) === true && (await pending) === "正常" && effects.includes("正常"), JSON.stringify(effects));
+    check("A32⑤⑤：超时那条的 promise 已以 undefined 收口", (await timed) === undefined);
   }
 }
 
