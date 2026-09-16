@@ -37,6 +37,15 @@
 | 25 | `tool_call`（扩展审批钩子）在 **`tool_execution_start` 之后**触发 ⇒ 审批时工具卡片已经存在（可以就地加按钮），`pendingToolCalls` 里也已经有它（面板重开能重放）。**但 `tool_call` 处理器抛错不是"放行"**：`emitToolCall` 不 catch，错误会变成一条 `Extension failed, blocking execution: …` 的 error toolResult ⇒ 处理器必须自己包 try/catch（我们选 fail-closed） | S8-plan §0.1 F2/F4 · §6 A2（能红：把 block 改成 false / 去掉 try-catch） |
 | 26 | **待审批时 `session.abort()` 会让 pi 再调一次模型**，那一次必须由模型流尊重 `signal` 才能收口（返回 `stopReason:"aborted"`）；假模型无视 signal 的话 agent 循环会**无限转**。同理：**被拒绝的工具调用不会终止循环** —— pi 把结果喂回模型再问一次 | S8-plan §0.1 F6/F7/F7b · §11 的 1-1（能红：探针挂死两次） |
 | 27 | **`resolveProjectTrusted()` / `getProjectTrustOptions()` / `emitProjectTrustEvent()` 没有从 bundle 导出**（只在 CLI 那个 chunk 里）；能用的只有 `hasTrustRequiringProjectResources` 与 `ProjectTrustStore`。而且 `resolveProjectTrust` 钩子一旦传了就**无条件被调用**（哪怕 cwd 里一个 `.pi/` 都没有）——「没资源就别问」得自己短路；`<agentDir>/trust.json` 的键是 **canonical 路径**（父目录的裁决会被子目录继承） | S8-plan §0.2 F11/F12/F14/F15 · §6 A10/A11（能红：删掉那个短路 → A11③ 红） |
+| 28 | `session.reload()` 是「原地生效」的**唯一**一步（扩展/工具/主题都出来），但它**不重新裁决项目信任**（沿用活会话上那个 `projectTrusted`）⇒ “空目录先建会话、之后长出 `.pi/extensions/`”会被**未经询问**加载。要重裁决只能新建会话 | S9-plan §0.4 F15/F34 · §3.3（Q3 据此决定不热重载） |
+| 29 | `SettingsManager.create(cwd, agentDir)` 的 `projectTrusted` **默认 `true`** ⇒ 会合并**未信任项目**的 `.pi/settings.json`；而包管理器会从那里读 `npmCommand` 并 **spawn 它**。写路径必须显式 `{projectTrusted:false}`，且不许与“读列表那份”复用 | S9-plan §0.1 F31 · §6 A18/A13b（能红：manager 改回默认 → A18 红，错误里出现项目配的 `evil`） |
+| 30 | **写盘失败不抛**：settings.json 是坏 JSON 时 `installAndPersist()` **正常返回**、内存里也有那条，但文件没写 —— 错误只在 `drainErrors()` 里。`save()` 在 `globalSettingsLoadError` 非空时**根本不排队** | S9-plan §0.2 F32 · §6 A19（能红：删掉写后回读 → A19 红） |
+| 31 | `enqueueWrite()` 是**排队**的，`installAndPersist()` **不等**那次写盘 ⇒ 写完立刻读文件可能读到旧内容。要等就 `await settingsManager.flush()` | S9-plan §11.2（实施期踩到） |
+| 32 | `addSourceToSettings()` 的返回语义：命中且形态**没变** → `false`（没改动，走幂等分支）；命中但形态变了 → 改写并返回 `true`；`removeAndPersist()` **没匹配** → `false`（不是“删掉了”） | S9-plan §0.3 F10/F11 · §6 A4/A9 |
+| 33 | **缺 npm 的错误是裸的 spawn ENOENT**（`spawn npm ENOENT` / `spawn <npmCommand[0]> ENOENT`），而**缺 git 也是同一个形态** ⇒ 只敢对 `npm:` 源翻译成“需要 npm”，git 源保留原文 | S9-plan §0.5 F23/F37 · §6 A11（能红：把 npm 分支放宽到所有源 → A11② 红） |
+| 34 | 两个“忙”的口径在**压缩期间**不等价：`snapshot().busy`（`pendingSend \|\| isStreaming`）为 false 而 `controller.isBusy()`（`pendingSend \|\| !isIdle`）为 true（`isIdle` 含 `isCompacting`） | S9-plan §0.7 F35 |
+| 35 | `isLocalPath` / `parseGitUrl` / `parseSource` / `getExtensionTempFolder` **都没从 bundle 导出** ⇒ 源分类只能靠我们自己的保守判定（只有 `npm:` 前缀算 npm），复刻 pi 的规则一定分叉 | S9-plan §0.1 F2b · §3.1（A1 的红法就是“含 `:` 就算 npm”误伤 `C:\…`） |
+| 36 | `DefaultResourceLoader.reload()` 内部**总是先** `await settingsManager.reload()` 再从盘上重读 ⇒ 一个“陈旧的” `SettingsManager` 在加载资源前会被刷新（想用“把 manager 提到外面”来证伪“新会话看见新包”是**不红**的） | S9-plan §11.4（实施期实测；`chunk-JVUZSMYM.js` 里三处 `settingsManager.reload()` 的第三处） |
 
 **怎么区分"我踩到新坑了"和"我读错了"**：先写一个**最小探针**（临时目录 + 我们发布的那份 bundle），
 把"我以为的行为"和"实际行为"并排打出来 —— S5 的 §3.1、§3.5、§3.8 都是这么定案的。

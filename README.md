@@ -77,6 +77,22 @@
 - 项目级配置的信任：打开面板时如果工作区里有 `.pi/` 或 `.agents/skills`，会弹一次原生对话框问"信任这个文件夹吗"。改判用 **`Pi: Project Trust…`**（信任并记住 / 信任父文件夹 / 仅本次 / 不信任 / 清除记录）。
 - 代理与证书默认交给 VS Code 自身的 `http.proxy` / `http.systemCertificates` 处理，无需额外配置。
 
+### pi 包管理（装 / 列 / 卸）
+
+四个命令，走 pi 自己的包管理器（与终端 `pi install` / `pi remove` 改的是**同一份配置**）：
+
+| 命令 | 作用 |
+| --- | --- |
+| `Pi: Install Package` | 输入源：本地文件夹绝对路径 / `npm:包名`（含 `npm:@scope/包`）/ git URL —— 与 pi CLI 接受的格式完全一致，扩展**不发明**新前缀 |
+| `Pi: Install Package from Folder…` | 原生文件夹选择器（Windows 上装 `...\test-fixtures\ext-smoke` 这种长路径时省事） |
+| `Pi: List Packages` | 列出配置里的包：源 + 作用域 + 解析后的路径；路径已失效的标「找不到（路径已失效）」，被过滤的加 `(filtered)` 后缀，项目作用域的标「（项目作用域：本版本不管理）」 |
+| `Pi: Remove Package` | 从候选里选一个移除（**只列 user 作用域的条目**）；配置里没有匹配项时明说「未移除」，不假装成功 |
+
+- **只写 user 作用域**：改动落在 `<agentDir>/settings.json` 的 `packages` 里，**绝不写工作区**（项目级包管理这一版不做）。
+- **装/卸之后不会自动生效**：提示里会写「新建会话（或重载窗口）后生效」。不自动热重载是**刻意的** —— pi 的重载不会重新裁决项目信任，会把「先建会话、之后目录里长出 `.pi/extensions/`」这种情况下的扩展未经询问地装进来；新建会话则每次都重读设置并重跑信任流程。
+- 已经装过的源再装一次会走幂等分支，提示「已经在配置里了（未改动）」，**不是**失败。
+- 列表里看到的是**文件里的真相**（每次都新读 `<agentDir>/settings.json`），与终端 `pi` / 新建会话看到的一致。
+
 ### 使用
 
 1. 打开侧边栏 Pi 面板（命令 `Pi: Focus Chat`）；
@@ -106,10 +122,10 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
 | `npm run build` | esbuild 产出三个文件：`dist/extension.js`、`dist/webview.js`、`dist/style.css` |
 | `npm run self-test` | **9 个用例**：打包断言的正/负用例、`sync` 幂等性，以及协议/渲染/工具文本/设置/DOM/host 各套断言 |
 | `npm run check:protocol` | **112** 条聊天协议断言（纯函数，不需要网络） |
-| `npm run check:render` | **114** 条渲染与 XSS 断言（12 个载荷 + 图片策略 + CSP） |
-| `npm run check:controller` | **98** 条面板控制器断言；**需要凭据与网络**（没有凭据时打印 SKIPPED 并跳过；总数随模型是否发起工具调用略有浮动） |
-| `npm run check:gate` | 把 `Pi: Run Self-Test` 这条闸门（T1–T13）搬到终端里跑；**需要凭据与网络** |
-| `node scripts/host-check.mjs` | **91** 条宿主接线断言（vscode 桩 + 真命令） |
+| `npm run check:render` | **128** 条渲染与 XSS 断言（12 个载荷 + 图片策略 + CSP） |
+| `npm run check:controller` | **110** 条面板控制器断言；**需要凭据与网络**（没有凭据时打印 SKIPPED 并跳过；总数随模型是否发起工具调用略有浮动） |
+| `npm run check:gate` | 把 `Pi: Run Self-Test` 这条闸门（T1–T15）搬到终端里跑；**需要凭据与网络** |
+| `node scripts/host-check.mjs` | **368** 条宿主接线断言（vscode 桩 + 真命令） |
 | `node scripts/settings-check.mjs` | **16** 条设置声明与 README 一致性断言 |
 | `npm run package` | 构建 + 打包 `.vsix`；vsce 打包前会自动执行 `vscode:prepublish`（唯一构建入口） |
 | `npm run check-vsix -- jerrypi-0.1.8.vsix` | `.vsix` 体积门禁（< 30 MB）与必需文件校验 |
@@ -126,7 +142,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
    `git tag -a v<版本> -m "jerrypi <版本>；产物 <大小> 字节，SHA-256 <指纹>"`，再 `git push --tags`。
    tag 只在第 5 步核对通过后才打 —— 这样每个 tag 都对应一份**确实发布出去**的产物。
 
-装好扩展后，用 `Pi: Run Self-Test` 跑可行性闸门（**T1–T13** = 12 个 gating 项 + 3 个 advisory（T5c/T12/T13），结果写在 `jerrypi` Output 频道）：它会验证 pi 运行时能否在扩展宿主里真实加载、扩展生命周期、真实模型流式对话、子进程与中止、文件读写编辑、会话持久化与替换、图片 worker 往返，**以及会话目录是否落在 pi 的规范位置、`pi` 自己的 `list(cwd)` 能否看到它（T10/T11）**；T13 会报告一行代理身份（fetch 是不是原生、`http.proxy*`、代理环境变量的存在性），**只报告不判定**。**跑之前先用 `Pi: Set API Key` 配一把 provider key**（默认 DeepSeek），否则 T4/T6/T7/T9 会以 `E_NO_CREDENTIALS` 失败。（开发机上也可以 `npm run check:gate` 无头跑同一条闸门。）
+装好扩展后，用 `Pi: Run Self-Test` 跑可行性闸门（**T1–T15** = 14 个 gating 项 + 3 个 advisory（T5c/T12/T13），结果写在 `jerrypi` Output 频道）：它会验证 pi 运行时能否在扩展宿主里真实加载、扩展生命周期、真实模型流式对话、子进程与中止、文件读写编辑、会话持久化与替换、图片 worker 往返，**以及会话目录是否落在 pi 的规范位置、`pi` 自己的 `list(cwd)` 能否看到它（T10/T11）**；T13 会报告一行代理身份（fetch 是不是原生、`http.proxy*`、代理环境变量的存在性），**只报告不判定**。**跑之前先用 `Pi: Set API Key` 配一把 provider key**（默认 DeepSeek），否则 T4/T6/T7/T9 会以 `E_NO_CREDENTIALS` 失败。（开发机上也可以 `npm run check:gate` 无头跑同一条闸门。）
 
 > `.vsix` 里还包含 `test-fixtures/ext-smoke/index.ts`：它是**打包验收用的最小 pi 扩展**（不是给用户使用的功能），目的是让「从解包产物复跑校验」成为可能。细节见 [`docs/S0-plan.md`](docs/S0-plan.md)。
 
@@ -163,7 +179,7 @@ npm run package     # 生成 .vsix（会自动先跑 sync + build）
   - 面板**重开后**那张卡片还在（按钮还在，可以继续答）；只有重启 VS Code 才会丢掉"待确认"这件事（那时这一轮本来也已经中止了）；
   - **一次只有一个待确认项**：pi 是"逐个预检"的（同一批里前一个没答完，后一个连卡片都还没出现），所以没有"允许本批剩余全部"这种东西。
 - **没打开工作区时，会话的 cwd 是用户主目录**：`bash` 与文件工具会以 `~`（Windows 上是 `C:\Users\<你>`）为工作目录运行，Output 里会写一行提示。**请先打开一个工作区**再用面板，否则模型的操作范围不受任何目录约束。
-- **无 Node 的机器上不支持 `npm:` 包源**，也不支持带 `package.json` 的 git 包源（二者都需要 `npm`）；本地路径包源可用。
+- **pi 包管理的边界**（`Pi: Install Package` / `List Packages` / `Remove Package`）：① **无 `npm` 的机器上不支持 `npm:` 包源**，也不支持带 `package.json` 的 git 包源（二者都需要 `npm`）—— `npm:` 会给出明确的「这个源需要 npm」提示，本地文件夹仍然可以装；git 源保留 pi 的原文（底层错误里“缺 `git`”与“缺 `npm`”都是 `spawn … ENOENT`，硬翻译会撒谎）。② **已装的本地包在扩展升级后可能失效**：本地路径是按「相对 `<agentDir>` 的相对路径」存的（与 pi CLI 一致），如果那个文件夹在扩展的安装目录里（例如拿它自己的 `test-fixtures/ext-smoke` 当包源），升级换代后旧文件夹被删掉，条目就指向不存在的路径 —— `Pi: List Packages` 会标「找不到（路径已失效）」，我们**不替你改路径**（那是你的配置，删掉重装即可）。③ **跨进程并发不保证**：同一个窗口里两个命令同时改 `packages` 由我们串行化；但面板与终端 `pi`、或两个 VS Code 窗口同时改仍可能丢一条（pi 的 `SettingsManager` 文件锁只保护“写入”那一段）—— 别同时改。
 - **Bedrock SigV4a** 需要额外的 `@aws-sdk/signature-v4-crt` 包，本扩展不带，相关场景会明确报错。
 - **`jerrypi.proxy` 还没实现**（写了不生效）：将来若实现，它会包装**进程级**的 `globalThis.fetch`，从而影响同进程内的其他扩展。现在请用 VS Code 的 `http.proxy`，或在启动 VS Code 之前设 `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY`。当真机排查时，跑一次 `Pi: Run Self-Test` 看 **T13** 那一行 —— 它会报告 `fetch` 是不是原生、`http.proxySupport` / `http.proxy` 的值（口令会掩掉）与四个代理环境变量是否存在。
 - **改动历史（卡片上的「查看 diff」）**：`edit` 显示的是**该次调用自己的补丁视图** —— 改动附近 4 行上下文，多个改动段之间用「⋯（中间省略）」隔开，**不是整文件**；它由 pi 写进会话文件，所以重启 VS Code 后仍可打开。`write` 显示的是**整文件前后**，前后内容只活在**本次 VS Code 进程**的内存里 —— 重启后同一张卡片显示「本次会话不可用」。内存上限：`edit` 保留最近 100 条、`write` 最近 20 条（单条超过 2 MiB 不保留），超出上限后**最早**的卡片显示「较早的改动记录已清理」。失败的工具调用（例如 `edit` 没匹配上）不会给 diff 入口。另外：diff 编辑器在**列太窄**时会被 VS Code 自动切成「上下」（inline）视图 —— 那是它的默认启发式（`diffEditor.useInlineViewWhenSpaceIsLimited`），不是我们的选择；想要一律左右并排，就把 diff 拖到更宽的列，或关掉那个设置。
@@ -266,6 +282,22 @@ Use **`Pi: Open Settings File`** to edit pi's `settings.json` for default model,
 - The model catalog is **not refreshed over the network by itself**; **`Pi: Refresh Model Catalog`** is the only network entry point (it requests only when you click it, refreshing `<agentDir>/models-store.json`).
 - Project-level trust: when the workspace contains `.pi/` or `.agents/skills`, opening the panel asks once via a native dialog. Change the answer with **`Pi: Project Trust…`** (remember / trust the parent folder / this session only / do not trust / clear).
 
+### pi package management (install / list / remove)
+
+Four commands, powered by pi's own package manager (they edit the **same config** as the terminal `pi install` / `pi remove`):
+
+| Command | What it does |
+| --- | --- |
+| `Pi: Install Package` | Type a source: absolute local folder path / `npm:name` (including `npm:@scope/name`) / git URL — exactly the formats the pi CLI accepts, the extension **invents no new prefixes** |
+| `Pi: Install Package from Folder…` | Native folder picker (handy for long Windows paths such as `...\test-fixtures\ext-smoke`) |
+| `Pi: List Packages` | Lists configured packages: source + scope + resolved path; entries whose path is gone read "not found (path is stale)", filtered entries get a `(filtered)` suffix, project-scoped entries are marked "(project scope: not managed by this version)" |
+| `Pi: Remove Package` | Pick one to remove (**user-scope entries only**); if nothing matches it says "not removed" instead of pretending success |
+
+- **User scope only**: changes go into the `packages` array of `<agentDir>/settings.json` and **never into the workspace** (project-scoped package management is out of scope for this version).
+- **Install/remove does not take effect immediately**: the message says "takes effect in a new session (or after reloading the window)". Not hot-reloading is **deliberate** — pi's reload does not re-adjudicate project trust, so it would load extensions from a `.pi/extensions/` folder that appeared after the session was created without asking; a new session re-reads settings and re-runs the trust flow every time.
+- Installing a source that is already configured takes the idempotent branch and reports "already configured (unchanged)" — that is **not** a failure.
+- The list always shows **the truth from the file** (it re-reads `<agentDir>/settings.json` on every call), matching what the terminal `pi` and new sessions see.
+
 ### Usage
 
 1. Open the Pi panel in the activity bar (command `Pi: Focus Chat`).
@@ -295,10 +327,10 @@ Common scripts:
 | `npm run build` | esbuild produces `dist/extension.js`, `dist/webview.js` and `dist/style.css` |
 | `npm run self-test` | 9 cases: positive/negative packaging assertions, `sync` idempotency, plus the protocol/render/tool-text/settings/DOM/host suites |
 | `npm run check:protocol` | 112 chat-protocol assertions (pure functions, no network) |
-| `npm run check:render` | 114 rendering and XSS assertions (12 payloads, image policy, CSP) |
-| `npm run check:controller` | 98 panel-controller assertions; **needs credentials and network** (prints SKIPPED without them; the total drifts slightly with whether the model calls tools) |
-| `npm run check:gate` | Runs the `Pi: Run Self-Test` gate (T1–T13) in a terminal; **needs credentials and network** |
-| `node scripts/host-check.mjs` | 91 host-side wiring assertions (vscode stub + real commands) |
+| `npm run check:render` | 128 rendering and XSS assertions (12 payloads, image policy, CSP) |
+| `npm run check:controller` | 110 panel-controller assertions; **needs credentials and network** (prints SKIPPED without them; the total drifts slightly with whether the model calls tools) |
+| `npm run check:gate` | Runs the `Pi: Run Self-Test` gate (T1–T15) in a terminal; **needs credentials and network** |
+| `node scripts/host-check.mjs` | 368 host-side wiring assertions (vscode stub + real commands) |
 | `node scripts/settings-check.mjs` | 16 settings-declaration vs README consistency assertions |
 | `npm run package` | Build + package the `.vsix`; vsce runs `vscode:prepublish` first (the single build entry point) |
 | `npm run check-vsix -- jerrypi-0.1.8.vsix` | `.vsix` size gate (< 30 MB) and required-file check |
@@ -315,7 +347,7 @@ Common scripts:
    `git tag -a v<version> -m "jerrypi <version>; artifact <size> bytes, SHA-256 <digest>"`, then `git push --tags`.
    Only tag after step 5 checks out, so that every tag corresponds to an artifact that was **actually published**.
 
-Once installed, run the feasibility gate with `Pi: Run Self-Test` (**T1–T13** = 12 gating items + 3 advisory (T5c/T12/T13), results go to the `jerrypi` output channel): it checks that the pi runtime really loads inside the extension host, extension lifecycle, a real streaming model call, subprocesses and aborts, file read/write/edit, session persistence and replacement, the image worker round-trip, **and that sessions land where pi expects them (`pi`'s own `list(cwd)` must see them — T10/T11)**; T13 reports one line about the proxy identity (whether `fetch` is native, `http.proxy*`, which proxy env vars exist) and **never judges**. **Configure a provider key with `Pi: Set API Key` first** (DeepSeek by default), otherwise T4/T6/T7/T9 fail with `E_NO_CREDENTIALS`. (On a dev machine you can also run the same gate headlessly with `npm run check:gate`.)
+Once installed, run the feasibility gate with `Pi: Run Self-Test` (**T1–T15** = 14 gating items + 3 advisory (T5c/T12/T13), results go to the `jerrypi` output channel): it checks that the pi runtime really loads inside the extension host, extension lifecycle, a real streaming model call, subprocesses and aborts, file read/write/edit, session persistence and replacement, the image worker round-trip, **and that sessions land where pi expects them (`pi`'s own `list(cwd)` must see them — T10/T11)**; T13 reports one line about the proxy identity (whether `fetch` is native, `http.proxy*`, which proxy env vars exist) and **never judges**. **Configure a provider key with `Pi: Set API Key` first** (DeepSeek by default), otherwise T4/T6/T7/T9 fail with `E_NO_CREDENTIALS`. (On a dev machine you can also run the same gate headlessly with `npm run check:gate`.)
 
 > The `.vsix` also ships `test-fixtures/ext-smoke/index.ts`: a **minimal pi extension used for packaging acceptance** (not a user-facing feature), so that verification can be re-run against the unpacked artifact. See [`docs/S0-plan.md`](docs/S0-plan.md).
 
@@ -344,7 +376,7 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full notices and lice
   - The card **survives a panel reload** (the buttons come back); only restarting VS Code drops a pending approval (by which point the turn has ended anyway);
   - **only one approval is pending at a time**: pi preflights tool calls one by one (in a batch, the next call's card does not even exist until the previous one is answered), so there is no "allow the rest of this batch".
 - **With no workspace open, the session cwd is your home directory**: `bash` and the file tools then use `~` (on Windows `C:\Users\<you>`) as the working directory, and the output channel says so. **Open a workspace first**, otherwise nothing constrains where the agent operates.
-- **`npm:` and git package sources are unavailable on machines without Node/npm**; local-path sources work.
+- **Boundaries of pi package management** (`Pi: Install Package` / `List Packages` / `Remove Package`): ① **`npm:` package sources are unavailable on machines without Node/npm**, as are git sources that carry a `package.json` (both need `npm`) — `npm:` gets an explicit "this source needs npm" message while local folders still install; git sources keep pi's original error (at the bottom level "git missing" and "npm missing" are both `spawn … ENOENT`, so translating would lie). ② **Installed local packages can go stale after an extension upgrade**: local paths are stored relative to `<agentDir>` (same as the pi CLI), so if the folder lives inside the extension install directory (e.g. its own `test-fixtures/ext-smoke`), an upgrade deletes the old folder and the entry points at a path that no longer exists — `Pi: List Packages` marks it "not found (path is stale)" and we **do not rewrite your paths** (that is your config; remove and reinstall). ③ **Cross-process concurrency is not guaranteed**: two commands in the same window are serialized by us, but the panel plus a terminal `pi`, or two VS Code windows, can still lose one entry (pi's `SettingsManager` file lock only covers the write itself) — do not edit `packages` from two places at once.
 - **Bedrock SigV4a** requires an extra `@aws-sdk/signature-v4-crt` package that is not bundled; affected setups fail with an explicit error.
 - **`jerrypi.proxy` is not implemented** (setting it does nothing): if it ever lands it will wrap the **process-wide** `globalThis.fetch`, affecting every extension in the host process. For now use VS Code's `http.proxy`, or set `NODE_USE_ENV_PROXY=1` + `HTTP(S)_PROXY` before starting VS Code. When debugging, run `Pi: Run Self-Test` and look at the **T13** line — it reports whether `fetch` is native, the values of `http.proxySupport` / `http.proxy` (credentials masked) and whether the four proxy env vars exist.
 - **Change history (the "View diff" link on a card)**: for `edit` it shows **that call's own patch view** — 4 lines of context around each change, with "⋯ (gap)" between separate hunks, **not the whole file**; pi persists it into the session file, so it still opens after a VS Code restart. For `write` it shows the **whole file before/after**, and those contents live only in the **current VS Code process** — after a restart the same card reads "not available in this session". Memory caps: the latest 100 `edit` patches and the latest 20 `write` snapshots are kept (a single one over 2 MiB is dropped); beyond the cap the **oldest** cards read "earlier change records were cleaned up". Failed tool calls (e.g. an `edit` that did not match) get no diff entry at all. Also note: when the column is **too narrow**, VS Code automatically switches the diff editor to an inline (stacked) view — that is its own heuristic (`diffEditor.useInlineViewWhenSpaceIsLimited`), not our choice; for a permanent side-by-side view, drag the diff into a wider column or turn that setting off.

@@ -242,6 +242,7 @@ jerrypi-vscode/
 - **S8 工具审批开关**：`approval.ts`，三档。（开 `all` 后每次工具调用停在面板等确认；拒绝后 agent 收到 block 原因；待审批时点中止，待审批项被清除且 agent 结束。）**状态：已关闭（0.1.12，2026-09-15）** —— 三档审批（`off`/`mutating`/`all`）落在**工具卡片上的「允许 / 拒绝」**（面板不可见时弹通知、状态行喊"有 N 个等待确认"）、拒绝后 agent 收到 `Rejected by user: <这次要做什么>`、待审批时中止会清项且**面板重开能重放**；项目信任流程（原生模态 + `<agentDir>/trust.json` 与 pi CLI 共用 + `Pi: Project Trust…` 改判）按本条的追加说明一并做完。Mac（M1/M2）与 Windows（W0 `GATE PASS` / W1）都验过，发布核验逐字节一致（tag `v0.1.12`）。断言与发现见 `docs/S8-plan.md` §6/§11/§12。**与本节口头描述的一处偏离**：取消路径是三条（signal / dispose / 会话切换），**Webview 被销毁不取消**（与"面板重开时重放"互斥）—— 正文已按 §4 的 Q10 改口。
   > **2026-09-14 用户拍板追加**：项目级设置的**信任流程**（今天固定 `projectTrusted: false`，面板里没有“信任这个项目”的选择）也排进本阶段 —— 与工具审批同属“信任”主题。本条**未经评审、未设计**：具体形态（提示时机、写不写 `trust.json`、与 pi CLI 的 `ProjectTrustStore` 怎么对齐）留到 S8 计划期按流程走。
 - **S9 pi 包管理**：`Pi: Install Package` / `Pi: List Packages` / `Pi: Remove Package`。（Mac 上：安装 `../pi-config`（裸路径）后 `~/.pi/agent/settings.json` 出现该包，重启后其主题/扩展被加载。受限机上：用随扩展发布的 `test-fixtures/ext-smoke` 目录作为本地包源验证同一流程，因为该机无法拷入 pi-config；验收只要求"本次安装后重启可用"，扩展升级后失效属已知限制。输入 `npm:xxx` 得到明确的"需要 npm"错误。）
+  > **状态：实施中（0.1.13 未发布）** —— 步骤 1–5 已落盘（`src/pi/packages.ts` + **四条**命令（三项能力：装 / 列 / 卸；安装有输入框与文件夹两个入口）+ 自测 **T15** + 跨进程 **A22** + 文档）；边界与能红验证见 `docs/S9-plan.md` §11。最终判据仍以本节上面这段为准。
   > **2026-09-17 用户拍板追加**（并入 S9；细节 `docs/S9-plan.md` §0.8/§3.6–§3.8，**未经 Astra 复核**）：
   > ③ 面板默认移**辅助边栏**（`viewsContainers.secondarySidebar`，VS Code 1.104+，engines 余量充足）；
   > ④ `Pi: Set Shell Path` + 自测 T16（Windows **按用户安装** Git、bash 不在 PATH 的盲区）；

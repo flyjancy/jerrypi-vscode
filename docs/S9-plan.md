@@ -829,6 +829,22 @@ R14–R16）无错位；F40–F45、Q12–Q17 与本次改动无新增冲突；�
 - T15 的步骤①（基线）必须在 install **之前**取；⑤⑦ 走 `host.runtime.newSession()`（面板里“新建会话”按的那条）；
   整个 T15 在临时 agentDir 里，绝不用真实 `~/.pi/agent`。
 
+### 11.5 步骤 5（2026-09-17）：文档（README 中英 / `pi-traps` / PLAN）
+
+- **README 中英双语**：新增 `pi 包管理（装 / 列 / 卸）` 一节（四个命令的表格 + 只写 user 作用域 +
+  “装/卸之后不会自动生效”的理由 + 幂等分支 + “列表看到的是文件里的真相”）；中文已知限制里那条
+  “无 Node 不支持 npm: 源”扩写成三条边界（① 缺 npm / ② 扩展升级后本地路径失效（Q8）+ 不替你改路径 /
+  ③ 跨进程并发不保证）；英文同步。顺手把 README 里已过时的计数改对（`check:render` 114→128、
+  `check:controller` 98→110、host-check 91→**368**、闸门 T1–T13→**T1–T15**）。
+- **`docs/pi-traps.md`**：新增 **28–36** 九条 —— `session.reload()` 是原地生效点但**不重裁决信任**（28）、
+  `SettingsManager.create` 默认**信任项目**且包管理会 spawn 项目的 `npmCommand`（29）、写盘失败不抛只进
+  `drainErrors()`（30）、`enqueueWrite` 是排队的要 `flush()`（31）、`addSourceToSettings`/`remove` 的返回语义（32）、
+  缺 npm/缺 git 都是裸 `spawn ENOENT`（33）、两个“忙”口径在压缩期不等价（34）、四个包管理 helper 没导出（35）、
+  `resourceLoader.reload()` 总是先刷 settings（36）。
+- **`docs/PLAN.md` §6** 的 S9 条加了状态行（实施中 / 四条命令 / T15 / A22）。
+- **未做（留给后线）**：面板位置（步骤 6）、`Pi: Set Shell Path`（步骤 7）、面板内对话框（步骤 8/9）的 README 段落 ——
+  它们得跟着代码一起写，否则文档会先于实现描述行为。
+
 ## 12. 实施与验收结果
 
 （待实施）
