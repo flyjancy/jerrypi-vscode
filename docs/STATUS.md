@@ -24,14 +24,15 @@
 **按用户要求暂不启动第 3 轮（主线部分）**；**追加范围的 Astra 评审第 1 轮已吸收完**（2026-09-17，codex/gpt-6-astra，
 `w60:pD`；`VERDICT: BLOCKING`，**5 B / 3 S / 2 N**，8 条实质意见全部 ACCEPT —— §10.3）：消掉 1 个初始化期
 对话框死锁窗口（ready 先 `dialogHost.replay()` 再 `await ensure()`）、补 `dialog/close` 撤卡协议与结算表、
-`resolveCurrentShell` 改为按生效配置预检（`getShellConfig` 无参不读 settings.json，实测）、**Q15 版本号改回
+`resolveCurrentShell` 改为按已保存用户配置预检（`getShellConfig` 无参不读 settings.json，实测）、**Q15 版本号改回
 0.1.13**（0.2.0 是 S10 首个正式版语义，S9 抢跳 = 正式版跳过 Windows 预发布验证门槛）、键盘断言分两层
 （handler 逻辑可无头测，新增 A32–A35）。**Astra 第 2 轮也已吸收完**（同机同模型；`VERDICT: BLOCKING`，**2 B / 3 S / 2 N**，5 条实质意见全部 ACCEPT —— §10.4）：
-三个重点问题约了明确结论 —— A32① 死锁探测**能红**（夹具须走真实初始化链，清理带超时）；结算表**销毁边界自洽但整体
+三个重点问题有了明确结论 —— A32① 死锁探测**能红**（夹具须走真实初始化链，清理带超时）；结算表**销毁边界自洽但整体
 有洞**（补 `answered` reason、**晚到的加载结果先查 pending**防孤儿卡复活）；Q15 引文**对齐**。另把它抓的
 "预检的信任口径"定死：manager 必须 `{projectTrusted:false}`（实测默认信任会把用户已拒绝的项目 shellPath
 报出来），口径改为"已保存的用户配置（global）预检"；A32⑤ 的 oracle 改写实（副作用证据，不依赖 Promise 二次
-结算语义）。**Astra 两轮设计已用完，末轮只剩转写核对**；之后 Q1–Q17（含改过两次的 Q15）摆给用户拍板。
+结算语义）。**Astra 两轮设计 + 末轮转写核对均已完成**（末轮 VERDICT: OK，0 BLOCKING/2S/2N，转写漏同步已修）；
+下一步：Q1–Q17（含改过的 Q15）摆给用户拍板。
 
 > **2026-09-17 用户拍板追加（并入 S9）**：四项体验修复 —— ③面板默认移右侧（`viewsContainers.secondarySidebar`，
 > VS Code 1.104+）、④`Pi: Set Shell Path` + T16（Windows **按用户安装** Git、bash 不在 PATH 的盲区，用户真机踩中）、
@@ -50,7 +51,7 @@
 
 | | |
 | --- | --- |
-| 阶段 | **S5、S6、S7、S8 均已关闭**；**S9 计划期**（pi 包管理 + 2026-09-17 追加的四项体验修复；Astra 两轮设计已吸收，待末轮转写核对 → 用户拍板） |
+| 阶段 | **S5、S6、S7、S8 均已关闭**；**S9 计划期**（pi 包管理 + 2026-09-17 追加的四项体验修复；评审窗全部走完：Claude/codex 两轮主线 + Astra 两轮设计 + 末轮转写 OK，待用户拍板 Q1–Q17） |
 | 最新发布 | **0.1.12**（2026-09-15，预发布；S8 的全部内容；上一个 0.1.11 —— 两者只差 T14 夹具的路径写法） |
 | 发布核验 | **0.1.12**：`NODE_USE_ENV_PROXY=1 node scripts/compare-vsix.mjs 0.1.12` → **338 个文件逐个字节相同，连整体 `.vsix` 也一样**（6,050,314 字节 / `3ffd7adc…`）；tag `v0.1.12`；留档 `~/jerrypi-releases/jerrypi-0.1.12.vsix`（0.1.11：338 文件 / `bd3cdcde…`；0.1.9：338 文件 / `85db1434…`）。⚠️ 本机跑这个脚本必须带 `NODE_USE_ENV_PROXY=1`（代理只在环境变量里，Node 的 fetch 默认不看，见 S8-plan §11 的 P-1） |
 | 真机验收 | S4 ✅／✅ · S5 ✅／✅ · S6 ✅／✅ · S7 ✅／✅（各自的 §12.3）｜ **S8：Mac ✅ ／ Windows ✅**（M1 六项 + M2 三项；**W0 `GATE PASS` 15 PASS / 0 FAIL / 1 SKIP = T12，含 T14**；W1 正常 —— S8-plan §12.3） |
