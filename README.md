@@ -107,7 +107,9 @@
 
 ### 面板在哪个位置
 
+- **最快找到它的办法**：命令面板（`⌘⇧P` / `Ctrl+Shift+P`）→ **`Pi: Focus Chat`** —— 它会自动把面板找出来并展开它所在的边栏（视图位置记错了、边栏被收起来了都能救）。
 - **新装用户**：面板默认开在**辅助边栏（右侧）**，与资源管理器并排；`Pi: Focus Chat` 仍然可用（容器 id 没变）。
+- ⚠️ **右侧辅助边栏如果从没打开过，图标本身也是不可见的** —— 这时命令面板搜 **`View: Toggle Secondary Side Bar`**（macOS 默认绑 `⌥⌘B`，以你自己的键位为准）把右边栏打开，Pi 图标就在**窗口右上角/右边缘**，不再在左侧活动栏。
 - **从 0.1.12 及更早升级上来**：VS Code 会**记住**视图的旧位置，所以你的面板**可能还在左侧活动栏**（每个工作区的记忆是独立的）。想挪到右侧：**右键视图标题栏 → 「移至」→「辅助边栏」**（命令面板里也能搜到 "Move View"）。不需要重装扩展，也不影响任何功能。
 
 
@@ -331,7 +333,9 @@ Select / confirm / input dialogs — whether from the chat flow (including a pi 
 
 ### Where the panel lives
 
+- **Fastest way to find it**: Command Palette (`⇧⌘P` / `Ctrl+Shift+P`) → **`Pi: Focus Chat`** — it finds the panel and reveals the side bar it lives in (works even if the remembered position is odd or the side bar is collapsed).
 - **Fresh installs**: the panel opens in the **secondary side bar (right)** by default, next to the Explorer; `Pi: Focus Chat` still works (the container id is unchanged).
+- ⚠️ **If the secondary side bar has never been opened, the icon itself is not visible either** — search the Command Palette for **`View: Toggle Secondary Side Bar`** (macOS default `⌥⌘B`; use your own keybinding if you changed it) to show the right-hand bar; the Pi icon then sits at the **top-right / right edge** of the window, not in the left activity bar.
 - **Upgrading from 0.1.12 or earlier**: VS Code **remembers** the view's old position, so your panel **may still be in the left activity bar** (the memory is per workspace). To move it: **right-click the view's title bar → "Move To" → "Secondary Side Bar"** (also available from the Command Palette as "Move View"). No reinstall needed, and nothing stops working.
 
 
